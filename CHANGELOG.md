@@ -17,6 +17,11 @@ release pages and tags are not publicly reachable.
   / `halo_free` are called concurrently from the Lua REPL thread, Bluetooth
   host callbacks and the sfxr thread, and `sys_heap` is not thread-safe; the
   `mem_ctx.lock` mutex was initialised but never taken (#11)
+- `frame.imu.raw()` / `direction()` no longer fail with `-116` (QMC6308 data-ready
+  timeout) after `frame.standby()`. The standby SUSPEND handler PM-suspends the
+  magnetometer, but the always-on IMU service never receives RESUME and
+  `imu_hardware_init()` short-circuited on `hardware_configured` before its
+  PM-resume block; the PM-state reconciliation now runs on every entry
 
 ## [0.8.9] - 2026-08-27
 

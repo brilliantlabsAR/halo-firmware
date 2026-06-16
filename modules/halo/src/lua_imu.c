@@ -254,17 +254,25 @@ static int imu_device_check(void)
  */
 static int imu_hardware_init(void)
 {
-	if (imu_state.hardware_configured) {
-		return 0;
-	}
-
 	if (!imu_state.devices_ready) {
 		return -ENODEV;
 	}
 
-	//if device is suspended, resume it
 #ifdef CONFIG_PM_DEVICE
+	/* Reconcile PM state before the hardware_configured short-circuit below.
+	 *
+	 * The SUSPEND handler (standby/light sleep) PM-suspends the magnetometer
+	 * to save power, but does NOT clear imu_state.hardware_configured. Because
+	 * the IMU service is always-on, the RESUME event is never dispatched by
+	 * the service framework, so hardware_configured stays true and this
+	 * function would short-circuit without ever resuming the device — leaving
+	 * the magnetometer in SUSPEND mode and causing sensor_sample_fetch() to
+	 * time out (-ETIMEDOUT / -116) on the next frame.imu.* call.
+	 *
+	 * Resuming here whenever a device is PM-suspended fixes the divergence on
+	 * every entry point without depending on the RESUME path. */
 	enum pm_device_state pm_state;
+
 	pm_device_state_get(imu_state.accel_dev, &pm_state);
 	if (pm_state == PM_DEVICE_STATE_SUSPENDED) {
 		int ret = pm_device_action_run(imu_state.accel_dev, PM_DEVICE_ACTION_RESUME);
@@ -282,6 +290,10 @@ static int imu_hardware_init(void)
 		}
 	}
 #endif
+
+	if (imu_state.hardware_configured) {
+		return 0;
+	}
 
 	/* Configure accelerometer sampling frequency */
 	struct sensor_value odr_attr;
