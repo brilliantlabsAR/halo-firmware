@@ -52,7 +52,9 @@ LED:  ████  (Solid ON - Charging, ready to pair)
 
 **To wake up from ship mode, you MUST connect the charger** - the device cannot be woken up by button press alone.
 
-**If you only want to clear pairing information**, release the button between 5-15 seconds.
+**Ship mode cannot be entered while the charger is connected** - unplug it first.
+
+**The 5 second hold does not clear pairing information** - it opens a pairing window for adding another device (Halo remembers up to 5). To make Halo forget a single device, use "Forget This Device" on that device; to forget everything, use ship mode or recovery mode.
 
 ---
 
@@ -165,7 +167,7 @@ LED:  ____  (OFF - Device is sleeping)
 
 ### 4. Pairing Mode
 
-**Purpose:** Enter Bluetooth pairing/discoverable mode.
+**Purpose:** Open the pairing window to pair an additional device. Existing pairings are kept — Halo stores up to 5 bonded devices (the least recently used one is replaced when all slots are full).
 
 **Operation:**
 ```
@@ -190,9 +192,9 @@ LED:  ██__██__██__██__  (0.5s ON, 0.5s OFF, repeating)
 A coin "buh-ding" plays as the pairing window opens — hold through the short
 power-off blip at 2s and keep holding until you hear it at 5s.
 
-**Important:** To stay in pairing mode, **release the button between 5-15 seconds**. If you continue holding past 15 seconds, the device will enter ship mode (shutdown).
+**Important:** Release the button after the chime — holding past 15 seconds enters ship mode (shutdown). The pairing window stays open for ~60 seconds regardless of when you release, and closes as soon as a new device pairs (hold 5s again to reopen it). While the window is open, already-paired devices are refused so the new device can connect; they reconnect normally afterwards.
 
-**Note:** If device is already in pairing mode (not paired), holding 5s will only update the LED indicator without clearing any bond data.
+**Note:** A Halo with no paired devices (out of the box, or after a factory reset) is always pairable — the 5s hold then only refreshes the LED indicator.
 
 ---
 
@@ -203,21 +205,22 @@ power-off blip at 2s and keep holding until you hear it at 5s.
 **How to Enter:**
 ```
 ┌─────────────┐
-│ Hold Button │   →   5s: Clear Bond → 15s: Ship Mode
-│  (15 sec)   │        (Clears pairing information first)
+│ Hold Button │   →   5s: Pairing Window → 15s: Ship Mode
+│  (15 sec)   │        (Charger must be disconnected)
 └─────────────┘
      │
      │─── 5s ───┤────── 15s ───┤
                   │               │
                   ▼               ▼
-           Pairing Mode    Device Shuts Down
-        (Bond Cleared)      (LED turns OFF)
+          Pairing Window   Device Shuts Down
+          (bonds kept)      (LED turns OFF)
            LED Blinks
 ```
 
 **Warning:**
-- **Ship mode will clear all BLE pairing information** - you will need to re-pair with your device after waking up
-- Device will pass through pairing mode at 5 seconds (bond is cleared, LED will start blinking)
+- **Ship mode will clear all BLE pairing information** (the factory reset wipes the filesystem) - you will need to re-pair with your device after waking up
+- **Ship mode cannot be entered while the charger is connected** - the 15 second hold is ignored while charging
+- Device will pass through pairing mode at 5 seconds (the pairing window opens and the LED starts blinking; bonds are kept at this stage)
 - Device will shut down completely at 15 seconds
 - **⚠️ To wake up from ship mode, you MUST connect the charger** - button press will NOT wake the device
 - All unsaved data will be lost
@@ -227,9 +230,9 @@ power-off blip at 2s and keep holding until you hear it at 5s.
 - Wait for LED to turn solid ON (2-3 seconds)
 - Device is now ready to use (see "First Time Use / Device Activation" section above)
 
-**To Cancel Ship Mode:** Release the button between 5-15 seconds to stay in pairing mode.
+**To Cancel Ship Mode:** Release the button between 5-15 seconds — the pairing window stays open, nothing is lost.
 
-**To Clear Pairing Without Shutdown:** Hold 5 seconds, then release before 15 seconds.
+**To Pair Another Device Without Shutting Down:** Hold 5 seconds, then release before 15 seconds.
 
 ---
 
@@ -254,8 +257,8 @@ power-off blip at 2s and keep holding until you hear it at 5s.
 | Hold + Plug charger → Hold 10s | Recovery Mode (Factory Reset) |
 | Hold + Plug charger → Release | Restart |
 | Hold 2s → Release at the beep | Deep Sleep |
-| Hold 5s, then release (5-15s) | Pairing Mode (clears bond if paired) |
-| Hold 15s (continue holding) | **Ship Mode (clears bond + shutdown)** |
+| Hold 5s, then release (5-15s) | Opens the pairing window (existing pairings kept) |
+| Hold 15s (continue holding) | **Ship Mode (factory reset + shutdown; not while charging)** |
 | **Connect charger** (in ship mode) | **Wake up from Ship Mode** |
 | Press (in sleep) | Wake from Deep Sleep |
 | Press (in recovery) | Exit Recovery Mode |
@@ -309,8 +312,8 @@ Button:    ███████████████████████
 LED:              ────────────────────────────────────┼──█─█─█─█─█─█─█─█─█─█─►
                                                       │
                                                       ▼
-                                                 Pairing Mode Entered
-                                        (Release between 5-15s to stay in pairing)
+                                                 Pairing Window Opens
+                                     (Release before 15s; window stays open ~60s)
 
 
 Ship Mode Timing:
@@ -322,14 +325,14 @@ Button:    ███████████████████████
 Event:             ──────────────────┼──────────┼──────────────────────────►
                                     │          │
                                     ▼          ▼
-                               Bond Cleared  Ship Mode
-                               Pairing Mode  (Shutdown)
+                              Pairing Window  Ship Mode
+                               (bonds kept)   (Shutdown)
                                (LED blinks)
 
 To wake up from ship mode: Connect charger (see "First Time Use / Device Activation" section)
 To stay in pairing mode: Release button between 5-15 seconds
-To enter ship mode: Continue holding past 15 seconds
-**Note: Both actions clear BLE pairing information**
+To enter ship mode: Continue holding past 15 seconds (charger must be disconnected)
+**Note: Only ship mode clears pairing information (factory reset); the pairing window keeps existing bonds**
 
 
 Deep Sleep Timing:
@@ -367,9 +370,9 @@ LED:              ━━━━━━━━━━━━━━━━━━        
 - In recovery mode, only OTA firmware updates are possible - normal Bluetooth services are disabled
 - **5s and 15s button holds are auto-triggers** - the action occurs immediately when the time threshold is reached
 - **Ship mode passes through pairing mode** - holding to 15s will first trigger pairing mode at 5s (LED blinks), then continue to ship mode at 15s
-- **⚠️ IMPORTANT: Ship mode (15s) clears BLE pairing information** - you will need to re-pair with your device after waking up from ship mode
-- **To stay in pairing mode**: Release the button between 5-15 seconds after pressing (bond is still cleared)
-- **To enter ship mode**: Continue holding the button past 15 seconds (bond is cleared + device shuts down)
+- **⚠️ IMPORTANT: Ship mode (15s) clears BLE pairing information** (factory reset) - you will need to re-pair with your device after waking up from ship mode
+- **The pairing window stays open ~60 seconds** no matter when the button is released - release before 15 seconds only to avoid ship mode
+- **To enter ship mode**: Continue holding the button past 15 seconds (factory reset + shutdown; ignored while the charger is connected)
 - **To wake up from ship mode**: Connect charger - button press will NOT work (see "First Time Use / Device Activation" section)
-- 5s hold clears existing BLE bond and enters pairing mode; if already unpaired, only updates LED indicator
-- 15s hold triggers ship mode (complete shutdown) - requires charger connection to wake up
+- 5s hold opens the pairing window for one new device - existing bonds are kept (Halo stores up to 5); with nothing paired the device is already pairable
+- 15s hold triggers ship mode (complete shutdown) - requires charger connection to wake up, and cannot be entered while charging

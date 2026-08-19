@@ -376,7 +376,7 @@ int halo_ble_unregister_callback(struct halo_ble_callback *cb);
 └─────────────────────┴─────────┴────────────────────────────────────┘
 ```
 
-**Note:** Default device name is `Halo XX` where XX is the last byte of the BLE address.
+**Note:** Default device name is `Halo XX` where XX is the 4th byte (`eui48[3]`) of the device's EUI-48 address.
 
 ### Scan Response Data
 
