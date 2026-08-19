@@ -92,14 +92,20 @@ Implements SMP (Simple Management Protocol) over BLE for firmware updates.
 
 ## 4. Pairing Process
 
-The device broadcasts with the following service UUIDs:
-- `7a230001-5475-a6a4-654c-8431f6ad49c4` (Halo Lua Service)
-- `180f` (Battery Service)
-- `fe59` (LE Audio)
+The device advertises its name (`Halo XX`) and the Halo Lua Service UUID
+(`7a230001-5475-a6a4-654c-8431f6ad49c4`). The scan response carries the
+appearance (Eye-glasses), the Battery Service UUID (`180f`), an ANCS service
+solicitation for iOS, and LE Audio announcements as space permits (see
+`BLE_SERVICES.md`).
 
-The app scans for these UUIDs and automatically connects to the nearest device. Upon receiving a connection request:
-- If a pairing already exists, the connection is established.
-- If no pairing exists, the device initiates the pairing process. Upon successful pairing, the connection is established.
+The app scans for the Lua Service UUID and automatically connects to the
+nearest device. The device stores up to **5 bonds** (LRU-evicted) and accepts
+one connection at a time — see `PAIRING.md` for the full model. Upon receiving
+a connection request:
+- If the peer matches a stored bond, the connection is established and encrypted.
+- If the peer is unknown, it is accepted and paired only while the pairing
+  window is open (5 s button hold, ~60 s window) or while no bonds exist yet
+  (out-of-box); otherwise it is disconnected.
 
 ![Pairing Flowchart](https://cdn.nlark.com/yuque/0/2025/png/34552903/1754653469251-c8825a3b-9f8e-48a2-9739-3db19b4374e3.png)
 
