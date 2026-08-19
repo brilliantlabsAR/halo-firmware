@@ -27,8 +27,6 @@ The app and device must automatically fragment and reassemble data based on the 
 
 - **Audio Stream:** LC3 encoding, PCM RAW data, or (bidirectional) LE Audio (format determined by API configuration)  
 
-[https://doc.weixin.qq.com/flowchart-addon](https://doc.weixin.qq.com/flowchart-addon)
-
 ---
 
 ## 3. Protocol Specification
@@ -107,7 +105,7 @@ a connection request:
   window is open (5 s button hold, ~60 s window) or while no bonds exist yet
   (out-of-box); otherwise it is disconnected.
 
-![Pairing Flowchart](https://cdn.nlark.com/yuque/0/2025/png/34552903/1754653469251-c8825a3b-9f8e-48a2-9739-3db19b4374e3.png)
+![Pairing Flowchart](images/pairing-flowchart.png)
 
 ---
 
