@@ -1,0 +1,30 @@
+sample:
+  name: TPS65132 Dual Output LCD Bias Regulator
+  description: >
+    Control TPS65132 dual output LCD bias power supply with VPOS and VENG
+    voltage rails using the Zephyr regulator API.
+
+tests:
+  sample.halo.tps65132:
+    harness: console
+    tags:
+      - i2c
+      - regulator
+      - display
+      - power
+    platform_allow:
+      - halo
+    integration_platforms:
+      - halo
+    depends_on:
+      - i2c
+      - regulator
+    filter: dt_nodelabel_enabled("tps65132")
+    harness_config:
+      type: multi_line
+      regex:
+        - "Regulator Control Demo"
+        - "VPOS enabled"
+        - "VENG enabled"
+        - "VPOS disabled"
+        - "VENG disabled"

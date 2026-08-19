@@ -1,0 +1,5 @@
+sample:
+  name: se ota
+tests:
+  sample.basic.se_ota:
+    tags: security se ota

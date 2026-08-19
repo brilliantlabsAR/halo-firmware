@@ -1,0 +1,4 @@
+test_aec
+test_aec_fd
+test_aec_*
+!test_aec.c

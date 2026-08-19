@@ -1,0 +1,20 @@
+sample:
+  name: QMC6308 3-Axis Magnetometer
+  description: 3-axis magnetic field measurement using QST QMC6308 magnetometer sensor
+tests:
+  sample.halo.qmc6308:
+    platform_allow:
+      - halo
+    integration_platforms:
+      - halo
+    tags:
+      - sensor
+      - magnetometer
+      - i2c
+      - compass
+    harness: console
+    harness_config:
+      type: multi_line
+      regex:
+        - "magn x:[-]?\\d+\\.\\d+ ms/2 y:[-]?\\d+\\.\\d+ ms/2 z:[-]?\\d+\\.\\d+ ms/2"
+      ordered: false

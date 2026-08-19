@@ -1,0 +1,21 @@
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig SM_GPIO
+	bool "Ship Mode GPIO Driver"
+	default y
+	depends on GPIO
+	help
+	  Enable support for GPIO-controlled ship mode. Ship mode is an
+	  ultra-low power state used during product shipping to preserve
+	  battery life. When activated, the device enters ship mode by
+	  setting a GPIO pin high. The device typically requires a hardware
+	  reset or power cycle to wake up from ship mode.
+
+if SM_GPIO
+
+module = SHIPMODE
+module-str = shipmode
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # SM_GPIO

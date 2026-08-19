@@ -1,0 +1,25 @@
+# Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+config ALIF_ETHOSU_SHELL
+	bool "Ethos-U55 commands"
+	default n
+		select TENSORFLOW_LITE_MICRO
+		select ARM_ETHOS_U
+		select CPP
+		select REQUIRES_FULL_LIBCPP
+	help
+		Enable Ethos-U55 commands
+
+config ALIF_ETHOSU_SHELL_THREAD_PRIORITY
+	int "Priority for thread running the NPU inference"
+	default 10
+
+config ALIF_ETHOSU_SHELL_THREAD_STACKSIZE
+	int "Stack size for thread running the NPU inference"
+	default 1024

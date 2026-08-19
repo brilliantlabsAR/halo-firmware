@@ -1,0 +1,24 @@
+# Copyright 2022 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+config TFLM_ETHOSU_TAINT_BLOBS
+	bool
+	default y
+	select TAINT_BLOBS
+config TENSORFLOW_LITE_MICRO
+	bool
+	default y
+
+config ETHOS_U_AXI0_ONLY
+	bool "Only use AXI0 port on the Ethos"
+	default false
+
+config MODEL_IN_EXT_FLASH
+	bool "Put ML model to external flash"
+	select FLASH
+	select ALIF_OSPI_FLASH_XIP
+	help
+		Initialize OSPI controller to XIP mode. Initialize the onboard flash device. Link ML model data to external flash address space.
+		In addition to normal zephyr.bin output, ospi1.bin is generated.
+
+source "Kconfig.zephyr"

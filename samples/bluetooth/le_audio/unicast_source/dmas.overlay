@@ -1,0 +1,20 @@
+/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+#define I2S0_DMA_RX_CH  2
+#define I2S0_DMA_RX_REQ 24
+#define I2S0_DMA_TX_CH  3
+#define I2S0_DMA_TX_REQ 28
+
+&i2s0 {
+	dmas = <&dma2 I2S0_DMA_RX_CH I2S0_DMA_RX_REQ>,
+	       <&dma2 I2S0_DMA_TX_CH I2S0_DMA_TX_REQ>;
+	dma-names = "rxdma", "txdma";
+};

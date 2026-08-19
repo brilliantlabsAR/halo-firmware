@@ -1,0 +1,7 @@
+sample:
+  name: CAN Demo
+  description: Demo on Cast CAN module
+tests:
+  sample.drivers.can:
+    tags: can driver
+    depends_on: can

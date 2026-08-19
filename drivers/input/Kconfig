@@ -1,0 +1,5 @@
+if INPUT
+
+rsource "Kconfig.gpio_button"
+
+endif

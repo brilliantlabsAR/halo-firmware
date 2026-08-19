@@ -1,0 +1,585 @@
+/* Copyright (c) 2024 Alif Semiconductor
+ * Copyright (c) 2025 Brilliant Labs
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/dts-v1/;
+
+#include <alif/balletto_rtss_common.dtsi>
+#include <alif/balletto-pinctrl.dtsi>
+
+#define	PIN_P4_3__LPCAM_D3_A		PINMUX_PIN(PIN_P4_3, 4)
+#define	PIN_P4_4__LPCAM_D4_A		PINMUX_PIN(PIN_P4_4, 5)
+#define	PIN_P4_5__LPCAM_D5_A		PINMUX_PIN(PIN_P4_5, 5)
+#define	PIN_P4_6__LPCAM_D6_A		PINMUX_PIN(PIN_P4_6, 5)
+#define	PIN_P4_7__LPCAM_D7_A		PINMUX_PIN(PIN_P4_7, 4)
+
+/ {
+	compatible = "arm,halo";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+};
+
+&ieee802154 {
+	status = "okay";
+};
+
+&utimer3 {
+    status = "okay";        
+    utimer3_pwm: pwm {
+        compatible = "alif,pwm";
+        #pwm-cells = <3>;    
+		pinctrl-0 = <&pinctrl_pwm_led0>;
+   		pinctrl-names = "default";
+        status = "okay";   
+    };
+};
+
+&{/} {
+	chosen {
+		zephyr,console = &uart3;
+		zephyr,shell-uart = &uart3;
+		zephyr,bt-uart = &uart_hci;
+		zephyr,hci_uart = &uart_hci;
+		zephyr,panel = &vga020;
+		zephyr,camera = &pag7982;
+		zephyr,video = &lpcam;
+		zephyr,speaker = &max98357a;
+		zephyr,micphone = &pdm_audio;
+		zephyr,accel = &bma580;
+		zephyr,magn = &qmc6308;
+		zephyr,cortex-m-idle-timer = &rtc0;
+		zephyr,vbat = &vbat;
+	};
+
+	aliases{
+		sw0 = &button;
+		camera = &pag7982;
+		mcuboot-button0 = &button;
+		mcuboot-led0 = &led0;
+		shutdown = &sm;
+	};
+
+    sen_1v8: sen-1v8-ctrl {
+        compatible = "regulator-fixed";
+        regulator-name = "sen-1v8-ctrl";
+        enable-gpios = <&gpio3 3 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+    };
+
+	cam_1v8: cam-1v8-ctrl {
+		compatible = "regulator-fixed";
+        regulator-name = "cam-1v8-ctrl";
+        enable-gpios = <&gpio2 0 GPIO_ACTIVE_HIGH>;
+		regulator-always-on;
+		status = "okay";
+	};
+
+	button: button {
+		compatible = "gpio-button";
+		gpios = <&lpgpio 1 GPIO_ACTIVE_LOW>;
+		label = "WAKEUP";
+		debounce-ms = <30>;
+        long-press-ms = <1000 2000 5000>;
+        double-click-ms = <400>;
+		status = "okay";
+	};
+
+	pwmleds: pwmleds {
+        compatible = "pwm-leds";  
+        led0: led_0 {
+            pwms = <&utimer3_pwm 0 PWM_USEC(1000) 1>; 
+            label = "LED_PWM_0"; 
+        };
+    };
+
+	power-states {
+		off: off {
+			min-residency-us = < 4000 >;
+		};
+	};
+
+	sm: sm {
+        compatible = "sm-gpio";  
+        gpios = <&gpio6 0 GPIO_ACTIVE_HIGH>;
+    };
+
+	vbat: vbat {
+        compatible = "alif,alif-vbat";
+		status = "okay";
+		enable-gpios = <&gpio7 7 GPIO_ACTIVE_HIGH>;
+        adc = <&adc0>;
+	    state-gpios = <&gpio1 3 GPIO_ACTIVE_LOW>;
+        channel = <4>;
+        output-ohms = <1000>;
+        full-ohms = <2400>;
+        power-up-time-ms = <50>;
+        charge-control-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+    };
+
+	soc{
+
+		/delete-node/ i2s0@49014000;
+        i2s0: i2s0@49014000 {
+            compatible = "alif,i2s-sync";
+            reg = <0x49014000 0x1000>;
+            pinctrl-names = "default";
+            pinctrl-0 = <&pinctrl_i2s0>;
+            interrupts = <141 3>;
+            bit-depth = <16>;
+            sample-rate = <32000>;
+            mono-mode;
+            status = "okay";
+        };
+
+		max98357a: max98357a {
+			compatible = "maxim,max98357a";
+			i2s = <&i2s0>;
+			sd-mode-gpios = <&gpio8 5 GPIO_ACTIVE_HIGH>;
+		};
+
+		pdm_audio: pdm_audio@43002000 {
+			compatible = "alif,t5838-alif-pdm";
+			reg = <0x43002000 0x1000>;
+			/* priority 2, above I2S0's 3: the 8-deep PDM FIFO at
+			 * 16kHz gives the ISR ~250us from the watermark to
+			 * overflow; at priority 4 under duplex load it missed
+			 * ~10x/second (732 counted overflows in 72s, EC
+			 * 2026-07-13). Bisect-exonerated for the round-2
+			 * wedge (that was the unacked sticky ERROR status).
+			 */
+			interrupts = <49 2>;
+			pinctrl-0 = < &pinctrl_pdm_audio >;
+			pinctrl-names = "default";
+			/* almost-full IRQ threshold on the 8-deep FIFO: slack
+			 * to overflow is (8 - watermark) samples = 62.5us
+			 * each at 16kHz. 6 left 125us of ISR headroom and
+			 * overflowed under duplex BLE+LC3 load (capture
+			 * losses that slid the AEC window off its ring);
+			 * 4 doubles the headroom for a ~1.3x ISR rate.
+			 */
+			fifo-watermark = <4>;
+			queue-depth = <128>;
+			iir-bypass;
+			fir-bypass;
+			/* Snip the PDM decimator start-of-stream settling
+			 * transient (the "pop"): the front-end slews to the
+			 * ±full-scale rail for the first ~5-12ms after trigger
+			 * (measured on cold-start captures, tests/aec/pop_*.py),
+			 * a window with no recoverable audio. In the DMA drain
+			 * path the discard drops whole MIC_BLOCK_INTERVAL_MS
+			 * (20ms) blocks, so 20 = drop exactly one block, clearing
+			 * the rail with margin at ~20ms of startup latency. The
+			 * DC-settling tail past the rail is real audio and is
+			 * left to the downstream DC blocker (lua_microphone.c
+			 * mic_dc_block). The driver default is 0 (was regressed
+			 * 50->0 in 15bc6a1, which re-exposed the pop). Do NOT
+			 * un-bypass the IIR to fix this - the AEC relies on the
+			 * raw full-band mic (see mic_dc_block rationale).
+			 */
+			discard-duration-ms = <20>;
+			/* LPPDM RX DMA drain (prototype): dma2 channel 4,
+			 * DMA request line 30 / group 2 = LPPDM_DMA_REQ
+			 * (B1 HWRM Table 14-95 + the DMA request MUX table).
+			 * The hardware FIFO watermark drives the DMA handshake
+			 * (PDM_CTL1 USE_DMA bit), replacing the almost-full ISR
+			 * that overflows on >250us CPU blackouts. Drop this
+			 * property to fall back to the ISR drain.
+			 */
+			dmas = <&dma2 4 30>;
+			dma-names = "rxdma";
+			status = "okay";
+            #address-cells = < 0x1 >;
+	        #size-cells = < 0x0 >;
+			t5838: t5838@53 {
+				status = "okay";
+				compatible = "invensense,t5838-alif-pdm";
+				thsel-gpios = <&gpio3 0 GPIO_ACTIVE_HIGH>, <&gpio5 2 GPIO_ACTIVE_HIGH>;
+				wake-gpios = <&lpgpio 0 GPIO_ACTIVE_HIGH>;
+				pdmclk-gpios = <&gpio5 5 GPIO_ACTIVE_HIGH>;
+			    reg = <0x53>;
+			};
+		};
+		
+		cdc200: cdc200@49031000 {
+			width = <256>;
+			hfront-porch = <16>;
+			hback-porch = <48>;
+			hsync-len = <96>;
+
+			height = <256>;
+			vfront-porch = <16>;
+			vback-porch = <26>;
+			vsync-len = <3>;
+
+			hsync-active = <1>;
+			vsync-active = <1>;
+			de-active = <1>;
+			pixelclk-active = <1>;
+
+			clock-frequency = <8760000>;
+			
+			bg-color = <0>;
+			enable-l1 = <1>;
+			pixel-fmt-l1 = "rgb-888";
+			def-back-color-l1 = <0>;
+			win-x0-l1 = <0>;
+			win-y0-l1 = <0>;
+			win-x1-l1 = <256>;
+			win-y1-l1 = <256>;
+			blend-factor1-l1 = <4>;
+			blend-factor2-l1 = <5>;
+			const-alpha-l1 = <0xff>;
+			enable-l2 = <0>;
+			pixel-fmt-l2 = "undefined";
+			win-x0-l2 = <0>;
+			win-y0-l2 = <0>;
+			win-x1-l2 = <0>;
+			win-y1-l2 = <0>;
+			blend-factor1-l2 = <6>;
+			blend-factor2-l2 = <7>;
+			const-alpha-l2 = <0xff>;
+		};
+
+		dtcm: dtcm@2000a000 {
+			compatible = "alif,dtcm", "zephyr,memory-region";
+			dtcm_global_base = <0x5880a000>;
+			reg = <0x2000a000 DT_SIZE_K(856)>;
+			zephyr,memory-region = "DTCM";
+		};
+
+		/delete-node/ ns@2002a000;
+		ns: ns@200e0000  {
+			compatible = "zephyr,memory-region", "mmio-region";
+			reg = <0x200e0000  DT_SIZE_K(640)>;
+			zephyr,memory-region = "NON_SECURE0";
+			status = "okay";
+		};
+
+	};
+};
+
+ns: &ns {
+	status = "okay";
+};
+
+&mipi_dsi {
+	// dpi-video-pattern-gen = "vertical-color-bar";
+	// dpi-video-pattern-gen = "horizontal-color-bar";
+	// dpi-video-pattern-gen = "vertical-bit-error-rate";
+	/delete-property/ frame-ack-en;  // vga020 not supported
+	vid-pkt-size = <240>;
+	panel-max-lane-bandwidth = <500000000>;
+	status = "okay";
+};
+
+&mram_storage {
+	/delete-node/ partitions;
+	partitions {
+
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(128)>;
+			read-only;
+		};
+
+		slot0_partition: partition@20000 {
+			label = "image-0";
+			reg = <0x00020000 DT_SIZE_K(780)>;
+		};
+
+		slot1_partition: partition@E3000 {
+			label = "image-1";
+			reg = <0x000E3000 DT_SIZE_K(780)>;
+		};
+
+		scratch_partition: partition@1A6000 {
+			label = "image-scratch";
+			reg = <0x001A6000 DT_SIZE_K(8)>;
+		};
+
+		storage_partition: partition@1A8000 {
+			label = "storage";
+			reg = <0x001A8000 DT_SIZE_K(128)>;
+		};
+
+		reserved_for_se: partition@1C8000 {
+			label = "SE-reserved";
+			reg = <0x001C8000 DT_SIZE_K(224)>;
+		};
+	};
+};
+
+&pinctrl {
+	pinctrl_gpio0:pinctrl_gpio0{
+		group0 {
+			pinmux =< PIN_P0_2__GPIO >,
+					< PIN_P0_3__GPIO >,
+					< PIN_P0_4__GPIO >,
+					< PIN_P0_5__GPIO >,
+					< PIN_P0_6__GPIO >,
+					< PIN_P0_7__GPIO >;
+			read_enable = < 0x1 >;
+		};
+	};
+	pinctrl_lpgpio:pinctrl_lpgpio {
+		group0 {
+			pinmux = < PIN_P15_0__LPGPIO >,
+				 < PIN_P15_1__LPGPIO >;
+			read_enable = < 0x1 >;
+		};
+		group1{
+			pinmux = < PIN_P15_1__LPGPIO >;
+			driver_state_control = <0x1>;
+		};
+		group2{
+			pinmux = < PIN_P15_0__LPGPIO >;
+			driver_state_control = <0x2>;
+			schmitt_enable = <0x0>;
+		};
+	};
+	pinctrl_uart3: pinctrl_uart3 {
+		group0 {
+			pinmux = < PIN_P8_6__UART3_RX_C >,
+			 		 < PIN_P8_7__UART3_TX_C >;
+		};
+	};
+	pinctrl_i2c0: pinctrl_i2c0 {
+		group0 {
+			pinmux = < PIN_P2_5__I2C0_SDA_B >,
+				 < PIN_P2_4__I2C0_SCL_B >;
+
+			read_enable = < 0x1 >;
+			driver_state_control = < 0x1 >;
+		};
+	};
+	pinctrl_i2c1: pinctrl_i2c1 {
+		group0 {
+			pinmux = < PIN_P2_6__I2C1_SDA_B >,
+				 < PIN_P2_7__I2C1_SCL_B >;
+
+			read_enable = < 0x1 >;
+			driver_state_control = < 0x1 >;
+		};
+	};
+	pinctrl_lpcam: pinctrl_lpcam {
+		group0 {
+			pinmux = < PIN_P3_4__LPCAM_VSYNC_A >,
+				 < PIN_P3_5__LPCAM_HSYNC_A >,
+				 < PIN_P3_6__LPCAM_PCLK_A >,
+				 < PIN_P3_7__LPCAM_XVCLK_A >,
+				 < PIN_P4_0__LPCAM_D0_A >,
+				 < PIN_P4_1__LPCAM_D1_A >,
+				 < PIN_P4_2__LPCAM_D2_A >,
+				 < PIN_P4_3__LPCAM_D3_A >,
+				 < PIN_P4_4__LPCAM_D4_A >,
+				 < PIN_P4_5__LPCAM_D5_A >,
+				 < PIN_P4_6__LPCAM_D6_A >,
+				 < PIN_P4_7__LPCAM_D7_A >;
+		};
+	};
+	pinctrl_adc0:pinctrl_adc0 {
+		group0 {
+			pinmux = <PIN_P0_4__ANA_S4>;
+			read_enable = < 0x1 >;
+		};
+	};
+	pinctrl_ospi0: pinctrl_ospi0{
+        group0 {
+            pinmux = //< PIN_P6_0__OSPI0_D0_C >,
+                < PIN_P6_1__OSPI0_D1_C >,
+                < PIN_P6_2__OSPI0_D2_C >,
+                < PIN_P6_3__OSPI0_D3_C >,
+                < PIN_P7_0__OSPI0_SCLK_C >;
+            read_enable = <0x1>;
+            drive_strength = <12>;
+            slew_rate = <0x1>;
+        };
+    };
+	pinctrl_pdm_audio: pinctrl_pdm_audio{
+		group0 {
+			pinmux = < PIN_P5_5__LPPDM_C1_C >,
+			< PIN_P5_7__LPPDM_D1_C >;
+			read_enable = < 0x1 >;
+		};
+	};
+	pinctrl_pwm_led0: pinctrl_pwm_led0 {
+		group0 {
+			pinmux = < PIN_P6_6__UT3_T0_B >;
+			drive-strength = <10>;
+			read_enable = < 0x0 >;
+		}; 
+    };
+	pinctrl_i2s0:pinctrl_i2s0 {
+		group0 {
+			pinmux = < PIN_P1_4__I2S0_SDI_A >,
+				 < PIN_P1_5__I2S0_SDO_A >,
+				 < PIN_P1_6__I2S0_SCLK_A >,
+				 < PIN_P1_7__I2S0_WS_A >;
+		};
+	};
+};
+
+&gpio0 {
+	pinctrl-0 = < &pinctrl_gpio0 >;
+	pinctrl-names = "default";
+};
+
+&gpio1 {
+	pinctrl-0 = < &pinctrl_gpio1 >;
+	pinctrl-names = "default";
+};
+
+&gpio6 {
+	status = "okay";
+};
+
+&uart3 {
+	status = "okay";
+};
+
+&rtc0 {
+	prescaler = < 0 >;
+	status = "okay";
+};
+
+&dma2 {
+	status = "okay";
+	/* Channels 0-3 serve the HCI + AHI UARTs (below). Channel 4 is added
+	 * for the LPPDM RX DMA drain (see the pdm_audio node): the PL330's
+	 * per-channel completion IRQ line index == channel number, so adding
+	 * channel 4 needs interrupt line 4. Abort stays on 32.
+	 */
+	dma-channels = <5>;
+	interrupts = <0 0>, <1 0>, <2 0>, <3 0>, <4 0>, <32 0>;
+	interrupt-names = "channel0", "channel1", "channel2",
+			  "channel3", "channel4", "abort";
+};
+
+&uart_hci {
+	clock-frequency = <160000000>;
+	dmas = <&dma2 HCI_UART_DMA_RX_CH HCI_UART_DMA_RX_REQ>,
+	       <&dma2 HCI_UART_DMA_TX_CH HCI_UART_DMA_TX_REQ>;
+	dma-names = "rx", "tx";
+};
+
+&uart_ahi {
+	clock-frequency = <160000000>;
+	pinctrl-0 = < &pinctrl_ahi_trace >;
+	pinctrl-names = "default";
+	dmas = <&dma2 AHI_UART_DMA_RX_CH AHI_UART_DMA_RX_REQ>,
+	       <&dma2 AHI_UART_DMA_TX_CH AHI_UART_DMA_TX_REQ>;
+	dma-names = "rx", "tx";
+};
+
+&i2c0 {
+	status = "okay";
+    
+	 bma580: bma580@18 {
+        compatible = "bosch,bma580";
+		vin-supply = <&sen_1v8>;
+		int1-gpios = <&gpio3 2 GPIO_ACTIVE_HIGH>;
+		// int2-gpios = <&lpgpio 0 GPIO_ACTIVE_HIGH>; // wake up interrupt
+		int1-config = <0x0B>; // long pluse, push-pull, activate high
+		int2-config = <0x0F>; // long pluse, open-drain, activate high
+        reg = <0x18>;
+        range = <2>;
+        odr = "200";
+        status = "okay";
+    };
+
+    qmc6308: qmc6308@2c {
+        compatible = "qst,qmc6308";
+		vin-supply = <&sen_1v8>;
+        reg = <0x2c>;
+        status = "okay";
+    };
+
+};
+
+&i2c1 {
+	status = "okay";
+	pag7982: pag7982@40{
+		compatible = "pixart,pag7982";
+		reg = <0x40>;
+		vin-supply = <&cam_1v8>;
+		reset-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
+		pixclk = <24000000>; // PCLK 24M
+		frame-rate = <1>; // 1fps
+		port {
+			pag7982_ep_out: endpoint {
+				remote-endpoint = < &lpcam_ep_in >;
+			};
+		};
+	};     
+
+	tps65132: tps65132@3e {
+		compatible = "ti,tps65132";
+		reg = <0x3e>;
+		vin-supply = <&cam_1v8>;
+		supply-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>;
+		apps = "40ma";
+		
+		veng: VENG {
+			regulator-name = "veng";
+			regulator-init-microvolt = <4500000>;
+			enable-gpios = <&gpio5 6 GPIO_ACTIVE_HIGH>;
+			startup-delay-us = <5000>;
+			status = "okay";
+
+		};
+
+		vpos: VPOS {
+			regulator-name = "vpos";
+			regulator-init-microvolt = <5500000>;
+			enable-gpios = <&gpio7 5 GPIO_ACTIVE_HIGH>;
+			startup-delay-us = <5000>;
+			status = "okay";
+		};
+		status = "disabled";
+	};             
+
+	vga020: vga020@54 {
+		compatible = "gz,vga020";
+		mipi = <&mipi_dsi>;
+      	reg = <0x54>;
+		vpos-supply = <&vpos>;
+    	veng-supply = <&veng>;
+		reset-gpios = <&gpio5 3 GPIO_ACTIVE_LOW>;
+      	width = <256>;
+      	height = <256>;
+		status = "okay";
+    };      
+};
+
+
+&lpcam {
+	sensor = <&pag7982>;
+	lp-cam;
+	inv-hsync-pol = <1>;
+	inv-vsync-pol = <1>;
+	data-mode = "8-bit";
+	vsync-en;
+	port {
+		lpcam_ep_in: endpoint {
+			remote-endpoint = <&pag7982_ep_out>;
+		};
+	};
+};
+
+&i2s0 {
+	status = "disabled";
+};
+
+&i2s1 {
+	status = "disabled";
+};
+
+&i2s2{
+	status = "disabled";
+};
+

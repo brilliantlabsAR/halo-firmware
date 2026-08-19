@@ -1,0 +1,81 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+/* setting SPI1 as master and SPI0 instance as slave.
+ *
+ */
+
+/* For SPI master SS(slave select) as:
+ * - H/W controlled (default):
+ *   - use SS pinmux as H/W
+ *     - example for SPI1 as master "PIN_P6_4__SPI1_SS0_B"
+ *  "OR"
+ * - S/W controlled using gpio:
+ *   - use SS pinmux as gpio
+ *     - example for SPI1 as master "PIN_P6_4__GPIO"
+ *   - define cs-gpios property
+ *     - example for SPI1 as master
+ *        cs-gpios = <&gpio6 4 GPIO_ACTIVE_LOW>;
+ */
+
+/* default SPI master SS(slave select) is H/W controlled,
+ * enable this to use as S/W controlled using gpio.
+ */
+#define SPI_MASTER_SS_SW_CONTROLLED_GPIO   0
+
+/ {
+	aliases {
+		master-spi = &spi1;
+		slave-spi = &spi0;
+	};
+};
+
+&dma0 {
+	status = "okay";
+};
+
+&spi1 {
+	status = "okay";
+	dmas = <&dma0 0 21>, <&dma0 1 17>;
+	dma-names = "txdma", "rxdma";
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+	cs-gpios = <&gpio6 4 GPIO_ACTIVE_LOW>;
+	/* as we are testing Loopback on the same board,
+	 * make sure master interrupt priority is
+	 * higher than slave interrupt priority.
+	 */
+	interrupts = <138 0>;
+#endif /* SPI_MASTER_SS_SW_CONTROLLED_GPIO */
+};
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+/* use SPI master SS pinmux as gpio. */
+&pinctrl_spi1 {
+	group0 {
+		pinmux = < PIN_P8_3__SPI1_MISO_B >,
+			 < PIN_P8_4__SPI1_MOSI_B >,
+			 < PIN_P8_5__SPI1_SCLK_B >,
+			 < PIN_P6_4__GPIO >;
+		read_enable = < 0x1 >;
+	};
+};
+#endif /* SPI_MASTER_SS_SW_CONTROLLED_GPIO */
+
+&spi0 {
+	status = "okay";
+	serial-target;
+	dmas = <&dma0 2 20>, <&dma0 3 16>;
+	dma-names = "txdma", "rxdma";
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+	interrupts = <137 1>;
+#endif
+};

@@ -1,0 +1,125 @@
+name: CI Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # We do NOT use 'container:' here because GitHub Actions pulls it before the job starts, 
+    # causing a disk space crash. Instead, we run Docker manually.
+    
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          path: latest-code
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build firmware inside Docker container
+        run: |
+          docker run --rm -v ${{ github.workspace }}/latest-code:/host_code \
+            -e GH_TOKEN=${{ secrets.PRIVATE_REPO_TOKEN }} \
+            ghcr.io/brilliantlabsar/halo-firmware-ci:latest \
+            /bin/bash -c "
+              set -e  # Ensure script fails if west build fails
+
+              echo 'Syncing files...'
+              rsync -a /host_code/ /opt/workspace/project/
+              cd /opt/workspace/project
+
+              # Sync west projects to this checkout's west.yml (no-op when the
+              # prebaked image is already current). GH_TOKEN is only needed
+              # while any manifest repo is private; when it is unset the plain
+              # URLs are used.
+              # Purge any credentialed URL rewrites baked into the image
+              # before installing ours (a stale one shadows a fresh token).
+              for u in \$(git config --global --name-only --get-regexp 'url\\..*\\.insteadof' 2>/dev/null); do
+                git config --global --unset-all \"\$u\" || true
+              done
+              if [ -n \"\$GH_TOKEN\" ]; then
+                git config --global url.\"https://x-access-token:\${GH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"
+              fi
+              west update
+
+              cd /opt/workspace/project/applications/halo
+              VERSION_MAJOR=\$(grep 'VERSION_MAJOR' VERSION | cut -d'=' -f2 | tr -d ' ')
+              VERSION_MINOR=\$(grep 'VERSION_MINOR' VERSION | cut -d'=' -f2 | tr -d ' ')
+              PATCHLEVEL=\$(grep 'PATCHLEVEL' VERSION | cut -d'=' -f2 | tr -d ' ')
+              VERSION_TWEAK=\$(grep 'VERSION_TWEAK' VERSION | cut -d'=' -f2 | tr -d ' ')
+              EXTRAVERSION=\$(grep 'EXTRAVERSION' VERSION | cut -d'=' -f2 | tr -d ' ')
+              VERSION=\"\${VERSION_MAJOR}.\${VERSION_MINOR}.\${PATCHLEVEL}\"
+              if [ ! -z \"\$VERSION_TWEAK\" ] && [ \"\$VERSION_TWEAK\" != \"0\" ]; then
+                VERSION=\"\${VERSION}.\${VERSION_TWEAK}\"
+              fi
+              if [ ! -z \"\$EXTRAVERSION\" ]; then
+                VERSION=\"\${VERSION}-\${EXTRAVERSION}\"
+              fi
+              
+              echo \"Building version \$VERSION\"
+              
+              cd /opt/workspace/project
+              export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+              
+              echo \"Building Debug version \$VERSION...\"
+              west build -b halo applications/halo/ -p --sysbuild
+              
+              mkdir -p build_artifacts
+              if [ -f build/halo/zephyr/zephyr.signed.bin ]; then
+                cp build/halo/zephyr/zephyr.signed.bin build_artifacts/halo-firmware-\${VERSION}-debug.signed.bin
+              fi
+              if [ -f build/mcuboot/zephyr/zephyr.bin ]; then
+                cp build/mcuboot/zephyr/zephyr.bin build_artifacts/halo-bootloader-\${VERSION}-debug.bin
+              fi
+
+              echo \"Building Release version \$VERSION...\"
+              RELEASE=1 west build -b halo applications/halo/ -p --sysbuild
+              
+              if [ -f build/halo/zephyr/zephyr.signed.bin ]; then
+                cp build/halo/zephyr/zephyr.signed.bin build_artifacts/halo-firmware-\${VERSION}-release.signed.bin
+              fi
+              if [ -f build/mcuboot/zephyr/zephyr.bin ]; then
+                cp build/mcuboot/zephyr/zephyr.bin build_artifacts/halo-bootloader-\${VERSION}-release.bin
+              fi
+              
+              # Copy artifacts out of the container to the host
+              cp -r build_artifacts /host_code/
+              
+              # Expose version to GitHub Actions Environment via host file
+              echo \"version=\$VERSION\" > /host_code/build_version.txt
+            "
+
+      - name: Verify outputs and set environment variables
+        id: version
+        run: |
+          VERSION=$(cat latest-code/build_version.txt | cut -d'=' -f2)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-build-artifacts-${{ steps.version.outputs.version }}
+          path: latest-code/build_artifacts/*
+          retention-days: 7

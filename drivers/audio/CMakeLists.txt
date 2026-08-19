@@ -1,0 +1,3 @@
+add_subdirectory_ifdef(CONFIG_T5838 t5838)
+add_subdirectory_ifdef(CONFIG_PWM_AUDIO pwm_audio)
+add_subdirectory_ifdef(CONFIG_MAX98357A_AUDIO max98357a)

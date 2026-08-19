@@ -1,0 +1,11 @@
+# Generated experiment artifacts — battery captures and offline-analysis outputs,
+# not source. These are produced by the scripts here (discharge/charger logs and
+# their plots/summaries); none are meant to be committed.
+#
+# Scripts (*.py) and docs (*.md) stay tracked. To commit a specific run as a
+# fixture, force it: `git add -f <file>`.
+*.csv
+*.jsonl
+*.png
+*.summary.json
+__pycache__/

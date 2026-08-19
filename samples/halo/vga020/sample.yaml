@@ -1,0 +1,26 @@
+sample:
+  name: VGA020 MIPI-DSI Display
+  description: 2D graphics demo on VGA020 240x320 OLED display with Canvas API
+tests:
+  sample.halo.vga020:
+    platform_allow:
+      - halo
+    integration_platforms:
+      - halo
+    tags:
+      - display
+      - mipi_dsi
+      - oled
+      - graphics
+      - canvas
+    harness: console
+    harness_config:
+      type: multi_line
+      regex:
+        - "Display sample for cdc200"
+        - "Enabling CDC200 Device"
+        - "FB0 - 0x\\w+, size - \\d+"
+        - "draw rect time: \\d+ ms"
+        - "draw string time: \\d+ ms"
+        - "Brightness: \\d+"
+      ordered: true

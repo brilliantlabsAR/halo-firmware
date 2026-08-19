@@ -1,0 +1,94 @@
+# Copyright (c), 2025 Brilliant Labs
+# SPDX -License-Identifier: Apache-2.0
+
+description: |
+  TI TPS65132 PMIC
+
+  The PMIC has two buck converters and two LDOs. All need to be defined as
+  children nodes, strictly following the VPOS and VENG node names. For
+  example:
+
+  pmic@3e {
+  compatible = "ti,tps65132";
+    reg = <0x3e>;
+    ...
+    regulators {
+      compatible = ti,tps65132-regulator";
+
+      VPOS {
+        /* all properties for VPOS */
+      };
+      VENG {
+        /* all properties for VENG */
+      };
+    };
+  };
+
+compatible: "ti,tps65132"
+
+include: [base.yaml, i2c-device.yaml]
+
+properties:
+  apps:
+    type: string
+    required: false
+    description: |
+      APPS bit (Bit 6):
+        40ma
+        80ma
+    default: "40ma"
+    enum:
+      - "40ma"
+      - "80ma" 
+  sequ:
+    type: string
+    required: false
+    default: "simultaneous"
+    description: |
+      SEQU bits (Bits 5:4):
+        "simultaneous" = VPOS and VNEG simultaneously (00)
+        "vpos-first"   = VPOS first, then VNEG (01)
+        "vneg-first"   = VNEG first, then VPOS (10)
+        "vpos-only"    = VPOS only (11)
+    enum:
+      - "simultaneous"
+      - "vpos-first"
+      - "vneg-first"
+      - "vpos-only"
+
+  seqd:
+    type: string
+    required: false
+    default: "simultaneous"
+    description: |
+      SEQD bits (Bits 3:2):
+        "simultaneous" = VPOS and VNEG simultaneously (00)
+        "vpos-first"   = VPOS first, then VNEG (01)
+        "vneg-first"   = VNEG first, then VPOS (10)
+        "ignored"      = No action (11)
+    enum:
+      - "simultaneous"
+      - "vpos-first"
+      - "vneg-first"
+      - "ignored"
+        
+child-binding:
+  include:
+    - name: regulator.yaml
+      property-allowlist:
+        - regulator-name
+        - regulator-always-on
+        - regulator-boot-on
+        - regulator-init-microvolt
+        - regulator-min-microvolt
+        - regulator-max-microvolt
+        - startup-delay-us
+      
+  properties:
+    enable-gpios:
+      type: phandle-array
+      description: GPIO pin connected to the power pin.
+    
+    delay-ms:
+      type: int
+      description: Startup delay in ms after enable gpio is asserted.

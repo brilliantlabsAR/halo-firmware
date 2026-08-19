@@ -1,0 +1,81 @@
+#Copyright(C) 2023 Alif Semiconductor - All Rights Reserved.
+#Use, distribution and modification of this code is permitted under the
+#terms stated in the Alif Semiconductor Software License Agreement
+#
+#You should have received a copy of the Alif Semiconductor Software
+#License Agreement with this file.If not, please write to:
+#contact @alifsemi.com, or visit : https: // alifsemi.com/license
+
+menu "Alif Bluetooth LE Audio Broadcast Source"
+
+config BLE_DEVICE_NAME
+	string "BLE device name"
+	default "ALIF_ZEPHYR"
+	help
+	  Device name to be included in advertising packets
+
+config BROADCAST_NAME
+	string "LE audio broadcast name"
+	default "ALIF_LE_AUDIO"
+
+config BROADCAST_PASSWORD
+	string "LE audio broadcast password"
+	help
+	  If defined the broadcast stream will be encrypted.
+	  Length needs to be between 4 and 16 chars or empty string (default) to disable.
+
+config LE_AUDIO_PRESENTATION_DELAY_MS
+	int "Presentation delay in ms"
+	default 40
+	help
+	  LE audio presentation delay in ms. For the audio source use-case, this is defined as the
+	  time in ms from the start of recording an audio frame, to the SDU reference anchor point
+	  at which the SDU containing the same audio frame is sent over BLE. The absolute minimum
+	  possible presentation delay would be the frame length (10 ms) plus the encoding time of
+	  the frame, since it is impossible to send the frame before it has been fully recorded and
+	  encoded. But some margin should be added on top of this to account for any overhead and
+	  timing variations due to other activities of the software occurring while recording and
+	  encoding the audio.
+
+config APP_PRINT_STATS
+	bool "Print info about send SDUs"
+	depends on LOG
+
+config APP_PRINT_STATS_INTERVAL
+	int "Interval for printing info about send frames, in SDU count"
+	default 1024
+	depends on APP_PRINT_STATS
+	help
+	  Interval at which to print presentation delay statistics. The interval is measured in SDU
+	  count, e.g. 1024 means to print the statistics every 512 SDUs (per channel). With a 10 ms
+	  SDU interval this is around 10 seconds.
+
+config MICROPHONE_GAIN
+	int "Microphone gain in percentage"
+	default 800
+	range 100 1000
+
+config INPUT_VOLUME_LEVEL
+	int "Input volume level in percentage when MIC input is active"
+	default 33
+	range 10 100
+
+menu "Logging"
+
+module = MAIN
+module-str = main
+source "subsys/logging/Kconfig.template.log_config"
+
+module = BROADCAST_SOURCE
+module-str = broadcast_source
+source "subsys/logging/Kconfig.template.log_config"
+
+module = AUDIO_DATAPATH
+module-str = audio_datapath
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu # "Logging"
+
+endmenu # "Alif Bluetooth LE Audio Broadcast Source"
+
+source "Kconfig.zephyr"

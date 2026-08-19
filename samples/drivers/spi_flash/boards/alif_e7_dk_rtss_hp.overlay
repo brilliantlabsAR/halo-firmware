@@ -1,0 +1,14 @@
+/*
+ * Copyright (c) 2024 Alif Semiconductor.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		spi-flash0 = &ospi_flash;
+	};
+};
+&ospi1 {
+	status = "okay";
+        pinctrl-0 = <&pinctrl_flash>;
+};

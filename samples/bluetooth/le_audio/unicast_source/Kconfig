@@ -1,0 +1,93 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menu "Alif Bluetooth LE Audio Unicast Source"
+
+config BLE_DEVICE_NAME
+	string "BLE device name"
+	default "ALIF_CIS_SRC"
+	help
+	  Device name
+
+config PERIPHERAL_NAME
+	string "LE audio peripheral name"
+	default "ALIF_CIS_SINK"
+	help
+	  Audio sink peripheral to be connected to
+
+config LE_AUDIO_PRESENTATION_DELAY_MS
+	int "Presentation delay in ms"
+	default 10
+	help
+	  LE audio preferred target presentation delay in ms. This is only the
+	  target value and the final presentation delay may be different due
+	  to the reported min and max values by the acceptor (server).
+
+choice
+	prompt "Choose audio target latency"
+	default LE_AUDIO_LATENCY_RELIABLE
+
+	config LE_AUDIO_LATENCY_LOWER
+	bool "Lower latency"
+	config LE_AUDIO_LATENCY_BALANCED
+	bool "Balanced latency and reliability"
+	config LE_AUDIO_LATENCY_RELIABLE
+	bool "Reliable latency"
+endchoice
+
+config LE_AUDIO_TARGET_LATENCY
+	int
+	range 1 3
+	default 1 if LE_AUDIO_LATENCY_LOWER
+	default 2 if LE_AUDIO_LATENCY_BALANCED
+	default 3 if LE_AUDIO_LATENCY_RELIABLE
+
+choice
+	prompt "Choose audio configuration"
+	default LE_AUDIO_UNIDIRECTIONAL
+
+	config LE_AUDIO_UNIDIRECTIONAL
+	bool "Unidirectional"
+	config LE_AUDIO_BIDIRECTIONAL
+	bool "Bidirectional"
+endchoice
+
+config BONDING_ALLOWED
+	bool "Allow bonding"
+	default y
+
+config NUMBER_OF_CLIENTS
+	int
+	range 1 4
+	default 2
+	help
+	  Number of clients to be connected
+
+menu "Logging"
+
+module = MAIN
+module-str = main
+source "subsys/logging/Kconfig.template.log_config"
+
+module = UNICAST_SCAN
+module-str = unicast_scan
+source "subsys/logging/Kconfig.template.log_config"
+
+module = UNICAST_SOURCE
+module-str = unicast_source
+source "subsys/logging/Kconfig.template.log_config"
+
+module = STORAGE
+module-str = storage
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu # "Logging"
+
+endmenu # "Alif Bluetooth LE Audio Unicast Source"
+
+source "Kconfig.zephyr"

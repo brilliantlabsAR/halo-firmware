@@ -1,0 +1,12 @@
+sample:
+  name: Reboot sample
+common:
+  tags: reboot
+  harness: console
+  harness_config:
+    type: one_line
+    regex:
+      - "Rebooting..."
+tests:
+  sample.reboot:
+    platform_allow: halo

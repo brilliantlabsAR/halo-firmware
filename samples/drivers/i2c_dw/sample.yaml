@@ -1,0 +1,6 @@
+sample:
+  name: Demo for I2C Designware Driver Sample
+tests:
+  sample.drivers.i2c.dw:
+    tags: drivers i2c
+    depends_on: i2c

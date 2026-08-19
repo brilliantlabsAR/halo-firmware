@@ -1,0 +1,42 @@
+description: |
+  Ship Mode GPIO Controller
+  
+  This binding describes a GPIO-controlled ship mode device. Ship mode is an
+  ultra-low power state used during product shipping to preserve battery life.
+  
+  When activated, the device enters ship mode by setting the specified GPIO
+  pin high. The device can typically only be woken up by a hardware reset or
+  power cycle.
+  
+  Example usage:
+  
+    shipmode: shipmode {
+        compatible = "sm-gpio";
+        gpios = <&gpio6 0 GPIO_ACTIVE_HIGH>;
+        label = "Ship Mode Control";
+        status = "okay";
+    };
+  
+    aliases {
+        shipmode = &shipmode;
+    };
+
+compatible: "sm-gpio"
+
+include: base.yaml
+
+properties:
+  gpios:
+    type: phandle-array 
+    required: true
+    description: |
+      GPIO pin used to trigger ship mode. When this pin is set high,
+      the device enters ship mode. The pin should be configured as
+      GPIO_ACTIVE_HIGH in most cases.
+      
+  label:
+    type: string       
+    required: false
+    description: |
+      Human-readable label for the ship mode device. This is optional
+      and used primarily for debugging and identification purposes.

@@ -1,0 +1,119 @@
+/* Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		audio-codec = &wm8904;
+		i2s-bus = &i2s0;
+		mclk-gen = &si570;
+	};
+
+	soc {
+		i2c1: i2c1@49011000 {
+			compatible = "snps,designware-i2c";
+			clock-frequency = <I2C_BITRATE_STANDARD>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x49011000 0x1000>;
+			pinctrl-0 = < &pinctrl_i2c1 >;
+			pinctrl-names = "default";
+			interrupt-parent = <&nvic>;
+			interrupts = <133 3>;
+			status = "okay";
+
+			wm8904: wm8904@1a {
+				compatible = "cirrus,wm8904";
+				reg = <0x1a>;
+				status = "okay";
+			};
+		};
+
+		i2s0: i2s0@49014000 {
+			compatible = "alif,i2s-sync";
+			reg = <0x49014000 0x1000>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&pinctrl_i2s0>;
+			interrupts = <141 3>;
+			bit-depth = <16>;
+			sample-rate = <48000>;
+			status = "okay";
+		};
+
+		i2c0: i2c0@49010000 {
+			compatible = "snps,designware-i2c";
+			clock-frequency = <I2C_BITRATE_STANDARD>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x49010000 0x1000>;
+			pinctrl-0 = < &pinctrl_i2c0 >;
+			pinctrl-names = "default";
+			interrupt-parent = <&nvic>;
+			interrupts = <132 3>;
+			status = "okay";
+
+			mux: tca9548a@74 {
+				compatible = "ti,tca9548a";
+				reg = <0x74>;
+				status = "okay";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reset-gpios = <&gpio2 0 GPIO_ACTIVE_LOW>;
+
+				ch0: mux_i2c@0 {
+					compatible = "ti,tca9548a-channel";
+					reg = <0>;
+					status = "okay";
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					si570: si570@5d {
+						compatible = "skyworks,si570";
+						reg = <0x5d>;
+						factory-fout = <156250000>;
+						initial-freq = <12288000>;
+					};
+				};
+			};
+		};
+	};
+};
+
+&pinctrl {
+	pinctrl_i2c1: pinctrl_i2c1 {
+		group0 {
+			/* Note: defined pinmux names are wrong so just setting numbers directly */
+			pinmux = < PINMUX_PIN(PIN_P2_6, 3) >, /* I2C1 SCL */
+				< PINMUX_PIN(PIN_P2_7, 3) >; /* I2C1 SDA */
+			read_enable = < 0x1 >;
+		};
+	};
+
+	pinctrl_i2s0:pinctrl_i2s0 {
+		group0 {
+			/* Note: defined pinmux names are wrong so just setting numbers directly */
+			pinmux = < PINMUX_PIN(PIN_P1_4, 2) >, /* I2S0 SDI A  */
+				< PINMUX_PIN(PIN_P1_5, 2) >, /* I2S0 SDO A  */
+				< PINMUX_PIN(PIN_P1_7, 3) >, /* I2S0 WS A   */
+				< PINMUX_PIN(PIN_P1_6, 3) >; /* I2S0 SCLK A */
+		};
+	};
+
+	pinctrl_i2c0: pinctrl_i2c0 {
+		group0 {
+			pinmux = < PIN_P2_4__I2C0_SCL_B >,
+				< PIN_P2_5__I2C0_SDA_B >;
+			read_enable = < 0x1 >;
+		};
+	};
+};

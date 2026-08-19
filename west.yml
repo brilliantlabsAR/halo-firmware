@@ -1,0 +1,121 @@
+# The west manifest file (west.yml) for the Halo firmware workspace.
+#
+# The per-installation west configuration file, .west/config, sets the
+# path to the project containing this file in the [manifest] section's
+# "path" variable.
+#
+# See the west documentation for more information:
+# https://docs.zephyrproject.org/latest/develop/west/index.html
+
+manifest:
+  version: "0.13"
+
+  defaults:
+    remote: alif
+
+  group-filter:
+    - +optional
+
+  remotes:
+    - name: alif
+
+
+
+      url-base: https://github.com/alifsemi
+    # Other repository sources:
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
+    - name: armmbed
+      url-base: https://github.com/ARMmbed
+
+  #
+  # Please add items below based on alphabetical order
+  projects:
+
+    # Brilliant Labs fork of alifsemi/zephyr_alif with the Halo patches
+    # committed (no manual patch step after `west update`).
+    - name: zephyr
+      url: https://github.com/brilliantlabsAR/halo-zephyr-alif
+      revision: 190f4cb8638f28ba1fe9dfe53b9f9cec54ee02fb
+      import:
+        # In addition to the zephyr repository itself,
+        # Alif SDK fetches the needed projects
+        #
+        # Please keep this list sorted alphabetically.
+        name-allowlist:
+          - canopennode
+          - chre
+          - edtt
+          - fatfs
+          - hal_ethos_u
+          - liblc3
+          - libmetal
+          - littlefs
+          - lvgl
+          - mbedtls
+          - mipi-sys-t
+          - nanopb
+          - net-tools
+          - openthread
+          - picolibc
+          - psa-arch-tests
+          - segger
+          - tinycrypt
+          - tf-m-tests
+          - tflite-micro
+          - TraceRecorderSource
+          - uoscore-uedhoc
+          - zcbor
+          - zscilib
+          - cmsis-dsp
+    - name: matter
+      repo-path: matter_alif
+      revision: ea8ccfd40e7d79609fa03cda3fd2c4aada3cab68
+      path: modules/lib/matter
+
+    # Brilliant Labs fork of alifsemi/hal_alif with the Halo patches
+    # committed. Defined here (not via the zephyr import) so the fork URL
+    # and pin override the imported definition.
+    - name: hal_alif
+      url: https://github.com/brilliantlabsAR/halo-hal-alif
+      revision: 1a6535cf9aff8b3e45dfcd901f3c77823fec1c1a
+      path: modules/hal/alif
+      groups:
+        - hal
+
+    # lz4 lives in zephyr's optional submanifest; defining it here makes it
+    # unconditionally active (no `west config manifest.project-filter` step).
+    - name: lz4
+      remote: zephyrproject
+      revision: 8e303c264fc21c2116dc612658003a22e933124d
+      path: modules/lib/lz4
+
+    - name: mcuboot_alif
+      path: bootloader/mcuboot
+      url: https://github.com/brilliantlabsAR/halo-mcuboot
+      revision: e5382f8848a8063b304977f9cd746647324c831a
+
+    - name: cmsis_alif
+      revision: 85f6b92af0f6ac72594d391f895c45cc30847e41
+      path: modules/hal/cmsis
+      groups:
+         - hal
+
+    - name: dave2d
+      repo-path: alif_dave2d-driver
+      revision: 6bce53ec2563a72990b2b8bf3be08e8abdec5fd8
+      path: modules/drivers/dave2d
+
+    - name: aipl
+      repo-path: alif_image-processing-lib
+      revision: 1353536b04b2b6e6262e6044cfc6c75dbb7916d6
+      path: modules/lib/aipl
+
+    - name: libmpix
+      path: modules/lib/libmpix
+      url: https://github.com/libmpix/libmpix
+      revision: v1.2.0
+
+  self:
+    path: alif
+    west-commands: scripts/west-commands.yml

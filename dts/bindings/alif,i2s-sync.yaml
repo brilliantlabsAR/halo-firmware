@@ -1,0 +1,36 @@
+# Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+compatible: "alif,i2s-sync"
+
+description: Alif I2S driver with synchronisation
+
+include: [base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  bit-depth:
+    type: int
+    description: Number of bits per sample
+    required: true
+    enum:
+      - 16
+
+  sample-rate:
+    type: int
+    description: Rate at which samples are clocked in/out over the I2S bus
+    required: true
+
+  mono-mode:
+    type: boolean
+    description: Enable mono mode for the I2S bus (only left channel is used)

@@ -1,0 +1,4 @@
+zephyr_library()
+zephyr_library_property(ALLOW_EMPTY TRUE)
+
+zephyr_library_sources_ifdef(CONFIG_REGULATOR_TPS65132 regulator_tps65132.c)

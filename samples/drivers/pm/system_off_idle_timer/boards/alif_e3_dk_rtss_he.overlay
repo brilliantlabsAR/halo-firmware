@@ -1,0 +1,37 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https: //alifsemi.com/license
+ *
+ */
+
+
+/*
+ * Enable RTC and Set the counter to increment every 1sec
+ */
+&rtc0 {
+	prescaler = < 0 >;
+	status = "okay";
+};
+
+/**
+ * Set the console uart frequency to use the HFOSC(38.4)
+ */
+&uart4 {
+	clock-frequency = < 38400000 >;
+};
+
+/ {
+	chosen {
+		zephyr,cortex-m-idle-timer = &rtc0;
+	};
+
+	power-states {
+		off: off {
+			min-residency-us = < 10000 >;
+		};
+	};
+};

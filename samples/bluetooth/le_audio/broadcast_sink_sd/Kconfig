@@ -1,0 +1,42 @@
+# Copyright Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menu "Alif Bluetooth LE Audio Broadcast Sink"
+
+config BROADCAST_NAME
+	string "LE audio broadcast name"
+	default "ALIF_LE_AUDIO"
+	help
+	  Broadcast name to connect to
+
+choice
+	prompt "Choose way to determine left/right audio channels"
+	default AUDIO_LOCATION_USE_GAF
+
+	config AUDIO_LOCATION_USE_GAF
+		bool "Use GAF audio location sent by audio source"
+	config AUDIO_LOCATION_IMPLICIT
+		bool "Assume left channel is first stream, and right channel is second"
+
+endchoice
+
+menu "Logging"
+
+module = MAIN
+module-str = main
+source "subsys/logging/Kconfig.template.log_config"
+
+module = BROADCAST_SINK
+module-str = broadcast_sink
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu # "Logging"
+
+endmenu # "Alif Bluetooth LE Audio Broadcast Sink with Scan Delegator"
+
+source "Kconfig.zephyr"

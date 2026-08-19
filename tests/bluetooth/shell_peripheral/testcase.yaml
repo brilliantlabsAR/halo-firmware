@@ -1,0 +1,11 @@
+tests:
+  # Peripheral test suite using ztest
+  bluetooth.shell.peripheral:
+    tags:
+      - shell
+      - ble
+    platform_allow:
+      - alif_b1_dk_rtss_he
+    harness: ztest
+    integration_platforms:
+      - alif_b1_dk_rtss_he

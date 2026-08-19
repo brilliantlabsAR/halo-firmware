@@ -1,0 +1,21 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+#
+
+menuconfig DBUF_DISPLAY
+	bool "Enable double buffer display utils"
+	depends on DISPLAY
+	default n
+
+if DBUF_DISPLAY
+
+config DBUF_DISPLAY_SECTION
+	string "Double buffer display buffer attributes"
+	default n
+
+endif

@@ -1,0 +1,18 @@
+sample:
+  name: BMA580 Trigger Sample
+tests:
+  sample.halo.bma580_trigger:
+    harness: console
+    tags: sensors
+    platform_allow:
+      - halo
+    integration_platforms:
+      - halo
+    harness_config:
+      type: multi_line
+      ordered: true
+      regex:
+        - "Tap trigger set successfully"
+        - "Double tap trigger set successfully"
+        - "bma580 sensor samples: 0"
+        - "accel x:.* ms/2 y:.* ms/2 z:.* ms/2 temp:.* C"

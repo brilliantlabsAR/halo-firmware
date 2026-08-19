@@ -1,0 +1,30 @@
+sample:
+  name: GPIO Button Event Detection
+  description: >
+    Demonstrates comprehensive button event detection including single click,
+    double click, and multi-level long press with dynamic configuration support.
+    Features auto-callback when maximum long press duration is reached.
+
+tests:
+  sample.halo.button:
+    harness: console
+    tags:
+      - gpio
+      - input
+      - button
+      - samples
+    platform_allow:
+      - halo
+    integration_platforms:
+      - halo
+    depends_on:
+      - gpio
+      - input
+    filter: dt_alias_exists("sw0")
+    harness_config:
+      type: multi_line
+      regex:
+        - "Button Event Test Application"
+        - "Button device: button"
+        - "Mode: Unified callback for all events"
+        - "Button test started"

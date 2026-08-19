@@ -1,0 +1,224 @@
+# Copyright Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+config ALIF_BT_SHELL
+	bool "Alif Bluetooth shell"
+	depends on BT
+	depends on ALIF_BLE_HOST
+	help
+	  Enable Alif Bluetooth related shell commands.
+
+menu "Bluetooth Shell Configuration"
+	depends on ALIF_BT_SHELL
+
+config ALIF_EXT_ADV
+	bool "extended advertising"
+	default y
+	help
+	  Enable extended advertising commands
+
+choice BT_SHELL_GAP_ROLE
+	prompt "Bluetooth GAP role"
+	default BT_SHELL_GAP_ROLE_LE_CENTRAL
+	help
+	  GAP role for the Bluetooth device
+
+	config BT_SHELL_GAP_ROLE_NONE
+		bool "No role"
+		help
+		  No role
+
+	config BT_SHELL_GAP_ROLE_LE_OBSERVER
+		bool "LE Observer"
+		help
+		  LE Observer role
+
+	config BT_SHELL_GAP_ROLE_LE_BROADCASTER
+		bool "LE Broadcaster"
+		help
+		  LE Broadcaster role
+
+	config BT_SHELL_GAP_ROLE_LE_CENTRAL
+		bool "LE Central"
+		help
+		  LE Central role
+
+	config BT_SHELL_GAP_ROLE_LE_PERIPHERAL
+		bool "LE Peripheral"
+		help
+		  LE Peripheral role
+
+	config BT_SHELL_GAP_ROLE_LE_ALL
+		bool "All LE roles"
+		help
+		  All LE roles
+endchoice
+
+choice BT_SHELL_PAIRING_MODE
+	prompt "Bluetooth pairing mode"
+	default BT_SHELL_PAIRING_DISABLE
+	help
+	  Pairing mode for the Bluetooth device
+
+	config BT_SHELL_PAIRING_DISABLE
+		bool "Pairing disabled"
+		help
+		  No pairing authorized
+
+	config BT_SHELL_PAIRING_LEGACY
+		bool "Legacy pairing"
+		help
+		  Legacy pairing authorized
+
+	config BT_SHELL_PAIRING_SEC_CON
+		bool "Secure Connection pairing"
+		help
+		  Secure Connection pairing authorized
+
+	config BT_SHELL_PAIRING_CT2
+		bool "Cross Transport Key Derivation"
+		help
+		  Dual-mode only feature used to support cross transport key derivation 2nd algorithm
+
+	config BT_SHELL_PAIRING_BT_SSP
+		bool "BT Classic secure simple pairing"
+		help
+		  BT-Classic secure simple pairing
+
+	config BT_SHELL_PAIRING_ALL
+		bool "All security modes"
+		help
+		  All security modes enabled
+endchoice
+
+choice BT_SHELL_PRIVACY_CFG
+	prompt "Bluetooth privacy configuration"
+	default BT_SHELL_PRIVACY_DISABLED
+	help
+	  Privacy configuration for the Bluetooth device
+
+	config BT_SHELL_PRIVACY_DISABLED
+		bool "Privacy disabled"
+		help
+		  Disable privacy
+
+	config BT_SHELL_PRIVACY_ENABLED
+		bool "Privacy enabled"
+		help
+		  Enable privacy
+endchoice
+
+config BT_SHELL_RENEW_DUR
+	int "Bluetooth address renewal duration (seconds)"
+	range 60 3600
+	default 900
+	help
+	  Duration in seconds before renewing the private address.
+	  According to Bluetooth specification, this should be between
+	  60 seconds (1 minute) and 3600 seconds (1 hour),
+	  with a recommended default of 15 minutes (900 seconds).
+
+config BT_SHELL_PRIVATE_ADDR
+	string "Bluetooth private identity address"
+	default "CF:FE:FB:DE:11:07"
+	help
+	  Private identity address in format XX:XX:XX:XX:XX:XX.
+
+config BT_SHELL_ATT_CFG
+	int "Bluetooth attribute configuration"
+	default 0
+	help
+	  Attribute database configuration.
+
+config BT_SHELL_MAX_TX_OCTETS
+	int "Bluetooth maximum transmit octets"
+	range 27 251
+	default 27
+	help
+	  Suggested maximum transmit octets.
+	  Range is from GAP_LE_MIN_OCTETS (27) to GAP_LE_MAX_OCTETS (251).
+
+config BT_SHELL_MAX_TX_TIME
+	int "Bluetooth maximum transmit time"
+	range 328 17040
+	default 328
+	help
+	  Suggested maximum transmit time.
+	  Range is from GAP_LE_MIN_TIME (328) to GAP_LE_MAX_TIME (17040).
+
+choice BT_SHELL_TX_PREF_PHY
+	prompt "Bluetooth preferred transmit PHY"
+	default BT_SHELL_PHY_ANY_TX
+	help
+	  Preferred transmit PHY
+
+	config BT_SHELL_PHY_1MBPS_TX
+		bool "1 Mbps PHY (LE)"
+		help
+		  1 Mbps PHY
+
+	config BT_SHELL_PHY_2MBPS_TX
+		bool "2 Mbps PHY (LE)"
+		help
+		  2 Mbps PHY
+
+	config BT_SHELL_PHY_CODED_TX
+		bool "Coded PHY (LE)"
+		help
+		  Coded PHY
+
+	config BT_SHELL_PHY_ANY_TX
+		bool "Any PHY"
+		help
+		  Any PHY
+endchoice
+
+choice BT_SHELL_RX_PREF_PHY
+	prompt "Bluetooth preferred receive PHY"
+	default BT_SHELL_PHY_ANY_RX
+	help
+	  Preferred receive PHY
+
+	config BT_SHELL_PHY_1MBPS_RX
+		bool "1 Mbps PHY (LE)"
+		help
+		  1 Mbps PHY
+
+	config BT_SHELL_PHY_2MBPS_RX
+		bool "2 Mbps PHY (LE)"
+		help
+		  2 Mbps PHY
+
+	config BT_SHELL_PHY_CODED_RX
+		bool "Coded PHY (LE)"
+		help
+		  Coded PHY
+
+	config BT_SHELL_PHY_ANY_RX
+		bool "Any PHY"
+		help
+		  Any PHY
+endchoice
+
+config BT_SHELL_TX_PATH_COMP
+	int "Bluetooth transmit path compensation"
+	default 0
+	help
+	  Transmit path compensation value.
+
+config BT_SHELL_RX_PATH_COMP
+	int "Bluetooth receive path compensation"
+	default 0
+	help
+	  Receive path compensation value.
+
+module = BT_SHELL
+module-str = bt_shell
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu

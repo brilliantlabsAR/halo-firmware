@@ -1,0 +1,6 @@
+sample:
+  name: Demo for CMP driver
+tests:
+  sample.drivers.crc:
+    tags: drivers cmp
+    depends_on: cmp

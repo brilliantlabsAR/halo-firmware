@@ -1,0 +1,11 @@
+sample:
+  name: BME680 Sensor sample
+tests:
+  sample.sensor.bme680:
+    harness: sensor
+    tags: samples sensor
+    integration_platforms:
+      - alif_e7_dk_rtss_hp
+    platform_allow: alif_e7_dk_rtss_hp alif_e7_dk_rtss_he
+                    alif_b1_dk_rtss_he alif_e1c_dk_rtss_he
+                    alif_b1_dk_rtss_he_a5

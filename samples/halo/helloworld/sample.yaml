@@ -1,0 +1,5 @@
+sample:
+  name: hello world
+tests:
+  sample.basic.helloworld:
+    tags: introduction

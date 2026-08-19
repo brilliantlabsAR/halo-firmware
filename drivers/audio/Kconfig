@@ -1,0 +1,7 @@
+if AUDIO
+
+rsource "t5838/Kconfig"
+rsource "pwm_audio/Kconfig"
+rsource "max98357a/Kconfig"
+
+endif

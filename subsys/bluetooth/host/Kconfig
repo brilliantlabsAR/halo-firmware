@@ -1,0 +1,37 @@
+# Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+config BLE_DEVICE_NAME
+	string "Default BLE device name"
+	default "ALIF"
+	help
+	  BLE device name
+
+config BLE_COMPANY_ID
+	hex "Default BLE Company ID"
+	default "0x0CDD"
+	help
+	  BLE Company ID
+
+config BLE_DEVICE_NAME_MAX
+	int "Maximum device name length in bytes"
+	default 28
+	range 28 248
+	help
+	  Length of the device name string - termination character excluded
+
+config BLE_ADV_DATA_MAX
+	int "Maximum advertising data length in bytes"
+	default 31
+	range 31 255
+	help
+	  Length of the advertising data string - termination character excluded. Defaults to legacy maximum of 31 bytes.
+
+module = BT_HOST
+module-str = bt_host
+source "subsys/logging/Kconfig.template.log_config"

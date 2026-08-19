@@ -1,0 +1,176 @@
+description: |
+    Bosch bma580 accelerometer sensor.  See more info at:
+    https://www.bosch-sensortec.com/products/motion-sensors/accelerometers/bma580/
+
+compatible: "bosch,bma580"
+
+include: ["i2c-device.yaml", "sensor-device.yaml"]
+
+properties:
+  int1-gpios:
+    type: phandle-array
+    description: |
+      INT1 pin
+
+      This pin defaults to active high when produced by the sensor.
+      The property value should ensure the flags properly describe
+      the signal that is presented to the driver.
+
+  int2-gpios:
+    type: phandle-array
+    description: |
+      INT2 pin
+
+      This pin defaults to active high when produced by the sensor.
+      The property value should ensure the flags properly describe
+      the signal that is presented to the driver.
+
+
+  int1-config:
+    type: int
+    description: |
+      INT1 configuration bitfield.
+      Bits:
+        [0:1] Interrupt mode:
+          0: disable
+          1: latched
+          2: short pulse
+          3: long pulse
+        [2] Drive mode:
+          0: push-pull
+          1: open-drain
+        [3] Active level:
+          0: active low
+          1: active high
+    default: 4  # disable, open-drain, active low
+
+  int2-config:
+    type: int
+    description: |
+      INT2 configuration bitfield.
+      Bits:
+        [0:1] Interrupt mode:
+          0: disable
+          1: latched
+          2: short pulse
+          3: long pulse
+        [2] Drive mode:
+          0: push-pull
+          1: open-drain
+        [3] Active level:
+          0: active low
+          1: active high
+    default: 4  # disable, open-drain, active low
+
+  odr:
+    type: string
+    description: |
+      Default output data rate in Hz. Only the following values are allowed:
+        1.5625 
+        3.125
+        6.25
+        12.5
+        25
+        50
+        100
+        200
+        400
+        800
+        1600
+        3200
+        6400
+    default: "200"
+    enum:
+      - "1.5625"
+      - "3.125"
+      - "6.25"
+      - "12.5"
+      - "25"
+      - "50"
+      - "100"
+      - "200"
+      - "400"
+      - "800"
+      - "1600"
+      - "3200"
+      - "6400"
+
+  range:
+    type: int
+    description: |
+      Default range in g. Only the following values are allowed:
+        2
+        4
+        8
+        16
+    default: 2
+    enum:
+      - 2
+      - 4
+      - 8
+      - 16
+
+  iir:
+    type: int
+    description: |
+      Default IIR filter in dB. Only the following values are allowed:
+        0
+        20
+        40
+        60
+    default: 0
+    enum:
+      - 0
+      - 20
+      - 40
+      - 60
+
+  noise:
+    type: string
+    description: |
+      Default noise mode. Only the following values are allowed:
+        "LOW"
+        "HIGH"
+    default: "LOW"
+    enum:
+      - "LOW"
+      - "HIGH"
+  
+  bwp:
+    type: int
+    description: |
+      Default bandwidth in Hz. Only the following values are allowed:
+        0
+        2
+        4
+        8
+        16
+        32
+        64
+    default: 2
+    enum:
+      - 0
+      - 2
+      - 4
+      - 8
+      - 16
+      - 32
+  
+  pwr:
+    type: string
+    description: |
+      Default power mode. Only the following values are allowed:
+        LPM
+        HPM
+    default: "HPM"
+    enum:
+      - "LPM"
+      - "HPM"
+
+  lazy-init:
+    type: boolean
+    description: |
+      If enabled, hardware initialization is deferred until first use (PM resume).
+      This saves boot time and power consumption when display is not immediately needed.
+      When false, hardware is initialized during driver init.
+  

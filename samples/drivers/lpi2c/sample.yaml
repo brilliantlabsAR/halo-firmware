@@ -1,0 +1,6 @@
+sample:
+  name: Demo for LPI2C Alif Driver Sample
+tests:
+  sample.drivers.lpi2c:
+    tags: drivers lpi2c
+    depends_on: lpi2c

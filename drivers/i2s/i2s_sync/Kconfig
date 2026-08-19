@@ -1,0 +1,37 @@
+# Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menuconfig I2S_SYNC
+	bool "Alif I2S sync driver"
+	default y
+	depends on I2S && DT_HAS_ALIF_I2S_SYNC_ENABLED
+	help
+		Enable Alif I2S driver with synchronisation
+
+if I2S_SYNC
+
+config I2S_SYNC_BUFFER_FORMAT_SEQUENTIAL
+	bool "I2S buffer format uses L and R channels in sequential blocks rather than interleaved"
+	default n
+	help
+		By default the I2S buffer format interleaves the left and right channel samples:
+		{left_0, right_0, left_1, right_1, ..., left_n, right_n}
+
+		This option uses left and right channels in sequential blocks:
+		{left_0, left_1, ..., left_n, right_0, right_1, ..., right_n}
+
+		This is advantageous for some applications, e.g. for bluetooth LE audio the LC3 codec is a
+		single channel codec, so expects a single left or right channel to be in one continuous
+		block. Therefore it can be more efficient for the I2S driver to directly use this buffer
+		format instead of having to interleave/de-interleave the data as a separate step.
+
+module = I2S_SYNC
+module-str = i2s-sync
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

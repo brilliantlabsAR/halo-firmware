@@ -1,0 +1,5 @@
+if DISPLAY
+
+rsource "Kconfig.vga020"
+
+endif

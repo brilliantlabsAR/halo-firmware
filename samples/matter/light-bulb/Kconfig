@@ -1,0 +1,22 @@
+# Copyright(C) 2024 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file.If not, please write to:
+# contact @alifsemi.com, or visit : https: // alifsemi.com/license
+
+mainmenu "Matter Alif SDK Connect Lighting Example Application with shell test commands"
+
+# Sample configuration used for Thread networking
+if NET_L2_OPENTHREAD
+
+choice OPENTHREAD_DEVICE_TYPE
+	default OPENTHREAD_FTD
+endchoice
+
+endif # NET_L2_OPENTHREAD
+
+rsource "${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/alif/chip-module/Kconfig.features"
+rsource "${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/alif/chip-module/Kconfig.defaults"
+source "Kconfig.zephyr"

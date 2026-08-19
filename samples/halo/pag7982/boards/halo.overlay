@@ -1,0 +1,14 @@
+&i2c1 {
+	status = "okay";
+};
+
+&pag7982{
+	status = "okay";
+	frame-rate = <30>;
+	boot-on;
+};
+
+&lpcam {
+	status = "okay";
+};
+

@@ -1,0 +1,77 @@
+&pag7982{
+	status = "okay";
+	frame-rate = <30>;
+};
+
+&vga020 {
+	lazy-init;
+};
+
+&i2s0 {
+	status = "okay";
+};
+
+&lpcam {
+	status = "okay";
+};
+
+ns: &ns {
+	status = "okay";
+};
+
+&qmc6308{
+	status = "okay";
+	lazy-init;
+};
+
+&bma580{
+	status = "okay";
+	lazy-init;
+};
+
+&i2c0 {
+	status = "okay";
+};
+&i2c1 {
+	status = "okay";
+};
+&tps65132 {
+	status = "okay";
+};
+
+&uart_ahi {
+	status = "disabled";
+};
+
+/*
+ * The console runs from SYST_PCLK, which the SoC dtsi already declares as
+ * 40 MHz — so no clock-frequency override here (the old 38400000 existed
+ * only for the HFOSC switch that power_mgr.c used to do; see #249).
+ *
+ * 40 MHz / (16 * 115200) = 21.70. The driver truncates that to a divisor of
+ * 21 (119047 baud, +3.3%), so pair it with the fractional divisor DLF =
+ * 11/16 to get 21.6875 -> 115273 baud, 0.06% off.
+ */
+&uart3 {
+	dlf = < 11 >;
+	status = "okay";
+};
+/ {
+	chosen {
+		zephyr,cortex-m-idle-timer = &rtc0;
+		zephyr,console = &uart3;
+	};
+
+	power-states {
+		off: off {
+			/* 2s is time reserved for os wakeup and sleep */
+			min-residency-us = < 2000000 >;
+		};
+	};
+};
+
+/* Modify the existing button to add 4th level (15s for shutdown) */
+&button {
+	/* 1s (release), 3s (release), 8s (auto), 15s (auto) */
+	long-press-ms = <1000 2000 5000 15000>;
+};

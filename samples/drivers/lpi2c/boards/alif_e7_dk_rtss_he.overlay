@@ -1,0 +1,23 @@
+/*
+ * Copyright (C) 2024 Alif Semiconductor.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* setting i2c0 as master and lpi2c instance as slave.
+ *
+ */
+
+/ {
+	aliases {
+		master-i2c = &i2c0;
+		slave-i2c = &lpi2c;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+};
+
+&lpi2c {
+	status = "okay";
+};

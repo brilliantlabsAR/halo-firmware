@@ -1,0 +1,54 @@
+/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+#define HCI_UART_DMA_RX_CH  0
+#define HCI_UART_DMA_RX_REQ 26
+#define HCI_UART_DMA_TX_CH  1
+#define HCI_UART_DMA_TX_REQ 27
+
+#define I2S0_DMA_RX_CH  2
+#define I2S0_DMA_RX_REQ 24
+#define I2S0_DMA_TX_CH  3
+#define I2S0_DMA_TX_REQ 28
+
+#define LPI2S_DMA_RX_CH  4
+#define LPI2S_DMA_RX_REQ 14
+#define LPI2S_DMA_TX_CH  5
+#define LPI2S_DMA_TX_REQ 15
+
+&dma2 {
+	dma-channels = <8>;
+	interrupts = <0 3>, <1 3>, <2 3>, <3 3>, <4 3>, <5 3>,
+		     <6 3>, <7 3>, <32 3>;
+	interrupt-names = "channel0", "channel1",
+			  "channel2", "channel3",
+			  "channel4", "channel5",
+			  "channel6", "channel7",
+			  "abort";
+
+};
+
+&i2s0 {
+	dmas = <&dma2 I2S0_DMA_RX_CH I2S0_DMA_RX_REQ>,
+	       <&dma2 I2S0_DMA_TX_CH I2S0_DMA_TX_REQ>;
+	dma-names = "rxdma", "txdma";
+};
+
+&i2s2 {
+	dmas = <&dma2 LPI2S_DMA_RX_CH LPI2S_DMA_RX_REQ>,
+	       <&dma2 LPI2S_DMA_TX_CH LPI2S_DMA_TX_REQ>;
+	dma-names = "rxdma", "txdma";
+};
+
+&uart_hci {
+	dmas = <&dma2 HCI_UART_DMA_RX_CH HCI_UART_DMA_RX_REQ>,
+	       <&dma2 HCI_UART_DMA_TX_CH HCI_UART_DMA_TX_REQ>;
+	dma-names = "rx", "tx";
+};

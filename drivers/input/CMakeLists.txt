@@ -1,0 +1,4 @@
+zephyr_library()
+zephyr_library_property(ALLOW_EMPTY TRUE)
+
+zephyr_library_sources_ifdef(CONFIG_INPUT_GPIO_BUTTON input_gpio_button.c)

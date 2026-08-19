@@ -1,0 +1,52 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+* Use, distribution and modification of this code is permitted under the
+* terms stated in the Alif Semiconductor Software License Agreement
+*
+* You should have received a copy of the Alif Semiconductor Software
+* License Agreement with this file. If not, please write to:
+* contact@alifsemi.com, or visit: https://alifsemi.com/license
+*
+*/
+
+/* setting LPSPI0 as master and SPI0 instance as slave.
+*
+*/
+
+/ {
+
+	chosen {
+		zephyr,console = &lpuart;
+		zephyr,shell-uart = &lpuart;
+	};
+	aliases {
+		master-spi = &lpspi0;
+		slave-spi = &spi0;
+	};
+};
+
+&dma2 {
+	status = "okay";
+};
+
+&lpspi0 {
+	status = "okay";
+
+	dmas = <&dma2 0 13>, <&dma2 1 12>;
+	dma-names = "txdma", "rxdma";
+};
+
+&spi0 {
+	status = "okay";
+	serial-target;
+
+	dmas = <&dma2 2 20>, <&dma2 3 16>;
+	dma-names = "txdma", "rxdma";
+};
+
+&uart2 {
+	status = "disabled";
+};
+
+&lpuart {
+	status = "okay";
+};

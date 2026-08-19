@@ -1,0 +1,188 @@
+#Copyright(C) 2023 Alif Semiconductor - All Rights Reserved.
+#Use, distribution and modification of this code is permitted under the
+#terms stated in the Alif Semiconductor Software License Agreement
+#
+#You should have received a copy of the Alif Semiconductor Software
+#License Agreement with this file.If not, please write to:
+#contact @alifsemi.com, or visit : https: // alifsemi.com/license
+
+menuconfig ALIF_BLE_AUDIO
+	bool "Alif BLE audio subsystem"
+	depends on BT_CUSTOM && ALIF_ROM_LC3_CODEC
+	help
+	  The Alif BLE audio subsystem contains common code to be re-used across LE audio applications.
+
+if ALIF_BLE_AUDIO
+
+module = BLE_AUDIO
+module-str = ble-audio
+source "subsys/logging/Kconfig.template.log_config"
+
+choice
+	prompt "Choose BAP frame duration"
+	default ALIF_BLE_AUDIO_FRAME_DURATION_10MS
+
+	config ALIF_BLE_AUDIO_FRAME_DURATION_7_5MS
+	bool "7.5ms"
+	config ALIF_BLE_AUDIO_FRAME_DURATION_10MS
+	bool "10ms"
+
+endchoice
+
+choice
+	prompt "Choose audio sampling rate"
+	default ALIF_BLE_AUDIO_FS_48KHZ
+
+	config ALIF_BLE_AUDIO_FS_8KHZ
+	bool "8 kHz"
+	config ALIF_BLE_AUDIO_FS_16KHZ
+	bool "16 kHz"
+	config ALIF_BLE_AUDIO_FS_24KHZ
+	bool "24 kHz"
+	config ALIF_BLE_AUDIO_FS_32KHZ
+	bool "32 kHz"
+	config ALIF_BLE_AUDIO_FS_48KHZ
+	bool "48 kHz"
+
+endchoice
+
+config ALIF_BLE_AUDIO_FS_HZ
+	int
+	range 8000 48000
+	default 8000 if ALIF_BLE_AUDIO_FS_8KHZ
+	default 16000 if ALIF_BLE_AUDIO_FS_16KHZ
+	default 24000 if ALIF_BLE_AUDIO_FS_24KHZ
+	default 32000 if ALIF_BLE_AUDIO_FS_32KHZ
+	default 48000 if ALIF_BLE_AUDIO_FS_48KHZ
+
+config ALIF_BLE_AUDIO_NMB_CHANNELS
+	int "Number of audio channels"
+	range 1 2
+	default 2
+	help
+	  Number of audio channels
+
+choice
+	prompt "Choose size of each encoded audio frame in bytes"
+	default ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_100
+	help
+	  The number of bytes in each encoded audio frame. This is used to determine how much the
+	  audio data needs to be compressed by the codec. For example if audio is sampled at 48 kHz,
+	  each audio sample is 16 bits (2 bytes), and the frame duration is 10 ms, then the number of
+	  bytes per "raw" audio frame is (48000 / 100) * 2 = 960 bytes. If the encoded audio frame is
+	  100 bytes, then the data is compressed by a factor of 960 / 100 = 9.6. This choice is a
+	  trade-off between audio quality and the air-time and resources used by the stream.
+
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_30
+	bool "30"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_40
+	bool "40"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_60
+	bool "60"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_80
+	bool "80"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_100
+	bool "100"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_120
+	bool "120"
+	config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_155
+	bool "155"
+endchoice
+
+config ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME
+	int
+	range 30 155
+	default 30 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_30
+	default 40 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_40
+	default 60 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_60
+	default 80 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_80
+	default 100 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_100
+	default 120 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_120
+	default 155 if ALIF_BLE_AUDIO_OCTETS_PER_CODEC_FRAME_155
+
+choice
+	prompt "Choose number of LE audio retransmissions"
+	default ALIF_BLE_AUDIO_RTN_4
+	help
+	  Max number of retransmissions of each frame. A higher number will give a higher probabilty
+	  of the frame being received successfully, but also uses more air-time. The controller uses
+	  this value as a suggestion and may choose a different value depending on other constraints
+
+	config ALIF_BLE_AUDIO_RTN_2
+	bool "2"
+	config ALIF_BLE_AUDIO_RTN_4
+	bool "4"
+endchoice
+
+config ALIF_BLE_AUDIO_RTN
+	int
+	range 2 4
+	default 2 if ALIF_BLE_AUDIO_RTN_2
+	default 4 if ALIF_BLE_AUDIO_RTN_4
+
+choice
+	prompt "Choose LE audio max transport latency"
+	default ALIF_BLE_AUDIO_MAX_TLATENCY_10
+	help
+	  The max transport latency effectively specifies the length of time during which an SDU may
+	  be retransmitted. A higher value will lead to a large end-to-end audio latency, since the
+	  receiver must wait for the last time slot at which the frame can be received before the
+	  frame can be rendered (even if it already received an earlier transmission of the frame).
+	  But a higher value also results in higher reliability due to the time diversity of frame
+	  retransmissions.
+
+	config ALIF_BLE_AUDIO_MAX_TLATENCY_10
+	bool "10 ms"
+	config ALIF_BLE_AUDIO_MAX_TLATENCY_20
+	bool "20 ms"
+endchoice
+
+config ALIF_BLE_AUDIO_MAX_TLATENCY
+	int
+	default 10 if ALIF_BLE_AUDIO_MAX_TLATENCY_10
+	default 20 if ALIF_BLE_AUDIO_MAX_TLATENCY_20
+
+config AUDIO_CLOCK_DIVIDER
+	int "Audio clock divider ratio"
+	default 1
+	help
+	Clock divider ratio between the audio PLL and the I2S MCLK signal
+
+config ALIF_BLE_AUDIO_SDU_QUEUE_LENGTH
+	int "CIS or BIS stream SDU queue length"
+	range 6 64
+	default 12
+
+config ALIF_BLE_AUDIO_PRESENTATION_DELAY_QUEUE_MARGIN
+	int "Safety margin to be added to presentation delay"
+	range 5 100
+	default 20
+	help
+	  Safety margin extra in milliseconds.
+
+config ALIF_BLE_AUDIO_MIN_PRESENTATION_DELAY_MS
+	int "Minimum presentation delay in milliseconds"
+	range 5 100
+	default 30
+	help
+	  Minimum presentation delay in milliseconds.
+
+config ALIF_BLE_AUDIO_SOURCE_TRANSMISSION_DELAY_ENABLED
+	bool "Enable transmission delay"
+	default n
+
+config ALIF_BLE_AUDIO_SOURCE_TRANSMISSION_DELAY_MS
+	depends on ALIF_BLE_AUDIO_SOURCE_TRANSMISSION_DELAY_ENABLED
+	int "Use timed transmission delay in milliseconds"
+	range 0 100
+	default 30
+
+config ALIF_BLE_AUDIO_USE_RAMFUNC
+	bool "Run some critical functions in RAM"
+	default n
+
+rsource "Kconfig.lc3"
+rsource "Kconfig.presentation_compensation"
+
+
+endif # ALIF_BLE_AUDIO

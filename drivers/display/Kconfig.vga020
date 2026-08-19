@@ -1,0 +1,12 @@
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+config VGA020
+	bool "VGA020 display driver"
+	depends on ! CONFIG_CDC200
+	default y
+	depends on DT_HAS_GZ_VGA020_ENABLED
+	help
+		Enable support for VGA020 driver controller
+
+

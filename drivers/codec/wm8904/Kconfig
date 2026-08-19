@@ -1,0 +1,37 @@
+# Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menuconfig WM8904
+	bool "WM8904 programmable oscillator"
+	depends on I2C
+	help
+		Enable I2C based driver for WM8904 audio codec.
+
+if WM8904
+
+config WM8904_MONO_OUTPUT_MODE
+	bool "Mono mode: duplicate left channel input on both outputs"
+	default n
+	help
+		Setting mono mode causes the WM8904 to output the left channel on both the left and right
+		outputs. This is useful in case your I2S signal contains only one channel.
+
+config WM8904_INIT_PRIORITY
+	int "Initialisation priority for WM8904 driver"
+	default 60
+	help
+		The initialisation priority affects the order in which drivers are initialised. A smaller
+		value means the driver will be initialised earlier. This must be set to a value greater
+		than the init priority of the I2C bus that the WM8904 driver depends upon, so that the
+		WM8904 is initialised after the bus.
+
+module = WM8904
+module-str = wm8904
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

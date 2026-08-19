@@ -1,0 +1,7 @@
+if SENSOR
+
+rsource "Kconfig.bma580"
+rsource "Kconfig.qmc6308"
+rsource "Kconfig.alif_vbat"
+
+endif

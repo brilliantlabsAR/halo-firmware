@@ -1,0 +1,18 @@
+# Copyright(C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file.If not, please write to:
+# contact @alifsemi.com, or visit : https: // alifsemi.com/license
+
+config D0_HEAP_SECTION
+	string "D0 heap buffer section"
+	depends on D1_MALLOC_D0LIB
+	default n
+
+config IMG_CNV_SECTION
+	string "Image conversion buffer section"
+	default n
+
+source "Kconfig.zephyr"

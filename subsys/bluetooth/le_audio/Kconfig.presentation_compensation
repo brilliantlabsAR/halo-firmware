@@ -1,0 +1,127 @@
+#Copyright(C) 2025 Alif Semiconductor - All Rights Reserved.
+#Use, distribution and modification of this code is permitted under the
+#terms stated in the Alif Semiconductor Software License Agreement
+#
+#You should have received a copy of the Alif Semiconductor Software
+#License Agreement with this file.If not, please write to:
+#contact @alifsemi.com, or visit : https: // alifsemi.com/license
+
+menuconfig ALIF_PRESENTATION_COMPENSATION
+	bool "Alif BLE audio presentation compensation"
+	default y
+	help
+	  The Alif BLE audio presentation compensation.
+
+if ALIF_PRESENTATION_COMPENSATION
+
+module = ALIF_PRESENTATION_COMPENSATION
+module-str = alif-presentation-compensation
+source "subsys/logging/Kconfig.template.log_config"
+
+choice
+	prompt "Choose presentation compensation direction"
+	help
+	  The presentation compensation module need to know the direction of the stream used to determine
+	  the presentation delay, as this affects which direction the audio PLL clock speed must be
+	  adjusted.
+
+	  If the presentation compensation information comes from a source stream, then a presentation
+	  delay which is too long should be corrected by using a slower clock speed.
+
+	  If the presentation compensation information comes from a aink stream, then a presentation
+	  delay which is too long should be corrected by using a faster clock speed.
+
+config PRESENTATION_COMPENSATION_DIRECTION_SOURCE
+	bool "Presentation compensation input from audio source stream (host to controller)"
+
+config PRESENTATION_COMPENSATION_DIRECTION_SINK
+	bool "Presentation compensation input from audio sink stream (controller to host)"
+
+endchoice
+
+config PRESENTATION_COMPENSATION_PRINT_STATS
+	bool "Print statistics about presentation delay"
+	depends on LOG
+
+config PRESENTATION_COMPENSATION_PRINT_STATS_INTERVAL
+	int "Interval for printing presentation delay statistics, in SDU count"
+	default 1024
+	depends on PRESENTATION_COMPENSATION_PRINT_STATS
+	help
+	  Interval at which to print presentation delay statistics. The interval is measured in SDU
+	  count, e.g. 1024 means to print the statistics every 512 SDUs (per channel). With a 10 ms
+	  SDU interval this is around 10 seconds.
+
+config PRESENTATION_COMPENSATION_THRESHOLD_US
+	int "Presentation compensation threshold in microseconds"
+	default 400
+	help
+	  The presentation compensation threshold is the value of presentation error above which
+	  samples should be dropped or inserted. If the presentation error is below the threshold,
+	  then presentation delay will be compensated by adjusting the audio clock speed instead.
+
+config PRESENTATION_COMPENSATION_KP
+	int "Presentation compensation controller proportional gain value"
+	default 100
+	help
+	  Proportional gain used by the presentation compensation PI controller
+
+config PRESENTATION_COMPENSATION_KI
+	int "Presentation compensation controller integral gain value"
+	default 30
+	help
+	  Integral gain used by the presentation compensation PI controller
+
+config PRESENTATION_COMPENSATION_MAX_DELTA_F
+	int "Maximum delta frequency in Hz to adjust audio clock from centre"
+	default 100000
+	help
+	  Maximum frequency deviation in Hz that the presentation compensation module can adjust the
+	  audio clock from the centre frequency. For example if the audio clock frequency is 1.536 MHz
+	  and this parameter is set to 100000, the audio clock frequency will never be adjusted
+	  outside the range of 1.436 - 1.636 MHz.
+
+config PRESENTATION_COMPENSATION_MAX_INCREMENTAL_DELTA_F
+	int "Maximum delta frequency in Hz to adjust audio clock in one single adjustment"
+	default 100
+	help
+	  Maximum frequency deviation in Hz that the presentation compensation module can adjust the
+	  audio clock in a single adjustment. For example if this parameter is set to 1000 and the
+	  audio clock frequency is 1.536 MHz, then a single adjustment cannot adjust the clock
+	  frequency outside the range of 1.535 - 1.537 MHz. Subsequent adjustments may gradually move
+	  the frequency outside this range.
+
+config PRESENTATION_COMPENSATION_CORRECTION_FACTOR
+	int "Presentation compensation correction factor"
+	default 16
+	help
+	  Correction factor which the presentation error is divided by to get the length of time which
+	  should be compensated by dropping or adding audio samples. For example if the presentation
+	  error is 500 us and the correction factor is 5, then 100 us worth of samples will be dropped
+	  or inserted. This is important in the case where there is a delay between dropping/inserting
+	  samples and this actually taking effect on the measured presentation delay. For example if
+	  the presentation error is 500 us but dropping samples will not take effect until 4 SDUs
+	  later (since the SDUs must pass through encoding and buffering first), then if we did *not*
+	  have this correction factor we would apply a 500 us correction on four SDUs rather than
+	  just one, until the effect of dropping/inserting samples can be seen. This would cause an
+	  over-correction which would then have to be corrected back in the other direction. Using a
+	  correction factor greater than 1 causes any presentation error to be removed gradually over
+	  several SDUs rather than all in one go.
+
+config PRESENTATION_COMPENSATION_DEBUG
+	bool "Enable debug data to be recorded by presentation compensation module"
+	depends on LOG
+	help
+		The PI controller coefficients of the presentation compensation module may need tuning for
+		some use-cases. Enabling this causes presentation compensation data to be logged into a
+		buffer for later analysis. When the buffer is full, a callback can be triggered to notify
+		the application.
+
+if PRESENTATION_COMPENSATION_DEBUG
+
+config PRESENTATION_COMPENSATION_DEBUG_SAMPLES
+	int "Number of data points to log for presentation compensation debug"
+	default 1000
+
+endif # PRESENTATION_COMPENSATION_DEBUG
+endif # ALIF_PRESENTATION_COMPENSATION

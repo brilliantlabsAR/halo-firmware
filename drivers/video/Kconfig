@@ -1,0 +1,9 @@
+if VIDEO
+ 
+rsource "Kconfig.pag7982"
+
+module = VIDEO
+module-str = VIDEO
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

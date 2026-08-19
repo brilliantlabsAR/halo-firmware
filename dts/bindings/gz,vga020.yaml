@@ -1,0 +1,42 @@
+description: |
+  VGA020 is a 320 * 240 resolution color micro OLED screen introduced by Guozhao Optoelectronics. 
+  The device can be controlled via I2C and QSPI.
+
+  &spi0{
+    vga020:vga020@0 {
+      compatible = "gz,vga020";
+      reg = <0>;
+      vpos-supply = <&vpos>;
+      veng-supply = <&veng>;
+      reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+      width = <320>;
+      height = <240>;
+    }
+  }
+
+compatible: "gz,vga020"
+
+include: [i2c-device.yaml, display-controller.yaml]
+
+properties:
+  mipi:
+    type: phandle
+    description: MIPI DSI device
+  vpos-supply:
+    type: phandle
+    description: VPOS supply
+  veng-supply:
+    type: phandle
+    description: VENG supply
+  reset-gpios:
+    type: phandle-array
+    description: |
+      The RESETn pin is asserted to disable the screen causing a hard
+  lazy-init:
+    type: boolean
+    description: |
+      If enabled, hardware initialization is deferred until first use (PM resume).
+      This saves boot time and power consumption when display is not immediately needed.
+      When false, hardware is initialized during driver init.
+  
+  

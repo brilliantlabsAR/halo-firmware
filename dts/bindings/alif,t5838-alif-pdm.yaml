@@ -1,0 +1,68 @@
+# Copyright (c) 2025 Brilliant Labs Ltd
+# SPDX-License-Identifier: Apache-2.0
+
+description: ALIF PDM microphone driver enhanced for T5838
+
+compatible: "alif,t5838-alif-pdm"
+
+include: [base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  queue-depth:
+    type: int
+    default: 32
+    required: true
+    description: |
+      The number of buffers in the queue.
+      The default is 16.
+
+  fifo-watermark:
+    type: int
+    default: 4
+    required: true
+    description: |
+      FIFO watermark level in bytes.
+      The default is 4 bytes.
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+
+  gain:
+    type: int
+    default: 1
+    required: false
+    description: |
+      Gain level.
+      The default is 1. (8.4 format)
+
+  iir-bypass:
+    type: boolean
+    description: |
+      IIR bypass. 
+      The default is false.
+
+  fir-bypass:
+    type: boolean
+    description: |
+      FIR bypass. 
+      The default is false.
+
+  discard-duration-ms:
+    type: int
+    default: 0
+    required: false
+    description: |
+      Duration in milliseconds of initial audio data to discard after trigger.
+      The default is 0ms (discard disabled).

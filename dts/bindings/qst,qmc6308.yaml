@@ -1,0 +1,98 @@
+description: |
+    QST QMC6308 Magnetic sensor.  See more info at:
+    https://www.qstcorp.com/en_comp_prod/QMC6308
+
+compatible: "qst,qmc6308"
+
+include: ["i2c-device.yaml", "sensor-device.yaml"]
+
+properties:
+  int-gpios:
+    type: phandle-array
+    description: |
+      Interrupt GPIO pin.
+
+  odr:
+    type: int
+    description: |
+      Default output data rate in Hz. Only the following values are allowed:
+        10
+        50
+        100
+        200
+        1500
+    default: 200
+    enum:
+      - 10
+      - 50
+      - 100
+      - 200
+      - 1500
+
+  range:
+    type: int
+    description: |
+      Default range in guass. Only the following values are allowed:
+        30
+        12
+        8
+        2
+    default: 30
+    enum:
+      - 30
+      - 12
+      - 8
+      - 2
+  
+  mode:
+    type: string
+    description: |
+      Default mode. Only the following values are allowed:
+        Suspend
+        Normal
+        Single
+        Continuous
+    default: Normal
+    enum:
+      - "Suspend"
+      - "Normal"
+      - "Single"
+      - "Continuous"
+
+  ovs:
+    type: int
+    description: |
+      Over sampling ratio. Only the following values are allowed:
+        8
+        4
+        2
+        1
+    default: 8
+    enum:
+      - 8
+      - 4
+      - 2
+      - 1
+
+  ds:
+    type: int
+    description: |
+      Down sampling ratio. Only the following values are allowed:
+        1
+        2
+        4
+        8
+    default: 8
+    enum:
+      - 1
+      - 2
+      - 4
+      - 8
+      
+  lazy-init:
+    type: boolean
+    description: |
+      If enabled, hardware initialization is deferred until first use (PM resume).
+      This saves boot time and power consumption when display is not immediately needed.
+      When false, hardware is initialized during driver init.
+  

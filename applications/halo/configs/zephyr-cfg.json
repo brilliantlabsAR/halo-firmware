@@ -1,0 +1,16 @@
+{
+    "DEVICE": {
+        "disabled": false,
+        "binary": "zephyr-device-config.json",
+        "version" : "0.5.00",
+        "signed": true
+    },
+    "ZEYPHER-HE": {
+        "binary": "zephyr.bin",
+        "version" : "1.0.0",
+        "signed": false,
+        "cpu_id": "M55_HE",
+        "mramAddress": "0x80000000",
+        "flags": ["boot"]
+    }
+}

@@ -1,0 +1,72 @@
+/* Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		clock-si570 = &si570;
+	};
+
+	soc {
+		i2c0: i2c0@49010000 {
+			compatible = "snps,designware-i2c";
+			clock-frequency = <I2C_BITRATE_STANDARD>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x49010000 0x1000>;
+			pinctrl-0 = < &pinctrl_i2c0 >;
+			pinctrl-names = "default";
+			interrupt-parent = <&nvic>;
+			interrupts = <132 3>;
+			status = "okay";
+
+			mux: tca9548a@74 {
+				compatible = "ti,tca9548a";
+				reg = <0x74>;
+				status = "okay";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reset-gpios = <&gpio2 0 GPIO_ACTIVE_LOW>;
+
+				ch0: mux_i2c@0 {
+					compatible = "ti,tca9548a-channel";
+					reg = <0>;
+					status = "okay";
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					si570: si570@5d {
+						compatible = "skyworks,si570";
+						reg = <0x5d>;
+						factory-fout = <156250000>;
+						initial-freq = <20000000>;
+					};
+				};
+			};
+		};
+	};
+};
+
+&pinctrl {
+	pinctrl_i2c0: pinctrl_i2c0 {
+		group0 {
+			pinmux = < PIN_P2_4__I2C0_SCL_B >,
+				< PIN_P2_5__I2C0_SDA_B >;
+			read_enable = < 0x1 >;
+		};
+	};
+};
+
+&gpio2 {
+	status = "okay";
+};

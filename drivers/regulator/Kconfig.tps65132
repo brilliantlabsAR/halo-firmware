@@ -1,0 +1,36 @@
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+config REGULATOR_TPS65132
+	bool "TI TPS65132 PMIC regulator driver"
+	default y
+	depends on DT_HAS_TI_TPS65132_ENABLED
+	select I2C
+	help
+	  Enable the TI TPS65132 PMIC regulator driver
+
+if REGULATOR_TPS65132
+
+config REGULATOR_TPS65132_COMMON_INIT_PRIORITY
+	int "TI TPS65132 regulator driver init priority (common part)"
+	default 61
+	help
+	  Init priority for the TI TPS65132 regulator driver (common part). It
+	  must be greater than I2C init priority.
+
+config REGULATOR_TPS65132_VPOS_INIT_PRIORITY
+	int "TI TPS65132 regulator driver vpos init priority"
+	default 62
+	help
+	  Init priority for the TI TPS65132 regulator driver. It must be
+	  greater than REGULATOR_TPS65132_COMMON_INIT_PRIORITY.
+
+
+config REGULATOR_TPS65132_VENG_INIT_PRIORITY
+	int "TI TPS65132 regulator driver veng init priority"
+	default 63
+	help
+	  Init priority for the TI TPS65132 regulator driver. It must be
+	  greater than REGULATOR_TPS65132_COMMON_INIT_PRIORITY.
+
+endif

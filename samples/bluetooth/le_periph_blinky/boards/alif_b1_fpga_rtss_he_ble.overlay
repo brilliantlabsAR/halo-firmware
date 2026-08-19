@@ -1,0 +1,37 @@
+/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ */
+
+
+
+&{/} {
+	aliases {
+		led0 = &aled0;
+		led1 = &aled1;
+		led2 = &aled2;
+		pwm-led0 = &pwm_ut2;
+	};
+	leds {
+		compatible = "gpio-leds";
+		aled0: led_0 {
+			gpios = <&gpio4 5 0>;
+			label = "LED0_G";
+		};
+
+		aled1: led_1 {
+			gpios = <&gpio4 7 0>;
+			label = "LED0_R";
+		};
+
+		aled2: led_2 {
+			gpios = <&gpio4 3 0>;
+			label = "LED0_B";
+		};
+	};
+};
+

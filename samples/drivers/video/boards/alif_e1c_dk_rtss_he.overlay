@@ -1,0 +1,40 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https: //alifsemi.com/license
+ *
+ */
+
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+
+&i2c0 {
+	status = "okay";
+	mt9m114: mt9m114@48{
+		compatible = "aptina,mt9m114";
+		reg = <0x48>;
+		status = "okay";
+
+		port {
+			mt9m114_ep_out: endpoint {
+				remote-endpoint = < &lpcam_ep_in >;
+			};
+		};
+	};
+};
+
+&lpcam {
+	status = "okay";
+	sensor = <&mt9m114>;
+	lp-cam;
+	port {
+		lpcam_ep_in: endpoint {
+			remote-endpoint = <&mt9m114_ep_out>;
+		};
+	};
+};

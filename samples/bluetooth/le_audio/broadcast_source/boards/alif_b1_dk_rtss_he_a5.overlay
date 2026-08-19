@@ -1,0 +1,113 @@
+/* Copyright Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https: //alifsemi.com/license
+ *
+ */
+
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+#define I2S0_IRQ_NUM  141
+#define I2S0_IRQ_PRIO 3
+
+#define LPI2S_IRQ_NUM  48
+#define LPI2S_IRQ_PRIO 3
+
+#define I2S0_DMA_RX_CH  2
+#define I2S0_DMA_RX_REQ 24
+#define I2S0_DMA_TX_CH  3
+#define I2S0_DMA_TX_REQ 28
+
+#define LPI2S_DMA_RX_CH  4
+#define LPI2S_DMA_RX_REQ 14
+#define LPI2S_DMA_TX_CH  5
+#define LPI2S_DMA_TX_REQ 15
+
+#define AUDIO_DMA_ENABLED 1
+#define MIC_DMA_ENABLED 1
+
+/ {
+	aliases {
+		audio-codec = &wm8904;
+		i2s-input = &i2s0;
+	};
+};
+
+&dma2 {
+	status = "okay";
+	dma-channels = <8>;
+	interrupts = <0 3>, <1 3>, <2 3>, <3 3>, <4 3>, <5 3>,
+		     <6 3>, <7 3>, <32 3>;
+	interrupt-names = "channel0", "channel1",
+			  "channel2", "channel3",
+			  "channel4", "channel5",
+			  "channel6", "channel7",
+			  "abort";
+};
+
+&i2c1 {
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	status = "okay";
+
+	wm8904: wm8904@1a {
+		compatible = "cirrus,wm8904";
+		reg = <0x1a>;
+		status = "okay";
+	};
+};
+
+&i2s0 {
+	/delete-property/ clock-frequency;
+	/delete-property/ driver_instance;
+	compatible = "alif,i2s-sync";
+	interrupts = <I2S0_IRQ_NUM I2S0_IRQ_PRIO>;
+	bit-depth = <16>;
+	sample-rate = <48000>;
+	status = "okay";
+#if AUDIO_DMA_ENABLED
+	dmas = <&dma2 I2S0_DMA_RX_CH I2S0_DMA_RX_REQ>,
+	       <&dma2 I2S0_DMA_TX_CH I2S0_DMA_TX_REQ>;
+	dma-names = "rxdma", "txdma";
+#endif
+};
+
+&pinctrl_i2c1 {
+	group0 {
+		pinmux = <PIN_P7_2__I2C1_SDA_C>,
+			 <PIN_P7_3__I2C1_SCL_C>;
+	};
+};
+
+&pinctrl_i2s0 {
+	group0 {
+		pinmux = <PIN_P2_4__I2S0_SDI_B>,
+			 <PIN_P2_5__I2S0_SDO_B>,
+			 <PIN_P1_7__I2S0_WS_A>,
+			 <PIN_P1_6__I2S0_SCLK_A>;
+	};
+};
+
+/* Jouystick middle button */
+&pinctrl_gpio5 {
+	group1 {
+		pinmux = <PIN_P5_7__GPIO>;
+		driver_state_control = <1>;
+		read_enable = < 0x1 >;
+	};
+};
+
+/* Disable unnecessary nodes */
+&i2s1 {
+	status = "disabled";
+};
+&i2s2 {
+	status = "disabled";
+};
+&uart_ahi {
+	status = "disabled";
+};

@@ -1,0 +1,50 @@
+config ALIF_VBAT
+	bool "Alif VBAT Sensor"
+    default y
+    select ADC
+    depends on DT_HAS_ALIF_ALIF_VBAT_ENABLED
+    depends on SOC_SERIES_BALLETTO_B1
+	help
+       Enable the driver for Alif VBAT sensors
+
+if ALIF_VBAT
+
+choice
+	prompt "Trigger mode"
+	default ALIF_VBAT_TRIGGER_GLOBAL_THREAD
+	help
+	  Specify the type of triggering to be used by the driver.
+
+config ALIF_VBAT_TRIGGER_NONE
+	bool "No trigger"
+
+config ALIF_VBAT_TRIGGER_GLOBAL_THREAD
+	bool "Use global thread"
+	depends on GPIO
+	select ALIF_VBAT_TRIGGER
+
+config ALIF_VBAT_TRIGGER_OWN_THREAD
+	bool "Use own thread"
+	depends on GPIO
+	select ALIF_VBAT_TRIGGER
+
+endchoice
+
+config ALIF_VBAT_TRIGGER
+    bool 
+
+config ALIF_VBAT_THREAD_PRIORITY
+	int "Thread priority"
+	depends on ALIF_VBAT_TRIGGER_OWN_THREAD
+	default 10
+	help
+	  Priority of thread used by the driver to handle interrupts.
+
+config ALIF_VBAT_THREAD_STACK_SIZE
+	int "Thread stack size"
+	depends on ALIF_VBAT_TRIGGER_OWN_THREAD
+	default 1024
+	help
+	  Stack size of thread used by the driver to handle interrupts.
+
+endif # ALIF_VBAT

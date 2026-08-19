@@ -1,0 +1,78 @@
+# Copyright Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menu "Alif Bluetooth LE Audio Broadcast Sink/Source"
+
+config BLE_DEVICE_NAME
+	string "BLE device name for GATT service"
+	default "ALIF_MODE_SWITCH"
+	help
+	  Device name for the connectable GATT service (mode switching)
+
+config BROADCAST_NAME
+	string "LE audio broadcast name"
+	default "ALIF_SOURCE"
+	help
+	  Broadcast name to connect to (sink) or advertise as (source)
+
+config LE_AUDIO_PRESENTATION_DELAY_MS
+	int "Presentation delay in ms"
+	default 40
+	range 0 1000
+	help
+	  LE audio presentation delay in ms. For the audio source use-case, this is defined as the
+	  time in ms from the start of recording an audio frame, to the SDU reference anchor point
+	  at which the SDU containing the same audio frame is sent over BLE.
+
+config APP_PRINT_STATS
+	bool "Print application statistics"
+	default n
+	help
+	  Enable printing of application statistics and debug information
+
+config APP_PRINT_STATS_INTERVAL
+	int "Statistics printing interval"
+	default 1024
+	depends on APP_PRINT_STATS
+	help
+	  Interval for printing statistics (every N frames)
+
+choice
+	prompt "Choose way to determine left/right audio channels"
+	default AUDIO_LOCATION_USE_GAF
+
+	config AUDIO_LOCATION_USE_GAF
+		bool "Use GAF audio location sent by audio source"
+	config AUDIO_LOCATION_IMPLICIT
+		bool "Assume left channel is first stream, and right channel is second"
+
+endchoice
+
+menu "Logging"
+
+module = MAIN
+module-str = main
+source "subsys/logging/Kconfig.template.log_config"
+
+module = BROADCAST_SINK
+module-str = broadcast_sink
+source "subsys/logging/Kconfig.template.log_config"
+
+module = MODE_SWITCH_SERVICE
+module-str = mode_switch_service
+source "subsys/logging/Kconfig.template.log_config"
+
+module = BROADCAST_SOURCE
+module-str = broadcast_source
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu # "Logging"
+
+endmenu # "Alif Bluetooth LE Audio Broadcast Sink/Source"
+
+source "Kconfig.zephyr"

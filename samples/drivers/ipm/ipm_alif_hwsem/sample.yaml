@@ -1,0 +1,8 @@
+---
+sample:
+  name: HWSEM driver sample
+tests:
+  sample.drivers.ipm:
+    tags: HWSEM
+    platform_allow:
+      devkit_e7_ak_rtss_he devkit_e7_ak_rtss_hp devkit_e7_ak_apss devkit_e7_dk_rtss_he devkit_e7_dk_rtss_hp devkit_e7_dk_apss

@@ -1,0 +1,74 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+config USE_APP_MENU
+	bool "Use application menu to choose a test case"
+	default false
+
+config ACTIVATION_BUF_SECTION
+	string "Linker section where activation buffer (tensor arena) is placed"
+	default ".bss.activation_buf"
+
+config ACTIVATION_BUF_SZ
+	hex "Tensor arena size"
+	default 0x20000
+
+config MODEL_IN_EXT_FLASH
+	bool "Put ML model to external flash"
+	select FLASH
+	select ALIF_OSPI_FLASH_XIP
+	help
+		Initialize OSPI controller to XIP mode. Initialize the onboard flash device. Link ML model data to external flash address space.
+		In addition to normal zephyr.bin output, ospi1.bin is generated. When enabled, the model memory section is set automatically (See BufAttributes.h)
+
+config MODEL_SECTION
+	string "Linker section where ML model is placed"
+	depends on !MODEL_IN_EXT_FLASH
+	default ".rodata.tflm_model"
+
+config ETHOS_U_AXI0_ONLY
+	bool "Only use AXI0 port on the Ethos"
+	default false
+
+config AUDIO_SAMPLES
+	int "Number of audio samples to store"
+	default 16000
+
+config AUDIO_STRIDE
+	int "Number of audio samples in a single stride"
+	default 8000
+
+config RESULTS_MEMORY
+	int "Number of inference results to keep in memory"
+	default 8
+
+config I2S_CHANNELS
+	int "Number of I2S channels"
+	default 2
+
+config I2S_SAMPLES
+	int "Number of samples per slab buffer"
+	default 400
+
+config I2S_NUM_BUFFERS
+	int "Number of I2S slab buffers to allocate"
+	default 4
+
+config I2S_GAIN
+	int "Fixed linear again applied to I2S samples (e.g 10 = 20dB gain)"
+	default 10
+
+config I2S_THREAD_STACK_SIZE
+	int "Stack size of I2S audio thread"
+	default 1024
+
+config I2S_THREAD_PRIORITY
+	int "Priority of I2S audio thread"
+	default 0
+
+source "Kconfig.zephyr"

@@ -1,0 +1,133 @@
+# MAX98357A audio driver configuration
+
+config MAX98357A_AUDIO
+	bool "MAX98357A I2S Audio Amplifier Driver (DMA buffered)"
+	depends on I2S
+	help
+	  Enable MAX98357A I2S audio amplifier driver using internal DMA block buffering.
+
+if MAX98357A_AUDIO
+
+config MAX98357A_AUDIO_INIT_PRIORITY
+	int "MAX98357A audio driver initialization priority"
+	default 70
+	help
+	  Initialization priority for MAX98357A audio driver.
+
+config MAX98357A_AUDIO_TX_SLAB_COUNT
+	int "Number of TX memory slabs"
+	default 4
+	range 2 8
+	help
+	  Number of memory slabs for I2S TX blocks.
+
+config MAX98357A_AUDIO_SYNC_BLOCK_SIZE
+		int "MAX98357A sync DMA block size (bytes)"
+		default 1024
+		range 256 4096
+		help
+			Size of each DMA block provided to i2s_sync. Larger blocks reduce callback rate
+			but increase latency.
+
+config MAX98357A_AUDIO_SYNC_BLOCK_COUNT
+		int "MAX98357A sync DMA block count"
+		default 4
+		range 2 16
+		help
+			Number of pre-allocated DMA blocks for TX buffering in sync mode.
+
+## Work queue removed in sync mode
+
+config MAX98357A_AUDIO_GENERIC_API
+	bool "Use generic audio API interface"
+	default y
+	help
+	  Enable generic audio API interface for MAX98357A audio driver.
+	  When enabled, the driver will provide both MAX98357A-specific and
+	  generic audio APIs, allowing unified audio interface usage.
+
+config MAX98357A_AUDIO_PROTECTION_EQ
+	bool "Apply speaker current-protection DSP chain"
+	default y
+	help
+	  Protect the bone-conduction transducers (and the battery protection
+	  IC) with a DSP chain applied post-volume, so thresholds reference
+	  absolute output level: 2nd-order HPF, mild static voicing EQ
+	  (half-depth issue #180 curve), a current-proxy energy limiter whose
+	  sidechain approximates transducer current draw vs frequency, an
+	  onset ramp, and a soft-knee true-peak clipper.
+
+	  Replaces the previous static EQ + instant peak limiter: protection
+	  now tracks short-term weighted signal ENERGY (what actually trips
+	  the battery IC's over-current detection) instead of sample peaks,
+	  allowing much milder static low-frequency cuts.
+
+if MAX98357A_AUDIO_PROTECTION_EQ
+
+config MAX98357A_AUDIO_PROTECT_HPF_HZ
+	int "Protection high-pass cutoff (Hz), 0 disables"
+	default 130
+	range 0 500
+	help
+	  2nd-order Butterworth high-pass removing DC/subsonic content below
+	  the transducer resonance, where drive current is pure waste. Keep
+	  below ~150 Hz so TTS voice fundamentals stay intact; the energy
+	  limiter handles protection above this frequency.
+
+config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
+	int "Energy limiter budget, percent of full scale"
+	default 60
+	range 10 100
+	help
+	  Current budget for the energy limiter, as a percentage of int16 full
+	  scale for a hypothetical weight-1.0 signal. All bands carry current
+	  weights of 2.0..5.6 (highest below 425 Hz), so e.g. a sustained
+	  >= 1.5 kHz sine is allowed budget/2 of full scale and a 300 Hz sine
+	  budget/5.6 - protection lands hardest where the current is drawn.
+
+	  Calibrate on the bench: play full-scale sine sweeps, BROADBAND
+	  NOISE, and real TTS at max volume (stereo, worst case), measure
+	  battery current, and pick the largest value that stays below the
+	  battery protection IC's trip point with margin. Noise coverage is
+	  essential - HF/broadband content draws more system current than
+	  sine-sweep models predict (Class-D losses).
+
+config MAX98357A_AUDIO_PROTECT_ENV_MS
+	int "Energy limiter integration window (ms)"
+	default 3
+	range 1 10
+	help
+	  Sidechain leaky-integrator time constant. Match to the battery
+	  protection IC's over-current detection delay: shorter reacts faster
+	  but limits brief transients the IC would have tolerated.
+
+config MAX98357A_AUDIO_PROTECT_HOLD_MS
+	int "Energy limiter hold (ms)"
+	default 20
+	range 0 500
+	help
+	  Time the limiter holds its gain after the signal falls back under
+	  budget, before release begins. Prevents gain ripple within
+	  low-frequency cycles and rapid pumping on syllabic content.
+
+config MAX98357A_AUDIO_PROTECT_RELEASE_MS
+	int "Energy limiter release time constant (ms)"
+	default 150
+	range 10 2000
+	help
+	  Exponential gain recovery time constant after hold expires. Slow
+	  enough that gain does not track individual low-frequency cycles
+	  (which would cause harmonic distortion).
+
+config MAX98357A_AUDIO_PROTECT_RAMP_MS
+	int "Stream onset ramp (ms), 0 disables"
+	default 15
+	range 0 100
+	help
+	  Fade-in applied when a stream (re)starts, spreading amplifier
+	  turn-on inrush current so it does not coincide with a full-level
+	  first buffer (a classic battery-protection trip scenario).
+
+endif # MAX98357A_AUDIO_PROTECTION_EQ
+
+endif # MAX98357A_AUDIO

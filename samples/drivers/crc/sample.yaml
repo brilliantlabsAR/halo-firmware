@@ -1,0 +1,6 @@
+sample:
+  name: Demo for CRC driver
+tests:
+  sample.drivers.crc:
+    tags: drivers crc
+    depends_on: crc

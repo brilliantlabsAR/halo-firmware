@@ -1,0 +1,6 @@
+sample:
+  name: Demo for adc12 driver
+tests:
+  sample.drivers.adc:
+    tags: drivers adc
+    depends_on: adc

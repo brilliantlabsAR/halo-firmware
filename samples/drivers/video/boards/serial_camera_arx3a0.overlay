@@ -1,0 +1,67 @@
+/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code are permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement.
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ */
+
+#include <dt-bindings/pinctrl/ensemble-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+
+&i2c1 {
+	status = "okay";
+
+	arx3a0: arx3a0@36 {
+		compatible = "onnn,arx3a0";
+		reg = <0x36>;
+		pinctrl-0 = < &pinctrl_cam_xvclk >;
+		pinctrl-names = "default";
+		reset-gpios = <&gpio9 1 GPIO_ACTIVE_HIGH>;
+		power-gpios = <&gpio7 5 GPIO_ACTIVE_HIGH>;
+
+		status = "okay";
+
+		port {
+			arx3a0_csi2_ep_out: endpoint {
+				remote-endpoint = <&csi2_ep_in>;
+			};
+		};
+	};
+};
+
+&cam {
+	status = "okay";
+	sensor = <&arx3a0>;
+	csi-bus-if = <&csi>;
+	port {
+		/* MIPI CSI-2 bus endpoint. */
+		cam_csi2_ep_in: endpoint {
+			remote-endpoint = <&csi2_ep_out>;
+		};
+	};
+};
+
+&csi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	port@1 {
+		reg = <1>;
+		csi2_ep_in: endpoint {
+			remote-endpoint = <&arx3a0_csi2_ep_out>;
+		};
+	};
+	port@2 {
+		reg = <2>;
+		csi2_ep_out: endpoint {
+			remote-endpoint = <&cam_csi2_ep_in>;
+		};
+	};
+};
+
+&mipi_dsi {
+	status = "okay";
+};

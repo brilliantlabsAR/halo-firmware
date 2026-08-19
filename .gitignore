@@ -1,0 +1,14 @@
+**/build/
+build*/
+.*project
+.settings
+.clang-format
+
+*.bkp
+*.orig
+*.pyc
+.DS_Store
+.venv/
+
+# Claude Code skill, not build output (re-include past build*/)
+!/.claude/skills/build/

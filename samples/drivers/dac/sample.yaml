@@ -1,0 +1,6 @@
+sample:
+	name: Demo for DAC driver
+tests:
+	sample.drivers.dac:
+		tags: drivers dac
+		depends_on: dac

@@ -1,0 +1,90 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+/* setting SPI4 as master and SPI0 instance as slave.
+ *
+ */
+
+/* For SPI master SS(slave select) as:
+ * - H/W controlled (default):
+ *   - use SS pinmux as H/W
+ *     - example for SPI4 as master "PIN_P7_7__LPSPI_SS_A"
+ *  "OR"
+ * - S/W controlled using gpio:
+ *   - use SS pinmux as gpio
+ *     - example for SPI4 as master "PIN_P7_7__GPIO"
+ *   - define cs-gpios property
+ *     - example for SPI4 as master
+ *        cs-gpios = <&gpio7 7 GPIO_ACTIVE_LOW>;
+ */
+
+/* default SPI master SS(slave select) is H/W controlled,
+ * enable this to use as S/W controlled using gpio.
+ */
+#define SPI_MASTER_SS_SW_CONTROLLED_GPIO   0
+
+/ {
+	aliases {
+		master-spi = &spi4;
+		slave-spi = &spi0;
+	};
+};
+
+&dma2 {
+	status = "okay";
+};
+
+&dma0 {
+	status = "okay";
+};
+
+&spi4 {
+	status = "okay";
+	dmas = <&dma2 0 13>, <&dma2 1 12>;
+/* If user want to use dma0 for master spi(spi4),
+ * add below dmas property:
+ * dmas = <&dma0 0 25>, <&dma0 1 24>;
+ */
+	dma-names = "txdma", "rxdma";
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+	cs-gpios = <&gpio7 7 GPIO_ACTIVE_LOW>;
+	/* as we are testing Loopback on the same board,
+	 * make sure master interrupt priority is
+	 * higher than slave interrupt priority.
+	 */
+	interrupts = <46 0>;
+#endif /* SPI_MASTER_SS_SW_CONTROLLED_GPIO */
+};
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+/* use SPI master SS pinmux as gpio. */
+&pinctrl_lpspi {
+	group0 {
+		pinmux = < PIN_P7_4__LPSPI_MISO_A >,
+			 < PIN_P7_5__LPSPI_MOSI_A >,
+			 < PIN_P7_6__LPSPI_SCLK_A >,
+			 < PIN_P7_7__GPIO >;
+		read_enable = < 0x1 >;
+	};
+};
+#endif /* SPI_MASTER_SS_SW_CONTROLLED_GPIO */
+
+&spi0 {
+	status = "okay";
+	serial-target;
+	dmas = <&dma0 2 20>, <&dma0 3 16>;
+	dma-names = "txdma", "rxdma";
+
+#if SPI_MASTER_SS_SW_CONTROLLED_GPIO
+	interrupts = <137 1>;
+#endif
+};
+

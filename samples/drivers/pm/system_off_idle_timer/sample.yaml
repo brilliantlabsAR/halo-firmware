@@ -1,0 +1,8 @@
+sample:
+  name: Subsystem power Off example for Alif RTSS cores
+common:
+  tags: power
+tests:
+  samples.pm.system_off:
+    platform_allow: ensemble
+    depends_on: counter_dw_rtc has_alif_se_services pm_rtss

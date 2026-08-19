@@ -1,0 +1,42 @@
+zephyr_library()
+zephyr_include_directories(src)
+zephyr_library_sources(
+    src/lapi.c
+    src/lauxlib.c
+    src/lbaselib.c
+    src/lcode.c
+    src/lcode.h
+    src/lcorolib.c
+    src/lctype.c
+    src/lctype.h
+    src/ldblib.c
+    src/ldebug.c
+    src/ldo.c
+    src/ldump.c
+    src/lfunc.c
+    src/lgc.c
+    src/lgc.h
+    src/linit.c
+    src/liolib.c
+    src/llex.c
+    src/lmathlib.c
+    src/lmem.c
+    src/loadlib.c
+    src/lobject.c
+    src/lobject.h
+    src/lopcodes.c
+    src/loslib.c
+    src/lparser.c
+    src/lstate.c
+    src/lstring.c
+    src/lstrlib.c
+    src/ltable.c
+    src/ltablib.c
+    src/ltm.c
+    src/luaconf.h
+    src/lundump.c
+    src/lutf8lib.c
+    src/lvm.c
+    src/lzio.c
+    src/lport.c
+)

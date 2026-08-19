@@ -1,0 +1,13 @@
+# Generated test artifacts — device captures and offline-analysis dumps, not
+# source. These are produced by the scripts here (duplex/erle/loopback/voice
+# captures, event logs, tap dumps, correlation caches) and there can be
+# hundreds of them; none are meant to be committed.
+#
+# Scripts (*.py, *.lua) and docs (*.md) stay tracked. If a specific data file
+# should ever be committed as a fixture, force it: `git add -f <file>`.
+*.wav
+*.lc3
+*.jsonl
+*.npy
+*.npz
+*.log

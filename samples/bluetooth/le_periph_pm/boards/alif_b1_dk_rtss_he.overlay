@@ -1,0 +1,6 @@
+/*
+ * Copyright (c) 2024 Alif Semiconductor
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "alif_b1_pm.dtsi"

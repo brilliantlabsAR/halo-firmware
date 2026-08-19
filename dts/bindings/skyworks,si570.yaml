@@ -1,0 +1,22 @@
+# Copyright (C) 2023 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+compatible: "skyworks,si570"
+
+description: Skyworks SI570 programmable oscillator
+
+include: i2c-device.yaml
+
+properties:
+  factory-fout:
+    type: int
+    required: true
+
+  initial-freq:
+    type: int
+    required: false

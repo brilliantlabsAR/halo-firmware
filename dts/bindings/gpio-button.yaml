@@ -1,0 +1,29 @@
+# button.yaml
+description: Software debounced button with single, double, long press detection
+
+compatible: "gpio-button"
+
+include: base.yaml
+
+properties:
+  gpios:
+    type: phandle-array
+    required: true
+    description: GPIO pin the button is connected to
+
+  debounce-ms:
+    type: int
+    required: false
+    default: 20
+    description: Debounce time in milliseconds
+
+  long-press-ms:
+    type: array
+    required: true
+    description: Multi-level long-press thresholds in milliseconds
+
+  double-click-ms:
+    type: int
+    required: false
+    default: 500
+    description: Max time between two clicks for double click in ms

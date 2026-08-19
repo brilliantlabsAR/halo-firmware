@@ -1,0 +1,105 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ */
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/* for "buttons" node gpio5_7 & 5_6, enable software pull-up */
+
+&{/} {
+	chosen {
+		zephyr,console = &uart2;
+		zephyr,shell-uart = &uart2;
+		zephyr,bt-uart = &uart_hci;
+	};
+
+	aliases {
+		led0 = &aled1;
+		led2 = &aled2;
+		pwm-led0 = &pwm_ut2;
+		sw0 = &button0;
+		sw1 = &button1;
+		sw2 = &button2;
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = < &gpio5 7 GPIO_ACTIVE_LOW >;
+			label = "SW0";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		button1: button_1 {
+			gpios = < &gpio5 6 GPIO_ACTIVE_LOW >;
+			label = "SW1";
+			zephyr,code = <INPUT_KEY_1>;
+		};
+
+		button2: button_2 {
+			gpios = < &gpio5 5 GPIO_ACTIVE_LOW >;
+			label = "SW2";
+			zephyr,code = <INPUT_KEY_1>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		aled0: led_0 {
+			gpios = <&gpio4 5 0>;
+			label = "LED0_G";
+		};
+
+		aled1: led_1 {
+			gpios = <&gpio4 7 0>;
+			label = "LED0_R";
+		};
+
+		aled2: led_2 {
+			gpios = <&gpio4 3 0>;
+			label = "LED0_B";
+		};
+	};
+		pwmleds {
+		compatible = "pwm-leds";
+		pwm_ut2: pwm_ut2 {
+			pwms = <&pwm2 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+			label = "UT2 PWM";
+		};
+	};
+};
+
+&utimer2 {
+	status = "okay";
+	pwm2: pwm2 {
+		pinctrl-0 = < &pinctrl_ut2 >;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+&pinctrl_gpio5 {
+	group0 {
+		pinmux = < PIN_P5_0__GPIO >,
+			 < PIN_P5_1__GPIO >,
+			 < PIN_P5_2__GPIO >,
+			 < PIN_P5_3__GPIO >,
+			 < PIN_P5_4__GPIO >,
+			 < PIN_P5_5__GPIO >,
+			 < PIN_P5_6__GPIO >,
+			 < PIN_P5_7__GPIO >;
+		read_enable = < 0x1 >;
+	};
+
+	group1 {
+		pinmux = < PIN_P5_5__GPIO >,
+			 < PIN_P5_6__GPIO >,
+			 < PIN_P5_7__GPIO >;
+		driver_state_control = <1>;
+	};
+};

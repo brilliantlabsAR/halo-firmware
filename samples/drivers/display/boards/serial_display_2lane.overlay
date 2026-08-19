@@ -1,0 +1,53 @@
+/* Copyright (C) 2024 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+/ {
+	soc {
+		cdc200: cdc200@49031000 {
+			width = <480>;
+			height = <800>;
+			hfront-porch = <5>;
+			hback-porch = <5>;
+			hsync-len = <4>;
+			vfront-porch = <10>;
+			vback-porch = <10>;
+			vsync-len = <2>;
+			clock-frequency = <24364080>;
+			hsync-active = <0>;
+			vsync-active = <0>;
+			de-active = <1>;
+			pixelclk-active = <0>;
+			bg-color = <0>;
+			enable-l1 = <1>;
+			pixel-fmt-l1 = "rgb-888";
+			def-back-color-l1 = <0>;
+			win-x0-l1 = <0>;
+			win-y0-l1 = <0>;
+			win-x1-l1 = <480>;
+			win-y1-l1 = <800>;
+			blend-factor1-l1 = <4>;
+			blend-factor2-l1 = <5>;
+			const-alpha-l1 = <0xff>;
+			enable-l2 = <0>;
+			pixel-fmt-l2 = "undefined";
+			win-x0-l2 = <0>;
+			win-y0-l2 = <0>;
+			win-x1-l2 = <0>;
+			win-y1-l2 = <0>;
+			blend-factor1-l2 = <6>;
+			blend-factor2-l2 = <7>;
+			const-alpha-l2 = <0xff>;
+		};
+	};
+};
+
+&mipi_dsi {
+	status = "okay";
+};

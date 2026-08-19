@@ -1,0 +1,165 @@
+#include <math.h>
+#include <string.h>
+
+#include <zephyr/sys/util.h>
+
+#include "base64.h"
+
+
+static const char *base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                  "abcdefghijklmnopqrstuvwxyz"
+                                  "0123456789+/";
+
+/**
+ * @brief Base64 encode and write to a putc function
+ *
+ * @param input
+ * @param input_size
+ * @param putc_f pointer to putc function
+ */
+void base64_encode(const char *input, size_t input_size, void (*putc_f)(char))
+{
+    int i = 0;
+    int j = 0;
+    unsigned char char_array_3[3];
+    unsigned char char_array_4[4];
+
+    while (input_size--) {
+        char_array_3[i++] = *(input++);
+        if (i == 3) {
+            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+            char_array_4[3] = char_array_3[2] & 0x3f;
+
+            for (i = 0; (i < 4); i++) {
+                putc_f(base64_chars[char_array_4[i]]);
+            }
+            i = 0;
+        }
+    }
+
+    if (i) {
+        for (j = i; j < 3; j++) {
+            char_array_3[j] = '\0';
+        }
+
+        char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+        char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+        char_array_4[3] = char_array_3[2] & 0x3f;
+
+        for (j = 0; (j < i + 1); j++) {
+            putc_f(base64_chars[char_array_4[j]]);
+        }
+
+        while ((i++ < 3)) {
+            putc_f('=');
+        }
+    }
+}
+
+void base64_encode_chunk(const char *input, size_t input_size, void (*putc_f)(char))
+{
+    static char leftover[3];
+    static uint8_t leftover_size = 0;
+
+    if (input == NULL) {
+        base64_encode(leftover, leftover_size, putc_f);
+        leftover_size = 0;
+        return;
+    }
+
+    // if we have leftover bytes, try to get N bytes from input
+    // to fulfill 3 bytes chunk from base64 encoder
+    if (leftover_size > 0) {
+        // in case input_size is 1B and we have 1B leftover
+        uint8_t to_copy = MIN((size_t)(3 - leftover_size), input_size);
+        memcpy(&leftover[leftover_size], input, to_copy);
+        leftover_size += to_copy;
+        // if we hve not enough data to encode, break
+        if (leftover_size < 3) {
+            return;
+        }
+        base64_encode(leftover, leftover_size, putc_f);
+        leftover_size = 0;
+        input_size -= to_copy;
+        input += to_copy;
+    }
+
+    if (input_size % 3 == 0) {
+        base64_encode(input, input_size, putc_f);
+    }
+    else {
+        leftover_size = input_size % 3;
+        base64_encode(input, input_size - leftover_size, putc_f);
+        memcpy(leftover, &input[input_size - leftover_size], leftover_size);
+    }
+}
+
+void base64_encode_finish(void (*putc_f)(char))
+{
+    base64_encode_chunk(NULL, 0, putc_f);
+}
+
+/**
+ * @brief Base64 encode and write to output buffer, errors on buffer overflow
+ *
+ * @param input
+ * @param input_size
+ * @param output
+ * @param output_size
+ * @return int number of bytes in output buffer, negative if error occured
+ */
+int base64_encode_buffer(const char *input, size_t input_size, char *output, size_t output_size)
+{
+    size_t output_size_check = floor(input_size / 3 * 4);
+    size_t mod = input_size % 3;
+    output_size_check += mod;
+
+    if (output_size < output_size_check) {
+        return -10;
+    }
+
+    int i = 0;
+    int j = 0;
+    unsigned char char_array_3[3];
+    unsigned char char_array_4[4];
+    size_t output_ix = 0;
+
+    while (input_size--) {
+        char_array_3[i++] = *(input++);
+        if (i == 3) {
+            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+            char_array_4[3] = char_array_3[2] & 0x3f;
+
+            for (i = 0; (i < 4); i++) {
+                output[output_ix++] = base64_chars[char_array_4[i]];
+            }
+            i = 0;
+        }
+    }
+
+    if (i) {
+        for (j = i; j < 3; j++) {
+            char_array_3[j] = '\0';
+        }
+
+        char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+        char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+        char_array_4[3] = char_array_3[2] & 0x3f;
+
+        for (j = 0; (j < i + 1); j++) {
+            output[output_ix++] = base64_chars[char_array_4[j]];
+        }
+
+        while ((i++ < 3)) {
+            output[output_ix++] = '=';
+        }
+    }
+
+    return output_ix;
+}

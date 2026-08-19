@@ -1,0 +1,18 @@
+# Copyright (c) 2024 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+description: Maxim MAX98357A I2S Audio Amplifier
+
+compatible: "maxim,max98357a"
+
+properties:
+  i2s:
+    type: phandle
+    required: true
+    description: I2S interface phandle
+
+  sd-mode-gpios:
+    type: phandle-array
+    description: |
+      SD_MODE pin GPIO specification. This pin controls the amplifier shutdown.
+      When high, the amplifier is enabled. When low, the amplifier is in shutdown mode.

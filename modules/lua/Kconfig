@@ -1,0 +1,37 @@
+menuconfig LUA
+	bool "Lua runtime"
+	select FILE_SYSTEM
+	select POSIX_API
+	select POSIX_FS
+	select TIMER
+	help
+		This option enables the Lua runtime.
+
+#if LUA
+
+    config LUA_MAXSTACK
+		int "Lua stack size"
+		default 65536
+		depends on LUA
+		help
+			This option sets the Lua stack size.
+
+	config LUA_IDSIZE
+		int "Lua identifier size"
+		default 64
+		depends on LUA
+		help
+			This option sets the Lua identifier size.
+
+	config LUA_MAXINPUT
+		int "Lua repl max input"
+		default 512
+		depends on LUA
+		help 
+			This option sets the lua repl max input 
+
+module = LUA
+module-str = lua
+source "subsys/logging/Kconfig.template.log_config"
+
+#endif

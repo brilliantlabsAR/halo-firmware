@@ -1,0 +1,104 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menu "Alif Bluetooth LE Audio Unicast Sink"
+
+config BLE_DEVICE_NAME
+	string "BLE device name"
+	default "ALIF_CIS_SINK_L" if UNICAST_LOCATION_LEFT
+	default "ALIF_CIS_SINK_R" if UNICAST_LOCATION_RIGHT
+	default "ALIF_CIS_SINK" if UNICAST_LOCATION_BOTH
+	help
+	  Device name to be included in advertising packets
+
+config MAXIMUM_PRESENTATION_DELAY_US
+	int "Maximum available presentation delay in microseconds"
+	range 40000 100000
+	default 40000
+	help
+	  Maximum presentation delay must be at least 40ms.
+	  There is no actual maximum value but 100ms is
+	  used to set something which is long enough.
+	  See LE Audio specification for more information.
+
+config MINIMUM_PRESENTATION_DELAY_US
+	int "Minimum available presentation delay in microseconds"
+	range 1000 20000
+	default 7500
+	help
+	  Minimum presentation delay to compensate for
+	  the audio processing delay.
+
+config USE_DIRECT_ADVERTISING_WHEN_RESTART
+	bool "Use direct advertising when connection is lost or peer is bonded"
+	default y
+
+config USE_DIRECTED_FAST_ADVERTISING
+	bool "Directed high duty cycle advertising"
+	default n
+	help
+	  Use directed high duty cycle advertising when
+	  connection is lost or peer is bonded
+
+config BONDING_ALLOWED
+	bool "Allow bonding"
+	default y
+
+config PRIVACY_ENABLED
+	bool "Enable Privacy to use Random Private Resolvable Address"
+	default n
+
+choice
+	prompt "Choose streaming type"
+	default UNICAST_UNIDIR
+
+	config UNICAST_BIDIR
+	bool "Bidirectional"
+	config UNICAST_UNIDIR
+	bool "Unidirectional"
+endchoice
+
+choice
+	prompt "Choose location"
+	default UNICAST_LOCATION_BOTH if UNICAST_UNIDIR
+	default UNICAST_LOCATION_LEFT if UNICAST_BIDIR
+
+	config UNICAST_LOCATION_LEFT
+	bool "Left"
+	config UNICAST_LOCATION_RIGHT
+	bool "Right"
+	config UNICAST_LOCATION_BOTH
+	bool "Both"
+endchoice
+
+config VOLUME_CTRL_STEP_SIZE
+	int "Volume control step size"
+	range 1 255
+	default 6
+	help
+	  Volume control step size
+
+menu "Logging"
+
+module = MAIN
+module-str = main
+source "subsys/logging/Kconfig.template.log_config"
+
+module = UNICAST_SINK
+module-str = unicast_sink
+source "subsys/logging/Kconfig.template.log_config"
+
+module = STORAGE
+module-str = storage
+source "subsys/logging/Kconfig.template.log_config"
+
+endmenu # "Logging"
+
+endmenu # "Alif Bluetooth LE Audio Unicast Sink"
+
+source "Kconfig.zephyr"

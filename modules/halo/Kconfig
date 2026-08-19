@@ -1,0 +1,1227 @@
+# Copyright (c) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig HALO
+	bool "Halo Framework"
+	default n
+	select HALO_MEM_MANAGER
+	select HALO_FILE_MANAGER
+	select HALO_PM_MANAGER
+	help
+	  Enable Halo framework for Frame application.
+	  This is the refactored version of Frame application components.
+	  BLE is required and automatically enabled.
+
+if HALO
+
+module = HALO
+module-str = Halo Framework
+source "subsys/logging/Kconfig.template.log_config"
+
+# Memory Manager Component (always enabled with HALO)
+config HALO_MEM_MANAGER
+	bool
+	help
+	  Unified memory manager with automatic resource tracking.
+	  Supports internal and optional external SRAM regions.
+	  This is a core component and always enabled when HALO is enabled.
+
+if HALO_MEM_MANAGER
+
+config HALO_MEM_MANAGER_STATS
+	bool "Enable memory manager runtime statistics"
+	default y
+	select SYS_HEAP_RUNTIME_STATS
+	help
+	  Enable runtime statistics collection for memory manager.
+	  This allows querying allocated, free, and maximum block sizes.
+	  Disabling this can reduce memory overhead and improve performance.
+
+config HALO_MEM_INTERNAL_SIZE
+	int "Internal memory heap size (bytes)"
+	default 102400
+	help
+	  Size of the internal memory heap in bytes.
+	  This memory is statically allocated.
+
+config HALO_MEM_USE_EXTERNAL_SRAM
+	bool "Use external SRAM for memory allocation"
+	default y
+	help
+	  Enable external SRAM for memory allocation.
+	  This allows allocating memory from external SRAM region.
+
+config HALO_MEM_EXTERNAL_SRAM_ADDR
+	hex "External SRAM base address"
+	default 0x00000000
+	depends on HALO_MEM_USE_EXTERNAL_SRAM
+	help
+	  Base address of external SRAM region.
+	  Note: If this is 0x00000000, it will be treated as invalid
+	  and external memory will be disabled at runtime.
+
+config HALO_MEM_EXTERNAL_SRAM_OFFSET
+	int "External SRAM offset (bytes)"
+	default 0
+	depends on HALO_MEM_USE_EXTERNAL_SRAM
+	help
+	  Offset from base address where heap starts.
+	  Useful to skip reserved regions or avoid NULL pointer (address 0).
+	  For example, set to 102400 (100KB) to skip first 100KB.
+	  Final heap address = BASE_ADDR + OFFSET.
+
+config HALO_MEM_EXTERNAL_SRAM_SIZE
+	int "External SRAM size (bytes)"
+	default 524288
+	depends on HALO_MEM_USE_EXTERNAL_SRAM
+	help
+	  Size of external SRAM heap in bytes (default 512KB).
+	  This is the size of usable heap, not including offset.
+
+endif # HALO_MEM_MANAGER
+
+# File Manager Component (always enabled with HALO)
+config HALO_FILE_MANAGER
+	bool
+	depends on ZEPHYR_LITTLEFS_MODULE
+	select FILE_SYSTEM
+	select FILE_SYSTEM_LITTLEFS
+	select FLASH
+	select FLASH_MAP
+	select FLASH_PAGE_LAYOUT
+	select SETTINGS
+	help
+	  File system manager with LittleFS and settings support.
+	  Provides file operations and persistent settings storage.
+	  This is a core component and always enabled when HALO is enabled.
+	  Requires LittleFS module to be available in the build system.
+
+# Power Manager Component
+config HALO_PM_MANAGER
+	bool
+	select PM
+	select PM_DEVICE
+	help
+	  Enable power management with sleep mode support.
+	  Provides callback registration for suspend/resume events.
+	  Supports light sleep and deep sleep modes.
+
+# LED Manager Component
+config HALO_LED_MANAGER
+	bool "Enable LED manager"
+	default y
+	help
+	  Enable LED management for status indication.
+	  Provides API for controlling LEDs with patterns and effects.
+	  Supports multiple LED configurations and event-driven updates.
+
+# Watchdog Manager Component
+config HALO_WATCHDOG_MANAGER
+	bool "Enable watchdog manager"
+	default n
+	select WATCHDOG
+	help
+	  Enable watchdog timer management for system health monitoring.
+	  Provides API for initializing, feeding, and configuring the watchdog.
+	  Helps prevent system hangs by resetting on timeout.
+
+if HALO_WATCHDOG_MANAGER
+
+config HALO_WATCHDOG_TIMEOUT_MS
+	int "Watchdog timeout (milliseconds)"
+	default 1000
+	range 100 10000
+	help
+	  Timeout period for the watchdog in milliseconds.
+	  System will reset if not fed within this time.
+
+config HALO_WATCHDOG_ALLOW_CALLBACK
+	bool "Allow watchdog callback before reset"
+	default y
+	help
+	  Enable callback function before watchdog reset.
+	  Allows last-minute actions like logging or cleanup.
+
+config HALO_WATCHDOG_AUTO_FEED
+	bool "Enable automatic watchdog feeding"
+	default n
+	help
+	  Enable automatic watchdog feeding thread.
+	  When enabled, the watchdog will be fed automatically at regular intervals.
+	  When disabled, application must manually call halo_watchdog_feed().
+
+if HALO_WATCHDOG_AUTO_FEED
+
+config HALO_WATCHDOG_AUTO_FEED_PRIORITY
+	int "Automatic feed thread priority"
+	default 1
+	range 0 15
+	help
+	  Priority level for the automatic watchdog feeding thread.
+	  Lower number = higher priority.
+
+config HALO_WATCHDOG_AUTO_FEED_STACK_SIZE
+	int "Automatic feed thread stack size (bytes)"
+	default 512
+	help
+	  Stack size for the automatic watchdog feeding thread.
+
+endif # HALO_WATCHDOG_AUTO_FEED
+
+config HALO_WATCHDOG_FEED_INTERVAL_MS
+	int "Default feed interval (milliseconds)"
+	default 1000
+	range 10 5000
+	help
+	  Default interval for feeding the watchdog in milliseconds.
+	  Used for automatic feeding if enabled in application.
+
+endif # HALO_WATCHDOG_MANAGER
+
+
+# Battery Manager Component
+config HALO_BATTERY_MANAGER
+	bool "Enable battery manager"
+	default y
+	depends on SENSOR
+	help
+	  Enable battery monitoring and management.
+	  Provides API for reading battery level, voltage, and charging status.
+	  Supports event callbacks for battery state changes.
+	  Requires a battery sensor (e.g., fuel gauge) to be configured.
+
+if HALO_BATTERY_MANAGER
+
+config HALO_BATTERY_UPDATE_INTERVAL_MS
+	int "Battery update interval (milliseconds)"
+	default 10000
+	range 1000 60000
+	help
+	  Interval for periodic battery status updates in milliseconds.
+	  The battery manager will automatically fetch battery data
+	  and update LED status at this interval.
+	  Default is 10000ms (10 seconds).
+	  Set to 0 to disable periodic updates.
+
+endif # HALO_BATTERY_MANAGER
+
+
+
+# BLE Manager Component
+config HALO_BLE_MANAGER
+	bool "Enable BLE Manager"
+	default y
+	depends on BT
+	depends on ALIF_BLE_HOST
+	help
+	  Enable unified BLE management framework.
+	  Provides:
+	  - Event-driven callback system with priority support
+	  - Connection and advertising management
+	  - Security and pairing management with file-based bond storage
+	  - Service registration and lifecycle management
+	  
+	  This manager integrates with Alif BLE stack and provides
+	  a clean, modular interface for BLE functionality.
+	  
+	  Requires: CONFIG_BT=y and CONFIG_BT_CUSTOM=y in prj.conf
+
+if HALO_BLE_MANAGER
+
+config HALO_BLE_MAX_SERVICES
+	int "Maximum number of BLE services"
+	default 8
+	help
+	  Maximum number of BLE GATT services that can be registered.
+	  Each service consumes some memory for tracking.
+
+config HALO_BLE_BOND_STORAGE
+	bool "Enable bond data persistent storage"
+	default y
+	depends on HALO_FILE_MANAGER
+	help
+	  Enable persistent storage of bond data using file manager.
+	  Bond information will be stored in /lfs/ble/ directory.
+	  Requires HALO_FILE_MANAGER to be enabled.
+
+config HALO_BLE_AUTO_RECONNECT
+	bool "Enable automatic reconnection"
+	default n
+	help
+	  Automatically start advertising after disconnection.
+	  This allows the device to be reconnected without manual intervention.
+
+config HALO_BLE_REQUIRE_PAIRING
+	bool "Require pairing for all connections"
+	default n
+	help
+	  Require pairing/bonding before allowing device connections.
+	  
+	  When enabled (y):
+	  - Only previously bonded devices can connect
+	  - New devices must complete pairing process
+	  - Connections from unknown devices are rejected if already bonded to another device
+	  
+	  When disabled (n):
+	  - Any device can connect without pairing
+	  - Useful for development and testing
+	  - Connection confirmation always succeeds without bond data check
+	  
+	  Default: disabled for easier testing and development
+
+config HALO_BLE_ALLOW_BOND_OVERWRITE
+	bool "Allow overwriting existing bond data"
+	default n
+	depends on HALO_BLE_BOND_STORAGE
+	help
+	  Allow new devices to pair and overwrite existing bond data.
+	  
+	  When enabled (y):
+	  - Any device can initiate pairing even if bond data exists
+	  - New pairing will replace the old bond information
+	  - Useful for testing and development when switching between devices
+	  
+	  When disabled (n):
+	  - Only unbonded devices can complete pairing process
+	  - If bond data exists, new pairing attempts are rejected
+	  - More secure - prevents accidental bond overwrites
+	  
+	  Default: disabled for security. Enable for flexible testing.
+
+config HALO_BLE_MAX_BONDS
+	int "Maximum number of bonded peer devices"
+	default 5
+	range 1 8
+	help
+	  Number of bond table slots. When a new device pairs with the table
+	  full, the least-recently-connected bond is evicted. Only one peer
+	  can be connected at a time regardless of this value. See PAIRING.md.
+
+config HALO_BLE_PAIRING_WINDOW_SEC
+	int "Pairing window duration (seconds)"
+	default 60
+	range 10 600
+	help
+	  How long the device accepts a new (unknown) peer after the pairing
+	  button hold (8 s). While the window is open, already-bonded peers
+	  are rejected so the new device can connect and pair. The window
+	  closes early as soon as a new bond is committed.
+
+config HALO_BLE_BATTERY_SERVICE
+	bool "Enable BLE Battery Service (0x180F)"
+	default y
+	depends on SENSOR
+	depends on HALO_BATTERY_MANAGER
+	help
+	  Enable BLE Battery Service using generic GATT API.
+	  This provides standard Battery Service (UUID 0x180F) with
+	  Battery Level characteristic (UUID 0x2A19).
+	  
+	  Automatically integrates with battery_manager for level updates.
+	  Supports notifications when battery level changes.
+	  
+	  When enabled, the Battery Service will be automatically registered
+	  and advertised to BLE clients.
+
+config HALO_BLE_LUA_SERVICE
+	bool "Enable BLE Lua Service"
+	default n
+	help
+	  Enable BLE Lua Service for script execution and data transport.
+	  
+	  This service provides multiple characteristics:
+	  - RX/TX: REPL command input/output and data transfer
+	  - Video: Video stream transmission
+	  - Audio RX/TX: Audio input/output
+	  
+	  Service UUID: 7A230001-5475-A6A4-654C-8431F6AD49C4
+	  
+	  When enabled, the service will be automatically registered
+	  and available for BLE clients to communicate with the Lua engine.
+
+config HALO_BLE_OTA_SERVICE
+	bool "Enable BLE OTA Service (SMP)"
+	default y
+	depends on MCUMGR
+	help
+	  Enable BLE OTA (Over-The-Air) Service using SMP protocol.
+	  
+	  This service implements Simple Management Protocol (SMP) over BLE
+	  for firmware updates and device management operations such as:
+	  - Firmware image upload and management
+	  - Device reset and boot slot management
+	  - File system operations
+	  - Shell command execution
+	  
+	  Service UUID: 8D53DC1D-1DB7-4CD3-868B-8A527460AA84
+	  Characteristic UUID: DA2E7828-FBCE-4E01-AE9E-261174997C48
+	  
+	  When enabled, the service will be automatically registered
+	  and available for BLE clients to perform firmware updates.
+	  
+	  Requires MCUmgr to be enabled in the project configuration.
+
+config HALO_SE_MGMT
+	bool "Enable SE Management (requires BLE OTA)"
+	default y
+	depends on HALO_BLE_OTA_SERVICE
+	help
+	  Enable Security Element (SE) firmware management over BLE.
+	  
+	  This extends the BLE OTA service with SE-specific commands:
+	  - SE firmware upload and update
+	  - SE version querying
+	  - Automatic reboot after successful update
+	  
+	  Uses SMP group ID 64 for SE management commands.
+	  Requires BLE OTA service to be enabled for transport.
+	  
+	  SE firmware buffer is dynamically allocated from internal SRAM
+	  based on the actual firmware size during transfer.
+
+config HALO_BLE_ANCS_CLIENT
+	bool "Enable ANCS client (iOS notifications)"
+	default y
+	help
+	  Enable a GATT client for the Apple Notification Center Service
+	  (ANCS) exposed by a connected iOS device.
+
+	  Service UUID: 7905F431-B5CE-4E99-A40F-4B1E122D00D0
+
+	  The service is discovered automatically on connection; the
+	  Notification Source / Data Source subscriptions are established
+	  once the link is encrypted (bonded) and an application consumer
+	  (frame.ancs Lua API) enables them. On non-iOS centrals the
+	  service is simply reported unavailable.
+
+if HALO_BLE_ANCS_CLIENT
+
+config HALO_BLE_ANCS_RESPONSE_BUF_SIZE
+	int "ANCS attribute response buffer size (bytes)"
+	default 1024
+	range 128 4096
+	help
+	  Reassembly buffer for Get Notification Attributes / Get App
+	  Attributes responses arriving over the Data Source
+	  characteristic. Must be large enough for the largest requested
+	  attribute set (title + subtitle + message + labels + overhead).
+
+config HALO_BLE_ANCS_NOTIF_QUEUE_LEN
+	int "ANCS notification event queue length"
+	default 16
+	range 4 64
+	help
+	  Number of Notification Source events buffered between the BLE
+	  thread and the Lua callback. iOS replays every existing
+	  notification when the accessory subscribes, so bursts occur.
+	  On overflow the oldest events are dropped (a drop count is
+	  reported to the Lua callback).
+
+config HALO_BLE_ANCS_APP_NAME_MAX_LEN
+	int "ANCS app display name maximum length (bytes)"
+	default 128
+	range 16 256
+	help
+	  Maximum stored length of an app display name returned by a
+	  Get App Attributes request.
+
+config HALO_BLE_ANCS_SOLICIT_ADV
+	bool "Solicit ANCS in scan response data"
+	default y
+	help
+	  Include the ANCS UUID in a Service Solicitation AD structure
+	  (type 0x15) in the scan response, as recommended by Apple so
+	  iOS knows the accessory wants notification access.
+
+endif # HALO_BLE_ANCS_CLIENT
+
+config HALO_BLE_DFU_BUTTON_HOLD_TIME_MS
+	int "BLE DFU button hold time (milliseconds)"
+	default 10000
+	range 1000 60000
+	help
+	  Time in milliseconds that the button must be held to enter BLE DFU mode.
+	  Default is 10000ms (10 seconds).
+
+config HALO_BLE_DFU_INACTIVITY_TIMEOUT_MS
+	int "BLE DFU inactivity timeout (milliseconds)"
+	default 120000
+	range 30000 600000
+	help
+	  Time in milliseconds of inactivity before automatically exiting BLE DFU mode.
+	  Default is 120000ms (2 minutes).
+
+if HALO_BLE_LUA_SERVICE
+
+config HALO_LUA_MAX_REPL_SIZE
+	int "Maximum REPL buffer size (bytes)"
+	default 1024
+	help
+	  Size of the ring buffer for REPL command input.
+	  This buffer stores incoming commands from the BLE client
+	  before they are processed by the Lua interpreter.
+
+config HALO_LUA_MAX_DATA_SIZE
+	int "Maximum data buffer size (bytes)"
+	default 4096
+	help
+	  Size of the ring buffer for binary data transfer.
+	  This buffer is used for data transfers between the BLE client
+	  and the Lua engine (separate from REPL commands).
+
+config HALO_AUDIO_MAX_DATA_SIZE
+	int "Maximum audio buffer size (bytes)"
+	default 32768
+	help
+	  Size of the ring buffer for audio input data.
+	  This buffer stores incoming audio data from the BLE client
+	  before it is processed by the application.
+
+endif # HALO_BLE_LUA_SERVICE
+
+if HALO_BLE_AUDIO_SERVICE
+
+config HALO_BLE_AUDIO_SINK_ENABLE
+	bool "Enable LE Audio Sink (Speaker)"
+	default n
+	help
+	  Enable LE Audio sink functionality (speaker output).
+	  
+	  When enabled (y):
+	  - Device can receive audio streams from remote devices
+	  - Registers PACS sink capabilities
+	  - Allocates ASE for audio reception
+	  
+	  When disabled (n):
+	  - No audio reception capability
+	  - Source-only mode (microphone only)
+	  
+	  Default: enabled
+
+config HALO_BLE_AUDIO_SOURCE_ENABLE
+	bool "Enable LE Audio Source (Microphone)"
+	default n
+	help
+	  Enable LE Audio source functionality (microphone input).
+	  
+	  When enabled (y):
+	  - Device can send audio streams to remote devices
+	  - Registers PACS source capabilities
+	  - Allocates ASE for audio transmission
+	  
+	  When disabled (n):
+	  - No audio transmission capability
+	  - Sink-only mode (speaker only)
+
+	  Default: enabled
+
+config HALO_BLE_AUDIO_MICS
+	bool "Microphone Control Service (MICS/MICP)"
+	default y
+	depends on HALO_BLE_AUDIO_SOURCE_ENABLE
+	help
+	  Expose the standard LE Audio Microphone Control Service so the
+	  connected host can mute/unmute the microphone.
+
+	  When muted by the host, the LE Audio source stream keeps its ISO
+	  cadence but transmits silence, as the Microphone Control Profile
+	  requires.
+
+	  Default: enabled
+
+config HALO_BLE_AUDIO_AICS
+	bool "AICS gain instance in MICS"
+	default n
+	depends on HALO_BLE_AUDIO_MICS
+	help
+	  Include an Audio Input Control Service instance in MICS, exposing
+	  microphone gain (-10..+10 dB) to the host.
+
+	  Costs one GATT user slot from the BLE ROM's fixed pool
+	  (BLE_GATT_USER_NB = 12), which is fully subscribed when the ANCS
+	  client (HALO_BLE_ANCS_CLIENT) is enabled - enabling both makes
+	  whichever registers last (ANCS) fail with GAP_ERR_INSUFF_RESOURCES.
+	  Without AICS, MICS still provides the standard Mute control, and
+	  microphone gain remains adjustable via frame.microphone.gain().
+
+	  Default: disabled
+
+config HALO_BLE_AUDIO_SOURCE_HQ
+	bool "High-quality source sample rates (32/48 kHz)"
+	default y
+	depends on HALO_BLE_AUDIO_SOURCE_ENABLE
+	help
+	  Advertise 32 kHz and 48 kHz LC3 source (microphone) capabilities in
+	  addition to the baseline 8/16 kHz voice configurations. The PDM
+	  front-end natively supports these rates (24/44.1 kHz are NOT
+	  supported and are never advertised).
+
+	  Disable if CPU load or memory pressure from high-rate capture and
+	  LC3 encoding becomes a problem on the target.
+
+	  Default: enabled
+
+config HALO_BLE_AUDIO_OUTPUT_STEREO
+	bool "Stereo audio output (Sink/Speaker)"
+	default n
+	depends on HALO_BLE_AUDIO_SINK_ENABLE
+	help
+	  Enable stereo audio output for LE Audio sink.
+	  
+	  When enabled (y):
+	  - Mono input is duplicated to both L/R channels
+	  - Uses more memory for interleaved stereo buffer
+	  - Speaker initialized with 2 channels
+	  
+	  When disabled (n):
+	  - Direct mono output (single channel)
+	  - Less memory usage
+	  - Simpler processing pipeline
+	  
+	  Default: disabled (mono output)
+
+config HALO_BLE_AUDIO_INPUT_STEREO
+	bool "Stereo audio input (Source/Microphone)"
+	default n
+	depends on HALO_BLE_AUDIO_SOURCE_ENABLE
+	help
+	  Enable stereo audio input for LE Audio source.
+	  
+	  When enabled (y):
+	  - Microphone captures 2 channels (L/R)
+	  - Advertises stereo capability to remote device
+	  
+	  When disabled (n):
+	  - Microphone captures 1 channel (mono)
+	  - Advertises mono capability to remote device
+	  
+	  Default: disabled (mono input)
+
+endif # HALO_BLE_AUDIO
+
+endif # HALO_BLE_MANAGER
+
+# Lua Runtime Component
+menuconfig HALO_LUA_RUNTIME
+	bool "Lua Runtime"
+	select LUA
+	select LZ4
+	depends on HALO_BLE_LUA_SERVICE
+	help
+	  Enable Lua scripting runtime for Halo.
+	  Provides REPL (Read-Eval-Print Loop) and data handling threads.
+	  Requires BLE Lua Service to be enabled.
+
+if HALO_LUA_RUNTIME
+
+config HALO_LUA_REPL_TASK_STACK_SIZE
+	int "REPL thread stack size (bytes)"
+	default 65536
+	help
+	  Stack size for the Lua REPL thread (default 64KB).
+	  This is the core Lua runtime thread that executes user scripts.
+	  Large stack is needed for complex scripts, nested function calls,
+	  and Lua's internal operations.
+
+config HALO_LUA_REPL_TASK_PRIORITY
+	int "REPL thread priority"
+	default 7
+	range 0 15
+	help
+	  Priority level for the Lua REPL thread.
+	  Lower number = higher priority.
+
+config HALO_LUA_DATA_TASK_STACK_SIZE
+	int "Data handler thread stack size (bytes)"
+	default 8192
+	help
+	  Stack size for the Lua data handler thread (default 8KB).
+	  Handles binary data from BLE and invokes Lua callbacks.
+
+config HALO_LUA_DATA_TASK_PRIORITY
+	int "Data handler thread priority"
+	default 7
+	range 0 15
+	help
+	  Priority level for the Lua data handler thread.
+
+config HALO_LUA_VIDEO_TASK_STACK_SIZE
+	int "Camera capture thread stack size (bytes)"
+	default 16384
+	depends on VIDEO
+	help
+	  Stack size for the camera capture thread (default 16KB).
+	  This thread handles camera frame capture and JPEG encoding.
+	  Requires CONFIG_VIDEO to be enabled.
+
+config HALO_LUA_VIDEO_TASK_PRIORITY
+	int "Camera capture thread priority"
+	default 7
+	range 0 15
+	depends on VIDEO
+	help
+	  Priority level for the camera capture thread.
+
+config HALO_LUA_CAMERA_JPEG_BUFFER_SIZE
+	int "Camera JPEG buffer size (bytes)"
+	default 131072
+	depends on VIDEO
+	help
+	  Size of the camera JPEG buffer allocated in Static section (default 128KB).
+	  This buffer is used to store JPEG compressed images from the camera.
+	  Allocated statically at compile time to avoid runtime allocation failures.
+
+# Audio configuration
+menuconfig HALO_AUDIO_STREAM
+	bool "Audio Stream Abstraction Layer"
+	default y
+	depends on HALO_LUA_RUNTIME
+	help
+	  Enable unified audio stream abstraction layer for PCM and LC3 formats.
+	  
+	  This provides a clean interface for:
+	  - Automatic LC3 encoding/decoding
+	  - Unified API for speaker and microphone
+	  - Callback-based transport (supports BLE Lua, LE Audio, etc.)
+	  - Multiple audio source/sink registration
+	  
+	  Both speaker and microphone modules depend on this component.
+
+if HALO_AUDIO_STREAM
+
+config HALO_LUA_SPEAKER
+	bool "Enable speaker support"
+	depends on AUDIO
+	default y
+	help
+	  Enable Lua speaker API (frame.speaker.*).
+	  
+	  Supports:
+	  - PCM and LC3 audio playback
+	  - Volume control
+	  - Automatic decoding from BLE audio stream
+	  
+	  Requires CONFIG_AUDIO and appropriate audio output device.
+
+if HALO_LUA_SPEAKER
+
+config HALO_LUA_SPEAKER_TASK_STACK_SIZE
+	int "Speaker thread stack size (bytes)"
+	default 8192
+	help
+	  Stack size for the speaker playback thread (default 8KB).
+	  This thread reads audio from BLE, decodes if needed, and writes to hardware.
+
+config HALO_LUA_SPEAKER_TASK_PRIORITY
+	int "Speaker thread priority"
+	default 8
+	range 0 15
+	help
+	  Priority level for the speaker thread.
+	  Lower number = higher priority.
+	  Default 8 matches other audio/sensor tasks.
+
+endif # HALO_LUA_SPEAKER
+
+config HALO_LUA_MICROPHONE
+	bool "Enable microphone support"
+	depends on AUDIO
+	default y
+	help
+	  Enable Lua microphone API (frame.microphone.*).
+	  
+	  Supports:
+	  - PCM and LC3 audio capture
+	  - AAD (Acoustic Activity Detection) callback
+	  - Automatic encoding to BLE audio stream
+	  - Ring buffer for asynchronous reading
+	  
+	  Requires CONFIG_AUDIO and appropriate audio input device (e.g., DMIC).
+
+if HALO_LUA_MICROPHONE
+
+config HALO_LUA_MICROPHONE_TASK_STACK_SIZE
+	int "Microphone thread stack size (bytes)"
+	default 8192
+	help
+	  Stack size for the microphone capture thread (default 8KB).
+	  This thread reads audio from hardware, encodes if needed, and writes to BLE.
+
+config HALO_LUA_MICROPHONE_TASK_PRIORITY
+	int "Microphone thread priority"
+	default 6
+	range 0 15
+	help
+	  Priority level for the microphone thread.
+	  Lower number = higher priority.
+	  Default 6 matches other audio/sensor tasks.
+
+config HALO_LUA_MICROPHONE_RING_BUFFER_SIZE
+	int "Microphone ring buffer size (bytes)"
+	default 65536
+	help
+	  Size of the ring buffer for microphone data (default 128KB).
+	  This buffer stores captured audio data for asynchronous reading by Lua scripts.
+	  Larger buffer allows for more buffering but uses more memory.
+
+endif # HALO_LUA_MICROPHONE
+
+config HALO_AUDIO_HPF
+	bool "Enable high-pass filter EQ for speaker output"
+	default n
+	depends on HALO_LUA_SPEAKER
+	help
+	  Enable a biquad IIR high-pass filter on all audio output to the speaker,
+	  applied in audio_speaker_write() (covers both LE Audio sink and Lua
+	  speaker playback paths).
+
+	  Default n: on Halo, bone-conduction speaker current protection is now
+	  owned entirely by the MAX98357A driver chain
+	  (CONFIG_MAX98357A_AUDIO_PROTECTION_EQ), which applies its own HPF,
+	  voicing EQ and current-proxy energy limiter post-volume. Stacking this
+	  stream-side HPF on top guts the TTS voice fundamentals (150-400 Hz)
+	  without adding meaningful protection. Enable only for hardware whose
+	  output driver has no protection of its own.
+
+if HALO_AUDIO_HPF
+
+config HALO_AUDIO_HPF_CUTOFF_HZ
+	int "High-pass filter cutoff frequency (Hz)"
+	default 300
+	range 50 2000
+	help
+	  Cutoff frequency for the high-pass filter in Hz.
+	  Frequencies below this are attenuated.
+
+	  Recommended range for bone conduction speaker:
+	  - 200-300 Hz: gentle roll-off, preserves bass warmth
+	  - 300-500 Hz: moderate, good for current protection
+	  - 500-800 Hz: aggressive, maximum protection
+
+	  Default 300 Hz provides good protection while preserving voice quality.
+
+config HALO_AUDIO_HPF_ORDER
+	int "High-pass filter order"
+	default 4
+	range 2 4
+	help
+	  Filter order determines roll-off steepness:
+	  - 2: Single biquad, -12 dB/octave roll-off
+	  - 4: Cascaded biquads, -24 dB/octave roll-off (recommended)
+
+	  Higher order gives steeper attenuation below cutoff but uses
+	  slightly more CPU. Default 4 (Butterworth -24dB/oct) matches
+	  the speaker manufacturer's EQ curve recommendation.
+
+endif # HALO_AUDIO_HPF
+
+config HALO_AUDIO_AEC
+	bool "Acoustic echo cancellation on the microphone path"
+	default n
+	depends on HALO_LUA_MICROPHONE && HALO_LUA_SPEAKER
+	depends on MAX98357A_AUDIO
+	help
+	  Cancel the bone-conduction speaker's leakage into the microphones
+	  (adaptive NLMS FIR), so duplex voice applications don't hear the
+	  device's own speech as user input. Runs on the microphone path
+	  before encoding (and before any future beamforming stage); the
+	  far-end reference is tapped in the MAX98357A driver at the I2S
+	  send point, post volume and speaker-protection processing.
+
+	  v1 operates when both the microphone and speaker sessions are
+	  16 kHz mono; other formats pass through untouched. Runtime
+	  toggle via frame.microphone.aec(true/false).
+
+	  See applications/halo/tests/aec/README.md for the echo-path
+	  identification data behind the defaults.
+
+if HALO_AUDIO_AEC
+
+config HALO_AUDIO_AEC_TAPS
+	int "Adaptive filter length (taps at 16 kHz)"
+	default 1024
+	range 128 2048
+	help
+	  FIR length in samples at 16 kHz. Must cover the mic/speaker block
+	  alignment slack (up to ~40 ms = 640 taps) plus the echo path's
+	  impulse-response tail. Measured on Halo 08: 90% of linear IR
+	  energy within ~40 ms of onset. 1024 taps = 64 ms.
+
+	  CPU cost is ~2 * taps MACs per mic sample (float32, scalar):
+	  1024 taps ~ 33 MMAC/s at 16 kHz.
+
+config HALO_AUDIO_AEC_FDAF
+	bool "Per-bin frequency-domain adaptation (partitioned-block FDAF)"
+	default y
+	select CMSIS_DSP
+	select CMSIS_DSP_TRANSFORM
+	help
+	  Adapt the echo filter per frequency bin (partitioned-block
+	  overlap-save FDAF, 1024-point FFT, 20 ms hop) instead of running
+	  a time-domain NLMS across the whole band with one step size.
+
+	  Real speech playback is spectrally sparse and pitch-periodic, and
+	  the measured echo coherence is strongly frequency-dependent (~0.9
+	  at 300-800 Hz falling to ~0.4 by 1.6-3.4 kHz): a single full-band
+	  gradient lets the strong coherent bins dictate the step while the
+	  rest accumulates weight noise, which capped voice-stimulus ERLE at
+	  ~+2.4 dB on hardware. Per-bin normalization adapts each bin at its
+	  own SNR, exploiting the coherent low band fully.
+
+	  Uses CMSIS-DSP's Helium-accelerated FFT on the M55. The alignment
+	  machinery (reference ring, stream epochs, hold-back, gating) is
+	  identical to the time-domain build.
+
+config HALO_AUDIO_AEC_FDAF_PARTS
+	int "FDAF partitions (320 taps / 20 ms each)"
+	depends on HALO_AUDIO_AEC_FDAF
+	default 3
+	range 1 6
+	help
+	  Number of 320-tap partitions; the covered echo span is
+	  parts * 20 ms. The measured echo sits at ~9-10 ms bulk delay in
+	  the analysis window with a compact tail: 3 partitions (60 ms)
+	  cover it with margin. Must be <= HALO_AUDIO_AEC_TAPS / 320.
+
+endif # HALO_AUDIO_AEC
+
+config HALO_SFXR
+	bool "Enable SFXR sound generator"
+	depends on AUDIO
+	help
+	  Enable the small SFXR-style PCM sound generator used for firmware
+	  sounds and future frame.sound Lua APIs.
+
+if HALO_SFXR
+
+config HALO_LUA_SOUND
+	bool "Enable Lua generated sound API"
+	default y
+	depends on HALO_LUA_RUNTIME
+	depends on HALO_AUDIO_STREAM
+	help
+	  Enable frame.sound.* Lua APIs for playing named generated sound
+	  effects through the C SFXR backend.
+
+config HALO_STARTUP_SOUND
+	bool "Play startup sound"
+	help
+	  Play a short firmware-generated sound during early boot, as soon as the
+	  speaker device is available (alongside the boot logo splash).
+
+config HALO_STARTUP_SOUND_PRESET
+	string "Startup sound preset"
+	default "powerup"
+	depends on HALO_STARTUP_SOUND
+	help
+	  Named SFXR preset used for the boot sound. Supported values: pickup,
+	  laser, explosion, powerup, hit, jump, blip. The seed makes it
+	  deterministic across boots.
+
+config HALO_STARTUP_SOUND_SEED
+	int "Startup sound seed"
+	default 84
+	depends on HALO_STARTUP_SOUND
+	help
+	  Deterministic seed for the generated startup preset.
+
+config HALO_STARTUP_SOUND_RETRY_MS
+	int "Startup sound speaker-ready retry interval (ms)"
+	default 50
+	range 1 1000
+	depends on HALO_STARTUP_SOUND
+	help
+	  How often to retry playback while the speaker is not yet ready. There is
+	  no fixed pre-delay; the thread retries at this interval until the speaker
+	  accepts playback (or the timeout below), logging the elapsed wait so the
+	  real readiness latency is visible.
+
+config HALO_STARTUP_SOUND_TIMEOUT_MS
+	int "Startup sound speaker-ready timeout (ms)"
+	default 2000
+	range 0 10000
+	depends on HALO_STARTUP_SOUND
+	help
+	  Give up trying to play the startup sound if the speaker is still not
+	  ready after this long.
+
+config HALO_STARTUP_SOUND_DURATION_MS
+	int "Startup sound duration in milliseconds"
+	default 1000
+	range 100 10000
+	depends on HALO_STARTUP_SOUND
+	help
+	  Playback duration. The SFXR generator streams silence if the generated
+	  effect naturally ends before this duration.
+
+config HALO_STARTUP_SOUND_VOLUME
+	int "Startup sound speaker volume"
+	default 100
+	range 0 100
+	depends on HALO_STARTUP_SOUND
+	help
+	  Temporary speaker volume for the startup sound. The previous persisted
+	  speaker volume is restored after playback.
+
+config HALO_STARTUP_SOUND_THREAD_STACK_SIZE
+	int "Startup sound thread stack size"
+	default 2048
+	depends on HALO_STARTUP_SOUND
+	help
+	  Stack size for the one-shot startup sound playback thread.
+
+config HALO_STARTUP_SOUND_THREAD_PRIORITY
+	int "Startup sound thread priority"
+	default 10
+	range 0 15
+	depends on HALO_STARTUP_SOUND
+	help
+	  Priority for the startup sound playback thread. Lower number is higher
+	  priority.
+
+config HALO_SHUTDOWN_SOUND
+	bool "Play shutdown sound"
+	help
+	  Play a short firmware-generated sound just before entering deep sleep,
+	  so the user gets audible confirmation that the device is switching off.
+
+config HALO_SHUTDOWN_SOUND_PRESET
+	string "Shutdown sound preset"
+	default "hit"
+	depends on HALO_SHUTDOWN_SOUND
+	help
+	  Named SFXR preset used for the shutdown sound. Supported values: pickup,
+	  laser, explosion, powerup, hit, jump, blip. The seed makes it
+	  deterministic across shutdowns.
+
+config HALO_SHUTDOWN_SOUND_SEED
+	int "Shutdown sound seed"
+	default 84
+	depends on HALO_SHUTDOWN_SOUND
+	help
+	  Deterministic seed for the generated shutdown preset.
+
+config HALO_SHUTDOWN_SOUND_TIMEOUT_MS
+	int "Shutdown sound speaker-free timeout (ms)"
+	default 500
+	range 0 5000
+	depends on HALO_SHUTDOWN_SOUND
+	help
+	  Give up playing the shutdown sound if the speaker is still busy after
+	  this long (e.g. still owned by LE audio). Shutdown proceeds without
+	  the sound.
+
+config HALO_SHUTDOWN_SOUND_DURATION_MS
+	int "Shutdown sound duration in milliseconds"
+	default 700
+	range 100 3000
+	depends on HALO_SHUTDOWN_SOUND
+	help
+	  Playback duration. Kept short so shutdown stays prompt; this also
+	  serves as a settle window between the button release and the actual
+	  power-off, avoiding spurious wake events from switch bounce.
+
+config HALO_SHUTDOWN_SOUND_VOLUME
+	int "Shutdown sound speaker volume"
+	default 60
+	range 0 100
+	depends on HALO_SHUTDOWN_SOUND
+	help
+	  Temporary speaker volume for the shutdown sound. The previous persisted
+	  speaker volume is restored after playback.
+
+config HALO_CUE_GATE_DIRTY_BOOT
+	bool "Skip boot/shutdown cues when the previous boot did not settle"
+	default y
+	depends on HALO_STARTUP_SOUND || HALO_SHUTDOWN_SOUND
+	depends on HALO_FILE_MANAGER
+	help
+	  Persist a flag just before a boot or shutdown cue plays and clear
+	  it once boot settles (image confirm) or the shutdown cue completes.
+	  If the flag is already set when the boot cue would play, the
+	  previous boot did not complete while a cue was active, and cues are
+	  skipped for this boot. The flag is still cleared when this boot
+	  settles, so cues return on the next power-on. Stored in flash so
+	  the state survives a full power cycle.
+
+config HALO_CUE_GATE_MIN_VOLTAGE_MV
+	int "Minimum battery voltage (mV) for boot/shutdown cues, 0 disables"
+	default 3400
+	range 0 4400
+	depends on HALO_STARTUP_SOUND || HALO_SHUTDOWN_SOUND
+	depends on HALO_BATTERY_MANAGER
+	help
+	  Skip the boot/shutdown cues when a fresh battery reading taken just
+	  before the cue is below this many millivolts. The reading is taken
+	  under live system load, so it reflects the loaded (not resting)
+	  battery voltage. The default corresponds to roughly the bottom
+	  10-15% of charge: a low-battery courtesy skip where the cue adds
+	  load for little benefit, chosen well below normal operating
+	  voltages so cues are unaffected at everyday charge levels. 0
+	  disables the check; the reading is logged at cue time either way.
+
+config HALO_POWER_CUE_SOUND
+	bool "Play power-off crossing cue"
+	depends on HALO_SHUTDOWN_SOUND
+	default y
+	help
+	  Play a very short blip the moment a button hold crosses the
+	  power-off threshold (while still held). Deep sleep fires on
+	  release, so the cue tells the user "release now to power off" -
+	  or keep holding for the pairing / ship-mode levels.
+
+config HALO_POWER_CUE_SOUND_PRESET
+	string "Power cue preset"
+	default "blip"
+	depends on HALO_POWER_CUE_SOUND
+	help
+	  Named SFXR preset for the crossing cue. Supported values: pickup,
+	  laser, explosion, powerup, hit, jump, blip.
+
+config HALO_POWER_CUE_SOUND_SEED
+	int "Power cue seed"
+	default 7
+	depends on HALO_POWER_CUE_SOUND
+	help
+	  Deterministic seed for the generated cue preset.
+
+config HALO_POWER_CUE_SOUND_DURATION_MS
+	int "Power cue duration in milliseconds"
+	default 60
+	range 20 300
+	depends on HALO_POWER_CUE_SOUND
+	help
+	  Playback duration. Kept very short: the cue plays while the button
+	  is still held and must be finished well before the shutdown sound
+	  if the user releases immediately.
+
+config HALO_POWER_CUE_SOUND_VOLUME
+	int "Power cue speaker volume"
+	default 40
+	range 0 100
+	depends on HALO_POWER_CUE_SOUND
+	help
+	  Temporary speaker volume for the cue. The previous persisted
+	  speaker volume is restored after playback.
+
+config HALO_PAIRING_CUE_SOUND
+	bool "Play pairing-mode cue"
+	depends on HALO_LUA_SOUND
+	default y
+	help
+	  Play a short coin "buh-ding" the moment a button hold reaches the
+	  pairing threshold and the pairing window opens.
+
+config HALO_PAIRING_CUE_SOUND_PRESET
+	string "Pairing cue preset"
+	default "pickup"
+	depends on HALO_PAIRING_CUE_SOUND
+	help
+	  Named SFXR preset for the pairing cue. Supported values: pickup,
+	  laser, explosion, powerup, hit, jump, blip.
+
+config HALO_PAIRING_CUE_SOUND_SEED
+	int "Pairing cue seed"
+	default 21
+	depends on HALO_PAIRING_CUE_SOUND
+	help
+	  Deterministic seed for the generated cue preset.
+
+config HALO_PAIRING_CUE_SOUND_DURATION_MS
+	int "Pairing cue duration in milliseconds"
+	default 250
+	range 50 1000
+	depends on HALO_PAIRING_CUE_SOUND
+	help
+	  Playback duration for the two-note coin cue.
+
+config HALO_PAIRING_CUE_SOUND_VOLUME
+	int "Pairing cue speaker volume"
+	default 50
+	range 0 100
+	depends on HALO_PAIRING_CUE_SOUND
+	help
+	  Temporary speaker volume for the cue. The previous persisted
+	  speaker volume is restored after playback.
+
+config HALO_SFXR_ASYNC_THREAD_STACK_SIZE
+	int "Async SFXR thread stack size"
+	default 2048
+	depends on HALO_LUA_SOUND
+	help
+	  Stack size for the frame.sound.play_async worker thread.
+
+config HALO_SFXR_ASYNC_THREAD_PRIORITY
+	int "Async SFXR thread priority"
+	default 6
+	range 0 15
+	depends on HALO_LUA_SOUND
+	help
+	  Priority for asynchronous frame.sound playback. Lower number is higher
+	  priority. Must be higher priority (lower number) than the Lua REPL
+	  thread (HALO_LUA_REPL_TASK_PRIORITY): a busy Lua loop would otherwise
+	  starve the worker and queued sounds - including the button hold cues -
+	  never play. The worker spends nearly all its time blocked on I2S
+	  writes, so the high priority costs little.
+
+endif # HALO_SFXR
+
+endif # HALO_AUDIO_STREAM
+
+endif # HALO_LUA_RUNTIME
+
+
+config HALO_BOOT_LOGO
+	bool "Show boot logo splash"
+	default n
+	depends on CDC200
+	select LZ4
+	help
+	  Draw a compressed logo bitmap during early boot, before the Lua
+	  runtime (and main.lua) start, so it cannot be clobbered by the app.
+	  The display boots in power-save: the splash resumes the panel to draw,
+	  then returns it to power-save for the application to bring up again.
+
+config HALO_BOOT_LOGO_MAX_RAW_BYTES
+	int "Boot logo decompression buffer size (bytes)"
+	default 8192
+	depends on HALO_BOOT_LOGO
+	help
+	  Size of the static scratch buffer holding the decompressed 4-bit packed
+	  logo (2 px/byte). Must be >= width*height/2 of the asset; 96x96 needs
+	  4608 bytes.
+
+config HALO_BOOT_LOGO_MIN_HOLD_MS
+	int "Boot logo minimum on-screen time (ms)"
+	default 3000
+	depends on HALO_BOOT_LOGO
+	help
+	  Minimum time the logo stays on screen. When CONFIG_HALO_STARTUP_SOUND
+	  is enabled the logo is held for max(startup sound, this), so a short
+	  sound no longer cuts the splash off early.
+
+config HALO_BOOT_LOGO_UNPAIRED_HOLD_MS
+	int "Boot logo on-screen time when unpaired (ms)"
+	default 10000
+	depends on HALO_BOOT_LOGO
+	help
+	  Minimum time the logo stays on screen when the device boots with no
+	  BLE bond stored. Held longer than the paired case, with the device
+	  name drawn under the logo, so the user can identify the device while
+	  pairing it for the first time.
+
+
+config HALO_BLE_AUDIO_SERVICE
+	bool "Enable BLE Audio Service (LE Audio)"
+	default n
+	depends on HALO_BLE_MANAGER
+	help
+	  Enable BLE Audio Service for LE Audio support.
+	  
+	  This service implements LE Audio profiles and codecs,
+	  allowing audio streaming over BLE using LC3 codec.
+	  
+	  When enabled, the service will be automatically registered
+	  and available for BLE clients to stream audio.
+
+endif # HALO

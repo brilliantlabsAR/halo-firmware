@@ -1,0 +1,30 @@
+# Session captures and logs are never committed. Blanket-ignore the media
+# types; intentional fixtures (e.g. the female_w1 ITU vectors) stay tracked
+# and new ones need `git add -f`.
+*.wav
+*.pcm
+*.lc3
+*.jsonl
+*.csv
+*.log
+# Recordings produced by test_microphone*.py (kept local, not committed)
+mic_pcm_*.wav
+mic_lc3_*.wav
+mic_lc3_*.lc3
+# older default output names
+output_*.wav
+audio_*.wav
+audio_*.lc3
+__pycache__/
+lfs_pcm_*.wav
+# Beamforming harness generated outputs (kept local)
+beamform/demo_*.wav
+beamform/scene*.wav
+beamform/*_sum.wav
+beamform/*_A.wav
+beamform/*_B.wav
+beamform/*_C.wav
+beamform/*_BC.wav
+# ...and the same beamform captures/outputs when the harness is run from
+# tests/ itself rather than the beamform/ subdir (bf_*, cal_bf_*, out_bf_*, ...)
+*bf_*.wav

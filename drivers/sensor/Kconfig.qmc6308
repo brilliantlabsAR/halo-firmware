@@ -1,0 +1,7 @@
+config QMC6308
+	bool "QST 3-axis Magnetic Sensor"
+    default y
+    depends on DT_HAS_QST_QMC6308_ENABLED
+    select I2C
+	help
+       Enable driver for QST QMC6308 (I2C-based)

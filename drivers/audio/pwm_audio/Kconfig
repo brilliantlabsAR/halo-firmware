@@ -1,0 +1,35 @@
+# Audio PWM Speaker configuration options
+
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig PWM_AUDIO
+	bool "PWM Audio Output Drivers For Alif"
+	default y
+	depends on DT_HAS_ALIF_PWM_AUDIO_ENABLED
+	select RING_BUFFER
+	help
+	  Enable ALIF PWM Audio Output Driver Configuration.
+
+if PWM_AUDIO
+
+module = PWM_AUDIO
+module-str = pwm out driver for alif
+source "subsys/logging/Kconfig.template.log_config"
+
+config PWM_AUDIO_INIT_PRIORITY
+	int "Init priority"
+	default 80
+	help
+		PWM Audio Output device driver initialization priority.
+
+config PWM_AUDIO_GENERIC_API
+	bool "Use generic audio API interface"
+	default y
+	help
+	  Enable generic audio API interface for PWM audio driver.
+	  When enabled, the driver will provide both PWM-specific and
+	  generic audio APIs, allowing unified audio interface usage.
+
+endif # PWM_AUDIO
+

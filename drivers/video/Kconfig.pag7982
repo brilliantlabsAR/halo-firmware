@@ -1,0 +1,9 @@
+# PAG7982
+
+config VIDEO_PAG7982
+	bool "PAG7982 CMOS digital image sensor"
+	select I2C
+	depends on DT_HAS_PIXART_PAG7982_ENABLED
+	default y
+	help
+	  Enable driver for PAG7982 CMOS digital image sensor device.

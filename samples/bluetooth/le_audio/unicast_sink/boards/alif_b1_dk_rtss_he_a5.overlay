@@ -1,0 +1,88 @@
+/* Copyright Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ */
+
+#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/gpio/gpio.h>
+
+#define I2S0_IRQ_NUM  141
+#define I2S0_IRQ_PRIO 3
+
+#define LPI2S_IRQ_NUM  48
+#define LPI2S_IRQ_PRIO 3
+
+/ {
+	aliases {
+		/delete-property/ sw0;
+
+		audio-codec = &wm8904;
+		i2s-bus = &i2s0;
+		/*i2s-mic = &i2s2;*/
+	};
+
+	/delete-node/ buttons;
+};
+
+&dma2 {
+	status = "okay";
+};
+
+&i2c1 {
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	status = "okay";
+
+	wm8904: wm8904@1a {
+		compatible = "cirrus,wm8904";
+		reg = <0x1a>;
+		status = "okay";
+	};
+};
+
+/* Sink (output) to WM8904 codec IC */
+&i2s0 {
+	/delete-property/ clock-frequency;
+	/delete-property/ driver_instance;
+	compatible = "alif,i2s-sync";
+	interrupts = <I2S0_IRQ_NUM I2S0_IRQ_PRIO>;
+	bit-depth = <16>;
+	sample-rate = <48000>;
+	status = "okay";
+};
+
+/* Source (input) use onboard I2S microphones (T5848)
+ *
+ * Balletto A5 DevKit does not have I2S mics anymore.
+ * TODO: Need to be replaced by the PDM mics.
+ */
+
+&pinctrl_i2c1 {
+	group0 {
+		pinmux = <PIN_P7_2__I2C1_SDA_C>,
+			 <PIN_P7_3__I2C1_SCL_C>;
+	};
+};
+
+&pinctrl_i2s0 {
+	group0 {
+		pinmux = <PIN_P2_4__I2S0_SDI_B>,
+			 <PIN_P2_5__I2S0_SDO_B>,
+			 <PIN_P1_7__I2S0_WS_A>,
+			 <PIN_P1_6__I2S0_SCLK_A>;
+	};
+};
+
+/* Disable unnecessary nodes */
+&uart_ahi {
+	status = "disabled";
+};
+
+&i2s1 {
+	status = "disabled";
+};

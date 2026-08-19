@@ -1,0 +1,47 @@
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+config INPUT_GPIO_BUTTON
+	bool "GPIO Button input driver"
+	default y
+	depends on DT_HAS_GPIO_BUTTON_ENABLED
+	depends on GPIO
+	help
+		Enable support for GPIO Button input driver.
+
+if INPUT_GPIO_BUTTON
+
+choice
+    prompt "Trigger mode"
+	default INPUT_GPIO_BUTTON_OWN_THREAD
+	help
+		Specify the type of triggering to be used by the driver.
+		
+config INPUT_GPIO_BUTTON_GLOBAL_THREAD
+	bool "Use global thread"
+	depends on GPIO
+
+config INPUT_GPIO_BUTTON_OWN_THREAD
+	bool "Use own thread"
+	depends on GPIO
+
+endchoice
+
+if INPUT_GPIO_BUTTON_OWN_THREAD
+
+config INPUT_GPIO_BUTTON_THREAD_PRIORITY
+	int "Thread priority"
+	depends on INPUT_GPIO_BUTTON_OWN_THREAD
+	default 3
+	help
+	  Priority of thread used by the driver to handle interrupts.
+
+config INPUT_GPIO_BUTTON_THREAD_STACK_SIZE
+	int "Thread stack size"
+	depends on INPUT_GPIO_BUTTON_OWN_THREAD
+	default 8192
+	help
+	  Stack size of thread used by the driver to handle interrupts.
+endif
+
+endif

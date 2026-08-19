@@ -1,0 +1,45 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+menu "Alif Bluetooth LE Throughput"
+
+config ALIF_THROUHGPUT_SHELL
+	bool "Bluetooth throughput commands"
+	default y
+
+config BLE_BONDING
+	bool "Bond to peripheral"
+
+config BLE_THROUGHPUT_DURATION
+	int "Throughput test duration in milliseconds"
+	default 20000
+
+config BLE_MTU_SIZE
+	int "MTU to be used for throughput testing"
+	range 23 517
+	default 498
+
+config BLE_TP_DEVICE_NAME
+	string "Default BLE throughput device name"
+	default "ALIF-TP"
+
+config BLE_TP_BIDIRECTIONAL_TEST
+	bool "Bidirectional throughput test"
+	default y
+
+config ALIF_TP_SHELL_THREAD_PRIORITY
+	int "Priority for thread running the throughput"
+	default 0
+
+config ALIF_TP_SHELL_THREAD_STACKSIZE
+	int "Stack size for thread running the throughput"
+	default 2048
+
+endmenu # "Alif Bluetooth LE Throughput"
+
+source "Kconfig.zephyr"

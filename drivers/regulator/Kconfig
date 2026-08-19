@@ -1,0 +1,5 @@
+if REGULATOR
+
+rsource "Kconfig.tps65132"
+
+endif

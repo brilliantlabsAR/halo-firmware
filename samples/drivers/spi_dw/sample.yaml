@@ -1,0 +1,7 @@
+sample:
+  name: SPI Designware Driver Sample
+tests:
+  sample.drivers.spi.dw:
+    tags: drivers spi gpio dma
+    platform_allow: ensemble
+    depends_on: gpio

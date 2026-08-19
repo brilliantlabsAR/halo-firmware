@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: Alif VBAT sensor
+compatible: "alif,alif-vbat"
+properties:
+
+  adc:
+    type: phandle
+    required: true
+    description: ADC device node
+
+  channel:
+    type: int
+    required: true
+    description: ADC channel number
+  
+  state-gpios:
+    type: phandle-array
+    required: false
+    description: GPIO specifier for charge state
+
+  output-ohms:
+    type: int
+    required: true
+    description: Output resistor value in ohms
+
+  full-ohms:
+    type: int
+    required: true
+    description: Total resistance of voltage divider in ohms
+
+  enable-gpios:
+    type: phandle-array
+    required: false
+    description: GPIO specifier for power control
+
+  charge-control-gpios:
+    type: phandle-array
+    required: false
+    description: GPIO specifier for charge control (active low to disable charging)
+
+  vin-supply:
+    type: phandle
+    required: false
+    description: Phandle to the regulator node
+
+  power-up-time-ms:
+    type: int
+    required: false
+    default: 50
+    description: Time to wait after power enable
+
+  discharge-curve:
+    type: array
+    required: false
+    description: |
+      Voltage-SoC pairs in mV-% format
+      e.g. <3000 0 3300 20 3500 50 3600 80 3700 100>
+
+  voltage-filter-alpha:
+    type: int
+    required: false
+    default: 50
+    description: EMA filter coefficient 1/1000

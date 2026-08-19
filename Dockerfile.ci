@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+FROM ghcr.io/zephyrproject-rtos/ci:v0.26.13
+
+# Ensure we're running as root so we can modify files
+USER root
+
+WORKDIR /opt/workspace
+
+# Copy the entire project repository carefully into /opt/workspace/project.
+# This gives `west` the necessary manifest (west.yml) to initialize.
+COPY . /opt/workspace/project/
+
+# 1. Mount the GitHub Token secretly so it is never permanently baked into the image.
+# 2. Configure Git to transparently use the token for private GitHub repositories.
+# 3. Initialize west and fetch all multi-gigabyte Zephyr components.
+# 4. Remove the gitconfig in the SAME layer — otherwise the credentialed URL
+#    rewrite (token included) persists in the image and shadows the fresh
+#    token the build workflows install at runtime.
+RUN --mount=type=secret,id=GH_TOKEN \
+    git config --global url."https://x-access-token:$(cat /run/secrets/GH_TOKEN)@github.com/".insteadOf "https://github.com/" && \
+    cd /opt/workspace/project && \
+    west init -l . && \
+    west update && \
+    rm -f /root/.gitconfig
+
+# Set Zephyr base so tooling automatically finds the RTOS source
+ENV ZEPHYR_BASE=/opt/workspace/zephyr

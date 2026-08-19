@@ -1,0 +1,15 @@
+# Copyright (C) 2025 Brilliant Labs
+# SPDX-License-Identifier: Apache-2.0
+
+config LED_PWM
+	bool "PWM LED driver"
+	default n
+	depends on PWM
+	help
+		Enable support for PWM LED driver.
+
+config LED_INIT_PRIORITY
+    int "LED driver initialization priority"
+    default 50
+    help
+      Initialization priority for LED drivers.

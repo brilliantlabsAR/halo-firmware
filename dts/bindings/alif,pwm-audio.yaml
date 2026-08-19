@@ -1,0 +1,74 @@
+# Copyright (c) 2025 Brilliant Labs Ltd
+# SPDX-License-Identifier: Apache-2.0
+
+description: ALIF PWM Audio Driver
+
+compatible: "alif,pwm-audio"
+
+include: [base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  timer:
+    type: int
+    required: true
+    default: 0
+    description: |
+      Timer number.
+      The default is 0.
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+
+  left:
+    type: array
+    required: true
+    default:
+      - -1
+      - -1
+    description: |
+      Left channel configuration. <timer channel> 
+  
+  right:
+    type: array
+    default:
+      - -1
+      - -1
+    description: |
+      Right channel configuration. <timer channel>
+
+  resolution:
+    type: int
+    default: 8
+    description: |
+      Audio resolution in bits.
+    enum:
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+  
+  ringbuf-size:
+    type: int
+    default: 16384
+    description: |
+      Ringbuffer size in bytes.
+
+  power-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      Audio power control GPIO.
+
+
+
+    
+    

@@ -1,0 +1,19 @@
+menuconfig CANVAS
+	bool "Canvas"
+	help
+		This option enables the canvas.
+
+if CANVAS
+
+config CANVAS_ROTATE_90
+	bool "Enable 90 degree rotation"
+	default y
+	help
+		Enable 90 degree rotation for display.
+		When enabled, LOG_WIDTH = PHYS_HEIGHT and LOG_HEIGHT = PHYS_WIDTH.
+
+module = Canvas
+module-str = canvas
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

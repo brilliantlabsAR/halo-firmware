@@ -1,0 +1,60 @@
+
+
+
+
+/* label for it */
+
+&gpio0 {
+	label = "gpio0";
+};
+&gpio1 {
+	label = "gpio1";
+};
+&gpio2 {
+	label = "gpio2";
+};
+&gpio3 {
+	label = "gpio3";
+};
+&gpio4 {
+	label = "gpio4";
+};
+&gpio5 {
+	label = "gpio5";
+};
+&gpio6 {
+	label = "gpio6";
+};
+&gpio7 {
+	label = "gpio7";
+};
+&gpio8 {
+	label = "gpio8";
+};
+&gpio9 {
+	label = "gpio9";
+};
+&lpgpio {
+	label = "gpiolp";
+};
+&i2c0{
+    label = "i2c0";
+};
+&i2c1{
+    label = "i2c1";
+};
+
+
+&pag7982{
+	status = "okay";
+	frame-rate = <1>;
+	boot-on;
+};
+
+&lpcam {
+	status = "okay";
+};
+
+&i2s0 {
+	status = "okay";
+};
