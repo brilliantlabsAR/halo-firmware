@@ -20,7 +20,7 @@ Goal: support several bonded devices with semantics a consumer can predict,
 
 | # | Constraint | Source |
 |---|-----------|--------|
-| C1 | One button. Its BLE gestures are: 5 s hold = pairing, 15 s hold (charger attached) = factory reset/ship mode. 2 s = sleep, short presses belong to the Lua app. | hardware / `lua_button.c` |
+| C1 | One button. Its BLE gestures are: 5 s hold = pairing, 15 s hold (refused while charging) = factory reset/ship mode. 2 s = sleep, short presses belong to the Lua app. | hardware / `lua_button.c` |
 | C2 | No companion-app or API surface for add/remove device. Consumers manage bonds with the button and the peer OS only. | product |
 | C3 | Single BLE connection at a time. The firmware (`ble_connection.c`) tracks one `conidx`; we do not mediate concurrent centrals. | architecture |
 | C4 | Alif BLE ROM stack v1.2 (`gapm`/`gapc` APIs), **not** Zephyr's `bt_*` host. Bond storage is our own (`ble_security.c` + littlefs settings), so there is no `CONFIG_BT_MAX_PAIRED` to turn up — we own the table. | platform |
@@ -136,8 +136,8 @@ to and records it as `active_slot` (single connection ⇒ single variable):
   peer initiates fresh pairing, and the commit overwrites its own slot.
   No button press, no window needed: a known device may always re-pair itself.
 - **Implicit** — LRU eviction when pairing a 6th device.
-- **Nuclear** — 15 s charger-attached hold: factory reset (filesystem format)
-  wipes everything, unchanged.
+- **Nuclear** — 15 s hold (refused while charging): factory reset (filesystem
+  format) wipes everything, unchanged.
 
 ### 3.7 Semantic change to the 5 s hold (deliberate)
 
