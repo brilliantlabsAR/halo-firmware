@@ -141,7 +141,7 @@ workspace, and build:
 
 ```bash
 git clone https://github.com/brilliantlabsAR/halo-firmware
-docker run --rm -v "$PWD/halo-firmware:/host_code" \
+docker run --rm --platform linux/amd64 -v "$PWD/halo-firmware:/host_code" \
   ghcr.io/brilliantlabsar/halo-firmware-ci:latest \
   /bin/bash -c '
     rsync -a /host_code/ /opt/workspace/project/ &&
@@ -151,6 +151,10 @@ docker run --rm -v "$PWD/halo-firmware:/host_code" \
     west build --sysbuild -b halo applications/halo -p &&
     cp build/halo/zephyr/zephyr.signed.bin /host_code/'
 ```
+
+The clone is only the overlay source — it is not buildable on its own; the
+build always runs from the prebaked workspace at `/opt/workspace/project`
+inside the container. To build outside Docker, use sections 2–4 instead.
 
 The signed OTA image ends up back in your clone as `zephyr.signed.bin`.
 This is exactly what CI does on every PR (see
