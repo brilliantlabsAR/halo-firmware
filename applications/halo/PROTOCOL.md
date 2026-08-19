@@ -168,11 +168,11 @@ System-level service APIs.
 #### `frame.FIRMWARE_VERSION`
 
 - **Parameters:** None
-- **Returns:** `string` (e.g., `"0.6.2-rc"`)
+- **Returns:** `string` (e.g., `"0.8.8"`)
 - **Example:**
   ```lua
   print(frame.FIRMWARE_VERSION)
-  -- Output: 0.6.2-rc
+  -- Output: 0.8.8
   ```
 
 #### `frame.GIT_TAG`
@@ -1474,20 +1474,19 @@ Display module APIs for graphics and text rendering.
 | `display.set_brightness(value)` | Brightness (-2,-1,0,1,2) | `nil` | Set brightness |
 | `display.get_brightness()` | None | `number` | Get brightness (-2,-1,0,1,2) |
 | `display.brightness([value])` | Brightness (0–100) | `number/nil` | Get/set brightness |
-| `display.show(enable)` | Boolean | `nil` | Turn display on/off |
+| `display.show(enable)` | Boolean | `nil` | No-op (kept for Frame compatibility) |
 | `display.power_save(enable)` | Boolean | `nil` | Enable/disable power save |
 | `display.width()` | None | `number` | Get display width |
 | `display.height()` | None | `number` | Get display height |
 | `display.set_pan(x, y)` | Pan offsets (-50 to +50) | `nil` | Set display pan offset |
 | `display.get_pan()` | None | `number, number` | Get current pan offset |
-| `display.power_save(enable)` | Boolean | `nil` | Enable power saving |
 
 #### `frame.display.assign_color_ycbcr(index, y, cb, cr)`
 
 Assigns a color to the global palette using YCbCr color space values.
 
 - **Parameters:**
-  - `index`: Color index (1-16) or color name string (`"WHITE"`, `"RED"`, `"BLUE"`, etc.)
+  - `index`: Color index (0-15) or color name string (`"WHITE"`, `"RED"`, `"BLUE"`, etc.)
   - `y`: Luminance (0-15, 4-bit)
   - `cb`: Blue chrominance (0-7, 3-bit)
   - `cr`: Red chrominance (0-7, 3-bit)
@@ -1507,7 +1506,7 @@ Assigns a color to the global palette using YCbCr color space values.
 Assigns a color to the global palette using RGB888 values (automatically converts to YCbCr).
 
 - **Parameters:**
-  - `index`: Color index (1-16) or color name string
+  - `index`: Color index (0-15) or color name string
   - `r`: Red component (0-255)
   - `g`: Green component (0-255)
   - `b`: Blue component (0-255)
@@ -1695,14 +1694,15 @@ Clears the entire screen to the specified color.
 
 #### `frame.display.set_brightness(value)`
 
-Sets the display brightness level using predefined levels.
+Sets the display brightness level using predefined levels. Prefer
+`frame.display.brightness(value)` (percentage) for new code.
 
 - **Parameters:**
   - `value`: Brightness level (-2, -1, 0, 1, 2)
 - **Returns:** `nil`
 - **Example:**
   ```lua
-  frame.display.set_brightness(0)   -- Set to medium brightness (predefined level)
+  frame.display.set_brightness(2)   -- Maximum predefined level
   ```
 
 #### `frame.display.get_brightness()`
@@ -1734,26 +1734,18 @@ Gets or sets the display brightness level as a percentage (0-100). If called wit
   
   -- Set brightness to 75%
   frame.display.brightness(75)
-  
-  -- Set brightness to 75%
-  frame.display.brightness(75)
-  
-  -- Set to predefined medium brightness level
-  frame.display.brightness(0)
   ```
 
 #### `frame.display.show(enable)`
 
-Turns the display on or off.
+A no-op, retained only for Frame compatibility. Halo's display has no
+double-buffer — draw calls render directly, so there is no buffer flip to
+trigger. The argument is accepted and ignored. To blank the panel, use
+`frame.display.power_save(true)`.
 
 - **Parameters:**
-  - `enable`: Boolean (true to show, false to hide)
+  - `enable`: Boolean (ignored)
 - **Returns:** `nil`
-- **Example:**
-  ```lua
-  frame.display.show(true)   -- Turn on
-  frame.display.show(false)  -- Turn off
-  ```
 
 #### `frame.display.power_save(enable)`
 
@@ -2317,11 +2309,13 @@ sudo systemctl start bluetooth
 
 #### 8.2.2 Install SDK
 ```bash
-# Note: SDK repository URL may need to be updated for Halo
-git clone https://github.com/LynnL4/frame-sdk-python -b main
-cd frame-sdk-python
-pip install -e .
+pip install brilliant-sdk
 ```
+
+The SDK sources and examples live at
+[brilliantlabsAR/brilliant_sdk](https://github.com/brilliantlabsAR/brilliant_sdk)
+(the `brilliant-sdk` meta-package installs the `brilliant-ble` and
+`brilliant-msg` Python packages).
 
 ### 8.3 Bluetooth Pairing
 
