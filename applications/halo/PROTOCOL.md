@@ -1602,12 +1602,14 @@ Sets the current font for text rendering.
 
 Gets a list of available fonts.
 
-- **Returns:** `table` of font information
+- **Returns:** `table` mapping font id to font name: `{[0]="Dogica", [1]="DogicaBold"}`.
+  Note the keys start at 0 (matching `set_font`'s `font_id`), so `ipairs` —
+  which starts at index 1 — does not visit every entry.
 - **Example:**
   ```lua
   local fonts = frame.display.get_font_list()
-  for i, font in ipairs(fonts) do
-      print(font.id, font.name)
+  for id, name in pairs(fonts) do
+      print(id, name)
   end
   ```
 
