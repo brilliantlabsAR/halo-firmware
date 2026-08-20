@@ -70,6 +70,11 @@ jobs:
               if [ -n \"\$GH_TOKEN\" ]; then
                 git config --global url.\"https://x-access-token:\${GH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"
               fi
+              # The rsynced checkout keeps the host runner's UID, so git run
+              # as root inside the container fails with 'dubious ownership'.
+              # Zephyr's gen_version_h swallows that failure, leaving
+              # APP_BUILD_VERSION -- and therefore frame.GIT_TAG -- empty.
+              git config --global --add safe.directory '*'
               west update
 
               cd /opt/workspace/project/applications/halo
