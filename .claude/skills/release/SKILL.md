@@ -55,10 +55,15 @@ gh release download vX.Y.Z-<run#> -p '*release.signed.bin' -D <dir>
 ```
 
 Then run `tools/verify.py --name "<device>"` — it must print `fw X.Y.Z` and
-`repl-ok`. That's the whole check: release builds expose **no git hash** over
-the Lua API (`frame.FIRMWARE_VERSION` is all there is); provenance is the
-MCUboot image hash `ota_flash.py` printed plus the fact you flashed the CI
-asset. Then roll out to production units as desired (their `main.lua` apps
+`repl-ok`. For provenance, also probe `frame.GIT_TAG` over the REPL: it is
+the app repo's **12-char commit hash** at build time (`APP_BUILD_VERSION`
+from `git describe --abbrev=12 --always` — hash-only, because plain
+`git describe` ignores lightweight tags and this repo's tags are
+lightweight). It should match the built commit; an **empty string** means
+the build's `git describe` silently failed (CI images of 0.8.8 and earlier
+all have this — fixed by the `safe.directory` line in the workflow). The
+MCUboot image hash `ota_flash.py` prints is the other provenance anchor.
+Then roll out to production units as desired (their `main.lua` apps
 survive OTA).
 
 ## 4. Tag
