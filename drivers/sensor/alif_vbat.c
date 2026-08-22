@@ -14,6 +14,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 #include <math.h>
+#include <string.h>
 
 LOG_MODULE_REGISTER(ALIF_VBAT, CONFIG_SENSOR_LOG_LEVEL);
 
@@ -49,9 +50,13 @@ LOG_MODULE_REGISTER(ALIF_VBAT, CONFIG_SENSOR_LOG_LEVEL);
 
 #define MAX_NUM_THRESHOLD (6)
 
+/* Conversions averaged per fetch */
+#define VBAT_ADC_SAMPLES (4)
+
 static uint32_t comp_value[MAX_NUM_THRESHOLD] = {0};
 static uint32_t buffer[8];
 static uint32_t m_samplings_done;
+static uint32_t sample_accum;
 static uint8_t comparator;
 
 /* Structure to hold discharge curve points */
@@ -124,9 +129,12 @@ static enum adc_action adc_call_back(const struct device *dev, const struct adc_
 		comp_value[5] += 1;
 	}
 
+	/* Each repeat overwrites the same buffer slot, so accumulate here and
+	 * average in vbat_sample_fetch(). */
+	sample_accum += buffer[find_lsb_set(sequence->channels) - 1];
 	++m_samplings_done;
 
-	if (m_samplings_done < 2) {
+	if (m_samplings_done < VBAT_ADC_SAMPLES) {
 		return ADC_ACTION_REPEAT;
 	} else {
 		return ADC_ACTION_FINISH;
@@ -362,14 +370,21 @@ static int vbat_sample_fetch(const struct device *dev, enum sensor_channel chan)
 				   .buffer_size = sizeof(buffer),
 				   .channels = (1 << cfg->channel)};
 
+	/* Per-fetch scratch: the callback accumulates VBAT_ADC_SAMPLES
+	 * conversions into sample_accum. */
+	m_samplings_done = 0;
+	sample_accum = 0;
+	memset(comp_value, 0, sizeof(comp_value));
+
 	ret = adc_read(cfg->adc, &seq);
 	if (ret != 0) {
 		LOG_ERR("ADC read failed: %d", ret);
 		goto error;
 	}
 
-	/* Convert raw ADC to voltage */
-	int32_t adc_mv = buffer[cfg->channel] * 1800 / 4095;
+	/* Average the burst, then convert raw ADC counts to voltage */
+	int32_t adc_mv = (int32_t)((uint64_t)sample_accum * 1800 /
+				   (4095u * VBAT_ADC_SAMPLES));
 
 	data->raw_voltage = adc_mv;
 	data->actual_voltage = data->raw_voltage * cfg->full_ohms / cfg->output_ohms;
