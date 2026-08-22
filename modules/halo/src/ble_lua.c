@@ -241,6 +241,10 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 		struct ring_buf *target_ring;
 		struct k_sem *target_sem;
 
+		if (len == 0) {
+			break;
+		}
+
 		if (halo_ble_is_paired() == false) {
 			LOG_WRN("Write attempt while not paired - rejected");
 			status = ATT_ERR_INSUFF_AUTHEN;
@@ -281,6 +285,7 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 			} else {
 				target_ring = &lua_ctx.repl_rx_ring;
 				target_sem = &lua_ctx.repl_rx_sem;
+				len++; // reserve for '\n'
 			}
 		}
 
