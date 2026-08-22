@@ -19,6 +19,7 @@ LOG_MODULE_REGISTER(halo_battery, CONFIG_HALO_LOG_LEVEL);
 /* EMA Filter configuration */
 #define BATTERY_FILTER_ALPHA_U16   6553    /* Alpha = 65535/(N+1), N=9 for ~10 sample window */
 #define FILTER_INIT_CYCLES         3       /* Number of cycles to initialize EMA */
+#define BATTERY_SEED_DELAY_MS      15000   /* Seed the EMA from post-boot readings only */
 
 /* Battery manager context */
 static struct {
@@ -117,6 +118,13 @@ static uint8_t apply_battery_filter(uint8_t raw_percentage)
 
 	/* Initialize EMA with first readings */
 	if (!bat_mgr_ctx.ema_initialized) {
+		/* Seed only from post-boot steady-state readings; report the raw
+		 * value until then. Voltage, charging state and callbacks are
+		 * unaffected - only the level filter waits. */
+		if (k_uptime_get() < BATTERY_SEED_DELAY_MS) {
+			return raw_percentage;
+		}
+
 		bat_mgr_ctx.battery_percentage_ema = raw_percentage;
 		bat_mgr_ctx.ema_init_counter++;
 
