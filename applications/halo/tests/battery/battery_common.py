@@ -137,6 +137,10 @@ class BatteryLink:
             print_response_handler=lambda _s: None,
             disconnect_handler=self._on_disconnect,
         )
+        # Stop the resident main.lua before any REPL round-trip: its prints
+        # arrive on the same channel and race our await_print reads
+        # (break-before-probe; disconnect() resets the VM so the app resumes).
+        await self._ble.send_break_signal()
         return self._name
 
     async def reconnect(self, attempts: int, delay: float, scan_timeout: float = 5.0) -> bool:
@@ -193,6 +197,9 @@ class BatteryLink:
     async def disconnect(self):
         try:
             if self._ble is not None and self._ble.is_connected():
+                # Restart the Lua VM so the main.lua we stopped on connect
+                # resumes; leave the device as we found it.
+                await self._ble.send_reset_signal()
                 await self._ble.disconnect()
         except Exception:
             pass

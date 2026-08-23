@@ -19,6 +19,9 @@ LOG_MODULE_REGISTER(halo_battery, CONFIG_HALO_LOG_LEVEL);
 /* EMA Filter configuration */
 #define BATTERY_FILTER_ALPHA_U16   6553    /* Alpha = 65535/(N+1), N=9 for ~10 sample window */
 #define FILTER_INIT_CYCLES         3       /* Number of cycles to initialize EMA */
+#define BATTERY_SEED_DELAY_MS      15000   /* Seed the EMA from post-boot readings only */
+#define BATTERY_CONVERGE_CONFIRM   3       /* Counter-direction samples before converging */
+#define BATTERY_CONVERGE_STEP      1       /* Max %-points per update against direction */
 
 /* Battery manager context */
 static struct {
@@ -37,6 +40,7 @@ static struct {
 	uint8_t battery_percentage_ema;    /* Current EMA value */
 	bool ema_initialized;              /* EMA initialization flag */
 	uint8_t ema_init_counter;          /* Counter for init cycles */
+	uint8_t converge_counter;          /* Consecutive counter-direction samples */
 
 	/* Update management */
 	struct k_work_delayable update_work;
@@ -79,13 +83,15 @@ static void battery_trigger_handler(const struct device *dev, const struct senso
  */
 static uint8_t update_ema_filter(uint8_t current_ema, uint8_t new_value, bool is_charging)
 {
-	/* Handle edge case transitions directly (near 0% or 100%) */
-	if ((!is_charging && (current_ema <= 5)) || (is_charging && (current_ema >= 95))) {
-		if (is_charging) {
-			return (new_value > current_ema) ? current_ema + 1 : current_ema;
-		} else {
-			return (new_value < current_ema) ? current_ema - 1 : current_ema;
-		}
+	/* Near the endpoints, step at most 1% per update in the charge direction
+	 * so the last few percent move smoothly. Readings against the charge
+	 * direction fall through to the plain EMA and are rate-limited by the
+	 * convergence path in apply_battery_filter(). */
+	if (!is_charging && current_ema <= 5 && new_value < current_ema) {
+		return current_ema - 1;
+	}
+	if (is_charging && current_ema >= 95 && new_value > current_ema) {
+		return current_ema + 1;
 	}
 
 	/* Constant coefficient Alpha for EMA calculation, scaled to 16 bit.
@@ -101,12 +107,13 @@ static uint8_t update_ema_filter(uint8_t current_ema, uint8_t new_value, bool is
 }
 
 /**
- * @brief Apply battery percentage filter with charging direction enforcement
- * 
- * Ensures that:
- * - When charging: percentage can only increase or stay same
- * - When not charging: percentage can only decrease or stay same
- * 
+ * @brief Apply battery percentage filter with charge-direction weighting
+ *
+ * Movement with the charge direction (down while discharging, up while
+ * charging) follows the EMA directly; movement against it converges toward
+ * the measured value at a bounded rate once confirmed by consecutive
+ * samples.
+ *
  * @param raw_percentage Raw percentage from sensor
  * @return Filtered percentage value
  */
@@ -117,6 +124,13 @@ static uint8_t apply_battery_filter(uint8_t raw_percentage)
 
 	/* Initialize EMA with first readings */
 	if (!bat_mgr_ctx.ema_initialized) {
+		/* Seed only from post-boot steady-state readings; report the raw
+		 * value until then. Voltage, charging state and callbacks are
+		 * unaffected - only the level filter waits. */
+		if (k_uptime_get() < BATTERY_SEED_DELAY_MS) {
+			return raw_percentage;
+		}
+
 		bat_mgr_ctx.battery_percentage_ema = raw_percentage;
 		bat_mgr_ctx.ema_init_counter++;
 
@@ -130,24 +144,30 @@ static uint8_t apply_battery_filter(uint8_t raw_percentage)
 	}
 
 	/* Apply EMA filter to smooth out percentage changes */
-	uint8_t filtered = update_ema_filter(bat_mgr_ctx.battery_percentage_ema, 
+	uint8_t filtered = update_ema_filter(bat_mgr_ctx.battery_percentage_ema,
 					     raw_percentage, is_charging);
 
-	/* Enforce charging direction: charging can only increase, discharging can only decrease */
-	if (is_charging) {
-		/* When charging: only allow increase or stay same */
-		if (filtered >= bat_mgr_ctx.battery_percentage_ema) {
-			result = filtered;
+	/* Movement with the charge direction (down while discharging, up while
+	 * charging) is accepted as filtered. Movement against it converges at a
+	 * bounded rate: after BATTERY_CONVERGE_CONFIRM consecutive
+	 * counter-direction samples, step at most BATTERY_CONVERGE_STEP
+	 * %-points per update toward the measured value. */
+	uint8_t current = bat_mgr_ctx.battery_percentage_ema;
+	bool with_direction = is_charging ? (filtered >= current) : (filtered <= current);
+
+	if (with_direction) {
+		result = filtered;
+		bat_mgr_ctx.converge_counter = 0;
+	} else if (++bat_mgr_ctx.converge_counter >= BATTERY_CONVERGE_CONFIRM) {
+		if (filtered > current) {
+			result = current + MIN(BATTERY_CONVERGE_STEP,
+					       (uint8_t)(filtered - current));
 		} else {
-			result = bat_mgr_ctx.battery_percentage_ema;
+			result = current - MIN(BATTERY_CONVERGE_STEP,
+					       (uint8_t)(current - filtered));
 		}
 	} else {
-		/* When not charging: only allow decrease or stay same */
-		if (filtered <= bat_mgr_ctx.battery_percentage_ema) {
-			result = filtered;
-		} else {
-			result = bat_mgr_ctx.battery_percentage_ema;
-		}
+		result = current;
 	}
 
 	/* Update EMA state */
