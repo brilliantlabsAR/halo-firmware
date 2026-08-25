@@ -81,7 +81,6 @@ struct ble_lua_ctx {
 	uint8_t *data_rx_buf;
 	struct ring_buf data_rx_ring;
 	struct k_sem data_rx_sem;
-	struct ring_buf *current_rx_ring; /* Points to current active ring */
 
 	/* Audio ring buffer */
 	uint8_t *audio_rx_buf;
@@ -132,7 +131,7 @@ static const gatt_att_desc_t lua_att_db[LUA_IDX_NB] = {
 	[LUA_IDX_RX_CHAR] = {ATT_128_CHARACTERISTIC, ATT_UUID(16) | PROP(RD), 0},
 	[LUA_IDX_RX_VAL] = {HALO_LUA_UUID_128_RX,
 			    ATT_UUID(128) | PROP(WC) | PROP(WR) | SEC_LVL(WP, UNAUTH),
-			    CFG_ATT_VAL_MAX},
+			    OPT(NO_OFFSET) | CFG_ATT_VAL_MAX},
 
 	/* TX Characteristic */
 	[LUA_IDX_TX_CHAR] = {ATT_128_CHARACTERISTIC, ATT_UUID(16) | PROP(RD), 0},
@@ -154,7 +153,7 @@ static const gatt_att_desc_t lua_att_db[LUA_IDX_NB] = {
 	[LUA_IDX_AUDIO_RX_CHAR] = {ATT_128_CHARACTERISTIC, ATT_UUID(16) | PROP(RD), 0},
 	[LUA_IDX_AUDIO_RX_VAL] = {HALO_LUA_UUID_128_AUDIO_RX,
 				  ATT_UUID(128) | PROP(WC) | PROP(WR) | SEC_LVL(WP, UNAUTH),
-				  CFG_ATT_VAL_MAX},
+				  OPT(NO_OFFSET) | CFG_ATT_VAL_MAX},
 
 	/* Audio TX Characteristic */
 	[LUA_IDX_AUDIO_TX_CHAR] = {ATT_128_CHARACTERISTIC, ATT_UUID(16) | PROP(RD), 0},
@@ -238,78 +237,73 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 
 	switch (att_idx) {
 	case LUA_IDX_RX_VAL: {
-		struct ring_buf *target_ring;
-		struct k_sem *target_sem;
-
 		if (halo_ble_is_paired() == false) {
 			LOG_WRN("Write attempt while not paired - rejected");
 			status = ATT_ERR_INSUFF_AUTHEN;
 			break;
 		}
 
-		/* Handle control commands and data routing */
-		if (offset == 0 && len > 0) {
-			/* Check for control commands */
-			if (data[0] == HALO_LUA_CTRL_REBOOT ||
-			    data[0] == HALO_LUA_CTRL_INTERRUPT ||
-			    data[0] == HALO_LUA_CTRL_RESTART || data[0] == HALO_LUA_CTRL_RESET ||
-			    data[0] == HALO_LUA_CTRL_EXIT || data[0] == HALO_LUA_CTRL_REMOVE_ALL) {
-				// clear REPL buffer
-				ring_buf_reset(&lua_ctx.repl_rx_ring);
-				// clear Data buffer
-				ring_buf_reset(&lua_ctx.data_rx_ring);
-				if (lua_ctx.ctrl_handler) {
-					lua_ctx.ctrl_handler(data[0]);
-				}
-				break;
-			}
-
-			/* Route to data or REPL ring buffer */
-			if (data[0] == HALO_LUA_CTRL_DATA_MARKER && len >= 2) {
-				target_ring = &lua_ctx.data_rx_ring;
-				target_sem = &lua_ctx.data_rx_sem;
-			} else {
-				target_ring = &lua_ctx.repl_rx_ring;
-				target_sem = &lua_ctx.repl_rx_sem;
-				len++; // reserve for '\n'
-			}
-		} else {
-			/* Continuation of previous write - use last selected ring */
-			if (lua_ctx.current_rx_ring == &lua_ctx.data_rx_ring) {
-				target_ring = &lua_ctx.data_rx_ring;
-				target_sem = &lua_ctx.data_rx_sem;
-			} else {
-				target_ring = &lua_ctx.repl_rx_ring;
-				target_sem = &lua_ctx.repl_rx_sem;
-			}
-		}
-
-		/* Update current ring for next continuation */
-		lua_ctx.current_rx_ring = target_ring;
-
-		/* Check buffer space */
-		if (ring_buf_space_get(target_ring) < len) {
-			LOG_WRN("RX ring buffer full (available=%u, needed=%u)",
-				ring_buf_space_get(target_ring), len);
-			status = ATT_ERR_INSUFF_RESOURCE;
+		/* NO_OFFSET is set on this attribute, so the controller refuses any
+		 * offset (long/prepared) write before it reaches us and offset is
+		 * always 0. One ATT write is therefore one complete message: a REPL
+		 * statement or one framed data payload. Reject a stray offset
+		 * defensively in case the attribute config ever changes - there is
+		 * no end-of-write signal here to reassemble a fragmented write. */
+		if (offset != 0) {
+			LOG_WRN("Offset write on RX rejected (offset=%u)", offset);
+			status = ATT_ERR_INVALID_OFFSET;
 			break;
 		}
 
-		/* Store data */
-		if (target_ring == &lua_ctx.repl_rx_ring) {
-			/* REPL: add data as-is */
-			ring_buf_put(target_ring, data, len - 1);
-			uint8_t newline = '\n';
-			ring_buf_put(target_ring, &newline, 1);
-			k_sem_give(target_sem);
-		} else {
-			/* Data: skip first byte (marker) on first write */
-			if (offset == 0 && data[0] == HALO_LUA_CTRL_DATA_MARKER) {
-				ring_buf_put(target_ring, data + 1, len - 1);
-			} else {
-				ring_buf_put(target_ring, data, len);
+		/* A zero-length write carries no command - ignore it. Guarding here
+		 * also keeps the len-based sizing below away from unsigned
+		 * underflow. */
+		if (len == 0) {
+			break;
+		}
+
+		/* Control commands */
+		if (data[0] == HALO_LUA_CTRL_REBOOT ||
+		    data[0] == HALO_LUA_CTRL_INTERRUPT ||
+		    data[0] == HALO_LUA_CTRL_RESTART || data[0] == HALO_LUA_CTRL_RESET ||
+		    data[0] == HALO_LUA_CTRL_EXIT || data[0] == HALO_LUA_CTRL_REMOVE_ALL) {
+			// clear REPL buffer
+			ring_buf_reset(&lua_ctx.repl_rx_ring);
+			// clear Data buffer
+			ring_buf_reset(&lua_ctx.data_rx_ring);
+			if (lua_ctx.ctrl_handler) {
+				lua_ctx.ctrl_handler(data[0]);
 			}
-			k_sem_give(target_sem);
+			break;
+		}
+
+		if (data[0] == HALO_LUA_CTRL_DATA_MARKER && len >= 2) {
+			/* Framed data: store the payload after the marker byte. */
+			uint16_t payload_len = len - 1;
+
+			if (ring_buf_space_get(&lua_ctx.data_rx_ring) < payload_len) {
+				LOG_WRN("Data RX ring full (available=%u, needed=%u)",
+					ring_buf_space_get(&lua_ctx.data_rx_ring), payload_len);
+				status = ATT_ERR_INSUFF_RESOURCE;
+				break;
+			}
+			ring_buf_put(&lua_ctx.data_rx_ring, data + 1, payload_len);
+			k_sem_give(&lua_ctx.data_rx_sem);
+		} else {
+			/* REPL: one write is one line - store it and append a single
+			 * '\n' terminator that the runtime splits on. */
+			uint32_t needed = (uint32_t)len + 1;
+
+			if (ring_buf_space_get(&lua_ctx.repl_rx_ring) < needed) {
+				LOG_WRN("REPL RX ring full (available=%u, needed=%u)",
+					ring_buf_space_get(&lua_ctx.repl_rx_ring), needed);
+				status = ATT_ERR_INSUFF_RESOURCE;
+				break;
+			}
+			ring_buf_put(&lua_ctx.repl_rx_ring, data, len);
+			uint8_t newline = '\n';
+			ring_buf_put(&lua_ctx.repl_rx_ring, &newline, 1);
+			k_sem_give(&lua_ctx.repl_rx_sem);
 		}
 		break;
 	}
@@ -341,6 +335,13 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 		if (halo_ble_is_paired() == false) {
 			LOG_WRN("Audio write attempt while not paired - rejected");
 			status = ATT_ERR_INSUFF_AUTHEN;
+			break;
+		}
+		/* NO_OFFSET is set on this attribute; reject a stray offset write
+		 * defensively (mirrors RX_VAL). */
+		if (offset != 0) {
+			LOG_WRN("Offset write on audio RX rejected (offset=%u)", offset);
+			status = ATT_ERR_INVALID_OFFSET;
 			break;
 		}
 		/* Store audio input data */
@@ -557,7 +558,6 @@ int halo_ble_lua_init(bool reset)
 		lua_ctx.tx_ccc_cfg = 0;
 		lua_ctx.video_ccc_cfg = 0;
 		lua_ctx.audio_tx_ccc_cfg = 0;
-		lua_ctx.current_rx_ring = NULL;
 		lua_ctx.ctrl_handler = NULL;
 		lua_ctx.user_lid = GATT_INVALID_USER_LID;
 		lua_ctx.start_hdl = GATT_INVALID_HDL;
