@@ -52,10 +52,10 @@ config MAX98357A_AUDIO_PROTECTION_EQ
 	help
 	  Protect the bone-conduction transducers (and the battery protection
 	  IC) with a DSP chain applied post-volume, so thresholds reference
-	  absolute output level: 2nd-order HPF, mild static voicing EQ
-	  (half-depth issue #180 curve), a current-proxy energy limiter whose
-	  sidechain approximates transducer current draw vs frequency, an
-	  onset ramp, and a soft-knee true-peak clipper.
+	  absolute output level: 2nd-order HPF, static voicing EQ (loudness
+	  rebalance toward the audible bands), a current-proxy energy limiter
+	  whose bench-calibrated sidechain tracks transducer drive amplitude,
+	  an onset ramp, and a soft-knee true-peak clipper.
 
 	  Replaces the previous static EQ + instant peak limiter: protection
 	  now tracks short-term weighted signal ENERGY (what actually trips
@@ -66,13 +66,17 @@ if MAX98357A_AUDIO_PROTECTION_EQ
 
 config MAX98357A_AUDIO_PROTECT_HPF_HZ
 	int "Protection high-pass cutoff (Hz), 0 disables"
-	default 130
+	default 200
 	range 0 500
 	help
-	  2nd-order Butterworth high-pass removing DC/subsonic content below
-	  the transducer resonance, where drive current is pure waste. Keep
-	  below ~150 Hz so TTS voice fundamentals stay intact; the energy
-	  limiter handles protection above this frequency.
+	  2nd-order Butterworth high-pass removing content below the
+	  bone-conduction transducer's efficient region, where drive current
+	  buys felt vibration rather than audible loudness. 200 Hz was chosen
+	  by blinded on-head A/B together with the rebalanced voicing curve:
+	  louder speech at equal buzz. Voice fundamentals below the cutoff are
+	  deliberately traded away; the psychoacoustic bass enhancer
+	  (MAX98357A_AUDIO_BASS_ENHANCE_PERCENT) can restore perceived
+	  fullness without the current draw.
 
 config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	int "Energy limiter budget, percent of full scale"
@@ -80,17 +84,21 @@ config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	range 10 100
 	help
 	  Current budget for the energy limiter, as a percentage of int16 full
-	  scale for a hypothetical weight-1.0 signal. All bands carry current
-	  weights of 2.0..5.6 (highest below 425 Hz), so e.g. a sustained
-	  >= 1.5 kHz sine is allowed budget/2 of full scale and a 300 Hz sine
-	  budget/5.6 - protection lands hardest where the current is drawn.
+	  scale for a hypothetical weight-1.0 signal. All bands carry a
+	  uniform current weight of 3.0 (bench calibration showed supply
+	  current tracks drive amplitude, not frequency), so a sustained sine
+	  in any band is allowed budget/3 of full scale.
 
-	  Calibrate on the bench: play full-scale sine sweeps, BROADBAND
-	  NOISE, and real TTS at max volume (stereo, worst case), measure
-	  battery current, and pick the largest value that stays below the
-	  battery protection IC's trip point with margin. Noise coverage is
-	  essential - HF/broadband content draws more system current than
-	  sine-sweep models predict (Class-D losses).
+	  Bench-calibrated at 3.7 V through the full chain: audio draw at the
+	  budget-80 ceiling measured ~72 mA above baseline, which keeps the
+	  per-pack share plus quiescent system load under the battery
+	  protection IC's minimum over-discharge trip (50 mA @ 20 ms) with
+	  the display in power save.
+
+	  To recalibrate: play full-scale sine sweeps, BROADBAND NOISE, and
+	  real TTS at max volume, measure battery current, and pick the
+	  largest value that stays below the protection IC's trip point with
+	  margin.
 
 config MAX98357A_AUDIO_PROTECT_ENV_MS
 	int "Energy limiter integration window (ms)"

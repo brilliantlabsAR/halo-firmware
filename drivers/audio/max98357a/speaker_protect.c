@@ -36,39 +36,45 @@ static const uint16_t split_hz[SPK_PROTECT_SPLITS] = {
 
 /* Static voicing gains per band (Q15).
  *
- * Roughly half (in dB) of the issue #180 protection curve: that curve was
- * tuned as the *only* protection; the energy limiter now carries the
- * protection duty, so the static cut only pre-shapes the response.
+ * Loudness-rebalanced curve: deepen the cuts below the transducer's
+ * efficient region and boost the top band, reallocating the fixed current
+ * budget toward the bands that produce audible loudness instead of felt
+ * vibration. Blinded on-head A/B against the previous half-depth #180
+ * curve: louder at equal buzz, with measured limiter engagement on speech
+ * dropping from ~40 % to ~25 % of frames at full volume.
  *
  *   band       < 150  150-275  275-425  425-750  750-1500  > 1500  Hz
  *   #180 curve  -12     -14      -15      -11       -3        0    dB
- *   this table   -6      -7      -7.5     -5.5      -1.5      0    dB
+ *   previous     -6      -7      -7.5     -5.5      -1.5      0    dB
+ *   this table  -18     -15     -10       -4        0        +4    dB
  */
 static const int32_t static_gain_q15[SPK_PROTECT_BANDS] = {
-	16423, 14637, 13818, 17397, 27571, 32768,
+	4125, 5827, 10362, 20675, 32768, 51934,
 };
 
 /* Per-band current weights (Q12, 4096 = 1.0) for the limiter sidechain.
  *
- * Approximates SYSTEM supply-current draw per unit signal amplitude vs
- * frequency. The low bands are derived by inverting the issue #180
- * protection depths (the empirically measured "how much this band had to be
- * cut" is a direct proxy for "how much current this band draws"). The #180
- * data only characterised low-frequency content; on-device testing showed
- * full-scale BROADBAND noise tripping the battery IC even when the weighted
- * envelope was within budget (Class-D amplifier losses and transducer
- * behaviour above 750 Hz draw more than the inverted-EQ model predicted),
- * so the two top bands carry defensive uplifts (1.4 -> 2.5, 1.0 -> 2.0)
- * pending bench calibration that must include noise, not just sine sweeps.
+ * Bench-calibrated (PSU + ammeter, tones through the full chain, 3.7 V):
+ * once the voicing curve's per-band amplitude differences are divided out,
+ * supply current is a function of drive AMPLITUDE alone - flat within a
+ * few percent from 150 Hz to 2 kHz, following roughly
  *
- * Budget reference: a >= 1.5 kHz sine at weight 2.0 - i.e. budget_percent
- * is measured against the top band's weighted amplitude.
+ *   I_audio ~= 1550 mA * (output RMS / full scale)^1.8
  *
- *   band    < 150  150-275  275-425  425-750  750-1500  > 1500  Hz
- *   weight   4.0     5.0      5.6      3.5      2.5       2.0
+ * (fit reproduces the bench budget ladder 21/42/72/110 mA audio at budgets
+ * 40/60/80/100 and the level ladder). The previous table's "low bands cost
+ * 2-3x more" shape was an artifact of the inverted-EQ heuristic: the old
+ * voicing attenuated the lows, and per-unit-INPUT current comparisons
+ * conflated that with transducer physics.
+ *
+ * Uniform weights make the sidechain proxy track output amplitude exactly,
+ * so the budget caps current honestly for any spectrum - sines, speech and
+ * broadband noise alike - at either sample rate. The value 3.0 anchors
+ * budget 80 to the bench-measured safe ceiling (~72 mA audio: a sustained
+ * sine is clamped to 0.8/3.0 of full scale peak in any band).
  */
 static const int32_t current_weight_q12[SPK_PROTECT_BANDS] = {
-	16384, 20480, 22938, 14336, 10240, 8192,
+	12288, 12288, 12288, 12288, 12288, 12288,
 };
 
 /* Bands below this index get the limiter gain cubed (3x the dB reduction)

@@ -17,9 +17,10 @@
  *                                     resonance where current is pure waste)
  *     -> 6-band split                (cascaded one-pole low-passes; magnitude
  *                                     complementary, cheap, phase coherent)
- *     -> static voicing gains        (mild; roughly half the issue #180
- *                                     protection depths in dB - the energy
- *                                     limiter below now carries protection)
+ *     -> static voicing gains        (loudness rebalance: cut the
+ *                                     vibrotactile lows, boost the audible
+ *                                     top band - the energy limiter below
+ *                                     carries the protection duty)
  *     -> current-proxy energy limiter:
  *          sidechain = sum over channels of |sum(band * current_weight)|,
  *          squared and leaky-integrated over ~ENV ms to approximate the
@@ -36,15 +37,15 @@
  *
  * Budget calibration: budget_percent is the amplitude, as a percentage of
  * int16 full scale, of a hypothetical weight-1.0 sine whose steady-state
- * weighted energy the limiter will allow. Every band carries a current
- * weight >= 2.0 (see current_weight_q12), so e.g. a >= 1.5 kHz sine
- * (weight 2.0) is allowed budget/2 of full scale sustained, and a 300 Hz
- * sine (weight 5.6) budget/5.6. Calibrate on the bench with full-scale
- * sine sweeps, BROADBAND NOISE, and real TTS at max volume in stereo:
- * find the largest budget that keeps battery current below the protection
- * IC's trip point with margin, and set the Kconfig default accordingly.
- * (Noise matters: the field failure that motivated the HF weight uplifts
- * was full-scale broadband garbage from a misconfigured LC3 decoder.)
+ * weighted energy the limiter will allow. The current weights are uniform
+ * 3.0 (bench calibration showed supply current tracks drive amplitude,
+ * not frequency - see current_weight_q12 in the .c), so a sustained sine
+ * in any band is allowed budget/3 of full scale. Calibrate on the bench
+ * with full-scale sine sweeps, BROADBAND NOISE, and real TTS at max
+ * volume: find the largest budget that keeps battery current below the
+ * protection IC's trip point with margin, and set the Kconfig default
+ * accordingly. (Noise matters: an early field failure was full-scale
+ * broadband garbage from a misconfigured LC3 decoder.)
  */
 
 #ifndef SPEAKER_PROTECT_H_
