@@ -209,6 +209,7 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 		.release_ms = CONFIG_MAX98357A_AUDIO_PROTECT_RELEASE_MS,
 		.ramp_ms = CONFIG_MAX98357A_AUDIO_PROTECT_RAMP_MS,
 		.bass_drive_percent = CONFIG_MAX98357A_AUDIO_BASS_ENHANCE_PERCENT,
+		.peak_cap_percent = CONFIG_MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT,
 	};
 
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
@@ -220,6 +221,8 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 	params.ramp_ms = tune_or(data->tune.ramp_ms, params.ramp_ms);
 	params.bass_drive_percent =
 		tune_or(data->tune.bass_percent, params.bass_drive_percent);
+	params.peak_cap_percent =
+		tune_or(data->tune.peak_percent, params.peak_cap_percent);
 #endif
 
 	data->prot_ready = (spk_protect_init(&data->prot, &params) == 0);
@@ -363,13 +366,16 @@ int max98357a_audio_protect_get(const struct device *dev,
 	out->ramp_ms = tune_or(out->ramp_ms, CONFIG_MAX98357A_AUDIO_PROTECT_RAMP_MS);
 	out->bass_percent =
 		tune_or(out->bass_percent, CONFIG_MAX98357A_AUDIO_BASS_ENHANCE_PERCENT);
+	out->peak_percent =
+		tune_or(out->peak_percent,
+			CONFIG_MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT);
 	return 0;
 }
 
 int max98357a_audio_protect_stats(const struct device *dev,
 				  int32_t *min_gain_q15, uint32_t *frames,
 				  uint32_t *limited_frames, int32_t *peak_out,
-				  bool reset)
+				  uint32_t *peak_capped_frames, bool reset)
 {
 	struct max98357a_audio_data *data = dev->data;
 	struct spk_protect_stats stats;
@@ -378,6 +384,9 @@ int max98357a_audio_protect_stats(const struct device *dev,
 		return -ENODEV;
 	}
 	spk_protect_stats_read(&data->prot, &stats, reset);
+	if (peak_capped_frames) {
+		*peak_capped_frames = stats.peak_capped_frames;
+	}
 	if (min_gain_q15) {
 		*min_gain_q15 = stats.min_gain_q15;
 	}
@@ -892,6 +901,7 @@ static int max98357a_audio_init(const struct device *dev)
 	data->tune.release_ms = -1;
 	data->tune.ramp_ms = -1;
 	data->tune.bass_percent = -1;
+	data->tune.peak_percent = -1;
 #endif
 #endif
 

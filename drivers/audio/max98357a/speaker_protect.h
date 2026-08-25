@@ -82,6 +82,14 @@ struct spk_protect_params {
 	int bass_drive_percent; /**< psychoacoustic bass harmonic mix, percent
 				 *   of the source-band level; 0 disables,
 				 *   up to 200 */
+	int peak_cap_percent;   /**< true-peak clamp on the instantaneous
+				 *   weighted drive, % of full scale (same
+				 *   units as budget_percent); guards the
+				 *   battery IC's fast short-circuit
+				 *   comparator against transients inside the
+				 *   energy sidechain's ~env_ms blind window.
+				 *   Must sit above the budget (crest room);
+				 *   0 disables */
 };
 
 /** Limiter activity counters; see spk_protect_stats_read(). */
@@ -90,6 +98,7 @@ struct spk_protect_stats {
 	uint32_t frames;        /**< frames processed */
 	uint32_t limited_frames;/**< frames with gain below unity */
 	int32_t peak_out;       /**< largest |output sample| */
+	uint32_t peak_capped_frames; /**< frames the true-peak clamp engaged */
 };
 
 /** Per-channel filter state. */
@@ -162,6 +171,11 @@ struct spk_protect {
 	int32_t hold_samples;   /**< configured hold length */
 	int32_t hold_left;      /**< frames of hold remaining */
 	int32_t release_shift;  /**< gain += (ONE - gain) >> shift per frame */
+
+	/* True-peak current clamp (instant attack, ~4 ms release) */
+	int64_t peak_cap;          /**< cap in weighted proxy units; 0 = off */
+	int32_t peak_gain_q15;     /**< current clamp gain */
+	int32_t peak_release_shift;/**< release: gain += (target-gain) >> shift */
 
 	/* Onset ramp */
 	int32_t ramp_q15;       /**< 0..Q15_ONE */

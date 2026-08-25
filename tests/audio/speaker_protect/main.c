@@ -736,6 +736,106 @@ static void test_budget_drop(void)
 	      rms(buf + N / 2, N / 2));
 }
 
+static void test_peak_cap(void)
+{
+	printf("true-peak current clamp (fricative-spike regression, latched IC on HW):\n");
+
+	/* A pregain-boosted broadband onset from silence: the energy
+	 * sidechain is blind for ~env_ms, so without the cap the first
+	 * milliseconds pass at full boosted amplitude.
+	 */
+	enum { N = FS / 4 };
+	static int16_t buf[N], ref[N];
+	struct spk_protect sp;
+	struct spk_protect_params p = params_default(1);
+	uint32_t state = 0xCAFEBABEu;
+
+	p.ramp_ms = 0;
+	/* The hardware latch happened at budget 100: the energy limiter's
+	 * first-frame attack is weakest there, letting the onset emit ~4x
+	 * weighted before the integrator converges. Mirror that.
+	 */
+	p.budget_percent = 100;
+	p.peak_cap_percent = 300;
+
+	for (size_t i = 0; i < N; i++) {
+		state = state * 1664525u + 1013904223u;
+		/* silence, then a full-scale noise burst (fricative-ish) */
+		buf[i] = (i < N / 2) ? 0 : (int16_t)(state >> 16);
+	}
+	memcpy(ref, buf, sizeof(buf));
+
+	spk_protect_init(&sp, &p);
+	spk_protect_set_pregain(&sp, spk_protect_db10_to_q15(120)); /* +12 dB */
+	spk_protect_process(&sp, buf, N);
+
+	/* Reconstruct the weighted output amplitude sample by sample with
+	 * the independent sidechain's band split (per-sample |p|, no
+	 * integrator) and find the worst instantaneous excursion in the
+	 * onset window.
+	 */
+	struct ref_sidechain rc;
+
+	ref_sidechain_init(&rc, FS, p.env_ms);
+	double worst = 0;
+
+	for (size_t i = 0; i < N; i++) {
+		double x = buf[i], prev = 0, wsum = 0;
+
+		for (int b = 0; b < 6; b++) {
+			double band;
+
+			if (b < 5) {
+				rc.lp[b] += rc.alpha[b] * (x - rc.lp[b]);
+				band = rc.lp[b] - prev;
+				prev = rc.lp[b];
+			} else {
+				band = x - prev;
+			}
+			wsum += band * ref_weight[b];
+		}
+		if (i >= N / 2 && fabs(wsum) > worst) {
+			worst = fabs(wsum);
+		}
+	}
+
+	double cap = 32767.0 * 3.0; /* 300 % in weighted units */
+
+	CHECK(worst <= cap * 1.15,
+	      "boosted onset instantaneous weighted drive %.0f <= cap %.0f (x%.2f)",
+	      worst, cap, worst / cap);
+
+	struct spk_protect_stats st;
+
+	spk_protect_stats_read(&sp, &st, true);
+	CHECK(st.peak_capped_frames > 0,
+	      "clamp engaged on the onset (%u frames)", st.peak_capped_frames);
+
+	/* Below-cap content must be untouched: identical output with the
+	 * cap on and off.
+	 */
+	static int16_t a[FS / 4], b2[FS / 4];
+
+	for (size_t i = 0; i < N; i++) {
+		a[i] = (int16_t)lrint(0.4 * 32767.0 *
+				      sin(2.0 * PI * 700.0 * i / FS));
+	}
+	memcpy(b2, a, sizeof(a));
+
+	p = params_default(1);
+	p.ramp_ms = 0;
+	p.peak_cap_percent = 0;
+	spk_protect_init(&sp, &p);
+	spk_protect_process(&sp, a, N);
+
+	p.peak_cap_percent = 300;
+	spk_protect_init(&sp, &p);
+	spk_protect_process(&sp, b2, N);
+
+	CHECK(memcmp(a, b2, sizeof(a)) == 0,
+	      "normal content bit-exact with the cap enabled");
+}
+
 static void test_param_validation(void)
 {
 	printf("parameter validation:\n");
@@ -757,6 +857,9 @@ static void test_param_validation(void)
 	ok &= (spk_protect_init(&sp, &p) != 0);
 	p = params_default(1);
 	p.bass_drive_percent = 201;
+	ok &= (spk_protect_init(&sp, &p) != 0);
+	p = params_default(1);
+	p.peak_cap_percent = 1001;
 	ok &= (spk_protect_init(&sp, &p) != 0);
 
 	CHECK(ok, "invalid channels/budget/cutoff/rate/drive all rejected");
@@ -782,6 +885,7 @@ int main(void)
 	test_bass_enhancer_safety();
 	test_bass_enhancer_chunk_equivalence();
 	test_budget_drop();
+	test_peak_cap();
 	test_param_validation();
 
 	printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL TESTS PASSED",

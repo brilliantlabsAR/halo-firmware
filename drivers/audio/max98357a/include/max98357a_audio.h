@@ -115,6 +115,7 @@ struct max98357a_protect_tuning {
 	int release_ms;     /**< -1 = Kconfig default */
 	int ramp_ms;        /**< -1 = Kconfig default */
 	int bass_percent;   /**< psychoacoustic bass drive; -1 = Kconfig default */
+	int peak_percent;   /**< true-peak weighted-drive cap; -1 = Kconfig default */
 	int pregain_db10;   /**< digital pre-gain, dB*10; 0 = unity, max +120 */
 	bool voicing_set;   /**< false = built-in voicing curve */
 	int voicing_db10[6];/**< static voicing gains, dB*10 per band */
@@ -165,12 +166,13 @@ int max98357a_audio_protect_get(const struct device *dev,
  * @param frames         frames processed
  * @param limited_frames frames spent below unity gain
  * @param peak_out       largest |output sample|
+ * @param peak_capped_frames frames the true-peak clamp engaged
  * @param reset          clear the counters after reading
  */
 int max98357a_audio_protect_stats(const struct device *dev,
 				  int32_t *min_gain_q15, uint32_t *frames,
 				  uint32_t *limited_frames, int32_t *peak_out,
-				  bool reset);
+				  uint32_t *peak_capped_frames, bool reset);
 
 /**
  * @brief Configure MAX98357A audio stream

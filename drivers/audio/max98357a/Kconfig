@@ -102,6 +102,26 @@ config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	  largest value that stays below the protection IC's trip point with
 	  margin.
 
+config MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT
+	int "True-peak weighted-drive cap, percent of full scale (0 disables)"
+	default 300
+	range 0 1000
+	help
+	  Instantaneous cap on the current-weighted output amplitude, in the
+	  same units as the energy budget. The energy limiter's sidechain
+	  integrates over ~PROTECT_ENV_MS and is blind to the first
+	  milliseconds of a transient, but the battery protection IC's
+	  short-circuit comparator reacts in hundreds of microseconds -
+	  on hardware, a pregain-boosted fricative onset latched the IC
+	  while sustained content at the same budget survived. This clamp
+	  reacts within one sample (instant attack, ~4 ms release).
+
+	  Normal speech peaks reach roughly 150-200 % weighted; the
+	  transients that tripped the IC computed at 400 %+. The default
+	  300 sits between: inaudible in normal operation, engaged only on
+	  trip-class spikes. Must sit above the energy budget (the budget
+	  needs crest headroom to do its job).
+
 config MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP
 	int "Budget reduction while the display is active (percent points)"
 	default 20

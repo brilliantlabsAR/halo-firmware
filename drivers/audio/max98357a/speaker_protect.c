@@ -193,6 +193,9 @@ int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *pa
 	if (params->bass_drive_percent < 0 || params->bass_drive_percent > 200) {
 		return -1;
 	}
+	if (params->peak_cap_percent < 0 || params->peak_cap_percent > 1000) {
+		return -1;
+	}
 
 	memset(sp, 0, sizeof(*sp));
 	sp->params = *params;
@@ -282,6 +285,16 @@ int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *pa
 		sp->ramp_step = Q15_ONE;
 	}
 
+	/* --- True-peak current clamp: cap in weighted proxy units
+	 * (sample domain x weight, like frame_proxy); ~4 ms release.
+	 */
+	sp->peak_cap = (32767LL * params->peak_cap_percent) / 100;
+	sp->peak_release_shift = ilog2_i32(
+		(int32_t)((int64_t)params->sample_rate * 4 / 1000));
+	if (sp->peak_release_shift < 1) {
+		sp->peak_release_shift = 1;
+	}
+
 	spk_protect_reset(sp);
 	return 0;
 }
@@ -297,6 +310,7 @@ void spk_protect_reset(struct spk_protect *sp)
 	sp->gain_q15 = Q15_ONE;
 	sp->hold_left = 0;
 	sp->ramp_q15 = (sp->params.ramp_ms > 0) ? 0 : Q15_ONE;
+	sp->peak_gain_q15 = Q15_ONE;
 	/* A (re)started stream fades in from silence anyway: land any
 	 * pending budget slew instead of carrying it across streams.
 	 */
@@ -382,6 +396,7 @@ void spk_protect_stats_read(struct spk_protect *sp,
 		sp->stats.frames = 0;
 		sp->stats.limited_frames = 0;
 		sp->stats.peak_out = 0;
+		sp->stats.peak_capped_frames = 0;
 	}
 }
 
@@ -634,6 +649,39 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			}
 		}
 
+		/* --- True-peak current clamp, once per frame ---
+		 * The energy sidechain needs ~env_ms to see a transient, but
+		 * the battery IC's short-circuit comparator reacts in
+		 * hundreds of microseconds - a pregain-boosted fricative
+		 * onset can latch it inside that blind window (observed on
+		 * hardware). Cap the post-gain instantaneous weighted drive
+		 * immediately: instant attack, ~4 ms release. The estimate
+		 * uses the broadband gain; the LF duck only cuts further, so
+		 * it is conservative.
+		 */
+		if (sp->peak_cap > 0) {
+			int64_t out_est = (frame_proxy * sp->gain_q15) >> 15;
+			int32_t pt = Q15_ONE;
+
+			if (out_est > sp->peak_cap) {
+				pt = (int32_t)((sp->peak_cap << 15) / out_est);
+			}
+			if (pt < sp->peak_gain_q15) {
+				sp->peak_gain_q15 = pt;  /* instant attack */
+			} else if (sp->peak_gain_q15 < pt) {
+				int32_t step = (pt - sp->peak_gain_q15) >>
+					       sp->peak_release_shift;
+
+				sp->peak_gain_q15 += (step > 0) ? step : 1;
+				if (sp->peak_gain_q15 > pt) {
+					sp->peak_gain_q15 = pt;
+				}
+			}
+			if (sp->peak_gain_q15 < Q15_ONE) {
+				sp->stats.peak_capped_frames++;
+			}
+		}
+
 		/* --- Recombine with LF-first ducking, write frame out --- */
 		int32_t g = sp->gain_q15;
 		int32_t g2 = (int32_t)(((int64_t)g * g) >> 15);
@@ -642,6 +690,9 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			int64_t y = ((y_lf[c] * g2) >> 15) + y_hf[c];
 
 			y = (y * g) >> 15;      /* broadband gain */
+			if (sp->peak_gain_q15 < Q15_ONE) {
+				y = (y * sp->peak_gain_q15) >> 15;
+			}
 			y >>= 15;               /* Q15-extended -> samples */
 
 			/* Soft-knee clipper, +/-90 % FS knee, 1/4 slope */
