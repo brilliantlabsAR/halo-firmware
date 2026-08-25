@@ -98,6 +98,53 @@ void max98357a_audio_tx_diag_get(struct max98357a_audio_tx_diag *out);
 void max98357a_audio_tx_diag_zero(void);
 
 /**
+ * @brief Runtime overrides for the current-protection chain (bench tuning).
+ *
+ * Available when CONFIG_MAX98357A_AUDIO_PROTECT_TUNING is enabled. A tune
+ * call REPLACES the whole override set: scalar fields at -1 (and unset
+ * voicing/weights) fall back to their Kconfig/built-in defaults, so an
+ * empty struct (scalars -1, flags false, pregain 0) restores stock
+ * behaviour. Overrides take effect immediately when the stream is stopped,
+ * otherwise at the next stream start.
+ */
+struct max98357a_protect_tuning {
+	int hpf_hz;         /**< -1 = Kconfig default */
+	int budget_percent; /**< -1 = Kconfig default */
+	int env_ms;         /**< -1 = Kconfig default */
+	int hold_ms;        /**< -1 = Kconfig default */
+	int release_ms;     /**< -1 = Kconfig default */
+	int ramp_ms;        /**< -1 = Kconfig default */
+	int bass_percent;   /**< psychoacoustic bass drive; -1 = Kconfig default */
+	int pregain_db10;   /**< digital pre-gain, dB*10; 0 = unity, max +120 */
+	bool voicing_set;   /**< false = built-in voicing curve */
+	int voicing_db10[6];/**< static voicing gains, dB*10 per band */
+	bool weights_set;   /**< false = built-in current weights */
+	int weights_x100[6];/**< limiter current weights * 100 per band */
+};
+
+/** @brief Apply protection-chain overrides (see struct docs). */
+int max98357a_audio_protect_tune(const struct device *dev,
+				 const struct max98357a_protect_tuning *tuning);
+
+/** @brief Read back the stored overrides, scalars resolved to effective values. */
+int max98357a_audio_protect_get(const struct device *dev,
+				struct max98357a_protect_tuning *out);
+
+/**
+ * @brief Read limiter activity since the last reset.
+ *
+ * @param min_gain_q15   lowest limiter gain seen (32768 = never limited)
+ * @param frames         frames processed
+ * @param limited_frames frames spent below unity gain
+ * @param peak_out       largest |output sample|
+ * @param reset          clear the counters after reading
+ */
+int max98357a_audio_protect_stats(const struct device *dev,
+				  int32_t *min_gain_q15, uint32_t *frames,
+				  uint32_t *limited_frames, int32_t *peak_out,
+				  bool reset);
+
+/**
  * @brief Configure MAX98357A audio stream
  *
  * @param dev MAX98357A device

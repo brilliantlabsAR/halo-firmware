@@ -78,6 +78,17 @@ struct spk_protect_params {
 	int hold_ms;         /**< limiter hold before release starts */
 	int release_ms;      /**< limiter release time constant */
 	int ramp_ms;         /**< onset ramp after reset; 0 disables */
+	int bass_drive_percent; /**< psychoacoustic bass harmonic mix, percent
+				 *   of the source-band level; 0 disables,
+				 *   up to 200 */
+};
+
+/** Limiter activity counters; see spk_protect_stats_read(). */
+struct spk_protect_stats {
+	int32_t min_gain_q15;   /**< lowest limiter gain seen (Q15) */
+	uint32_t frames;        /**< frames processed */
+	uint32_t limited_frames;/**< frames with gain below unity */
+	int32_t peak_out;       /**< largest |output sample| */
 };
 
 /** Per-channel filter state. */
@@ -87,6 +98,14 @@ struct spk_protect_channel {
 	int64_t hpf_z2;
 	/* One-pole low-pass states, Q15-extended sample domain */
 	int32_t lp[SPK_PROTECT_SPLITS];
+	/* Psychoacoustic bass enhancer states (Q15-extended) */
+	int32_t bass_lp_lo;   /**< source band low edge (60 Hz LP) */
+	int32_t bass_lp_hi;   /**< source band high edge (240 Hz LP, pole 1) */
+	int32_t bass_lp_hi2;  /**< source band high edge (240 Hz LP, pole 2:
+			       *   12 dB/oct keeps voice mids out of the
+			       *   rectifier) */
+	int32_t bass_lp_dc;   /**< DC/fundamental tracker on rectified band */
+	int32_t bass_lp_out;  /**< harmonic top shaping (900 Hz LP) */
 };
 
 struct spk_protect {
@@ -98,6 +117,28 @@ struct spk_protect {
 
 	/* One-pole split coefficients (Q15) */
 	int32_t alpha_q15[SPK_PROTECT_SPLITS];
+
+	/* Per-instance voicing gains / current weights (defaults copied at
+	 * init; overridable for bench tuning via the setters below).
+	 */
+	int32_t voicing_q15[SPK_PROTECT_BANDS];
+	int32_t weight_q12[SPK_PROTECT_BANDS];
+
+	/* Digital pre-gain applied before the HPF (Q15; may exceed unity up
+	 * to 4x). The limiter sidechain sees the boosted signal, so the
+	 * energy budget still caps real transducer drive.
+	 */
+	int32_t pregain_q15;
+
+	struct spk_protect_stats stats;
+
+	/* Psychoacoustic bass enhancer */
+	bool bass_enabled;
+	int32_t bass_drive_q15;   /**< harmonic mix gain */
+	int32_t bass_alpha_lo;    /**< one-pole alphas (Q15) */
+	int32_t bass_alpha_hi;
+	int32_t bass_alpha_dc;
+	int32_t bass_alpha_out;
 
 	struct spk_protect_channel ch[SPK_PROTECT_MAX_CHANNELS];
 
@@ -146,6 +187,42 @@ static inline int32_t spk_protect_gain_q15(const struct spk_protect *sp)
 {
 	return sp->gain_q15;
 }
+
+/**
+ * @brief Override the static voicing gains (Q15 per band).
+ *
+ * NULL restores the built-in defaults. Takes effect from the next sample.
+ */
+void spk_protect_set_voicing(struct spk_protect *sp,
+			     const int32_t gains_q15[SPK_PROTECT_BANDS]);
+
+/**
+ * @brief Override the limiter sidechain current weights (Q12 per band).
+ *
+ * NULL restores the built-in defaults.
+ */
+void spk_protect_set_weights(struct spk_protect *sp,
+			     const int32_t weights_q12[SPK_PROTECT_BANDS]);
+
+/**
+ * @brief Set the digital pre-gain (Q15; clamped to [0, 4 * Q15_ONE]).
+ */
+void spk_protect_set_pregain(struct spk_protect *sp, int32_t pregain_q15);
+
+/** @brief dB*10 (e.g. -75 = -7.5 dB) to Q15 linear gain; saturates at 4x. */
+int32_t spk_protect_db10_to_q15(int db10);
+
+/**
+ * @brief Read limiter activity counters accumulated since the last reset.
+ *
+ * @param reset clear the counters after reading
+ */
+void spk_protect_stats_read(struct spk_protect *sp,
+			    struct spk_protect_stats *out, bool reset);
+
+/** @brief Built-in default tables (Q15 gains / Q12 weights). */
+const int32_t *spk_protect_default_voicing(void);
+const int32_t *spk_protect_default_weights(void);
 
 #ifdef __cplusplus
 }

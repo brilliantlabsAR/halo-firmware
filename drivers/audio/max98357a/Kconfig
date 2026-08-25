@@ -128,6 +128,37 @@ config MAX98357A_AUDIO_PROTECT_RAMP_MS
 	  turn-on inrush current so it does not coincide with a full-level
 	  first buffer (a classic battery-protection trip scenario).
 
+config MAX98357A_AUDIO_BASS_ENHANCE_PERCENT
+	int "Psychoacoustic bass harmonic drive (percent), 0 disables"
+	default 0
+	range 0 200
+	help
+	  Recover perceived bass fullness without the current draw: the
+	  60-240 Hz band (which the HPF and protection remove from the
+	  transducer) is full-wave rectified to generate even harmonics,
+	  band-shaped into 180-900 Hz and mixed back in before the HPF.
+	  The ear reconstructs the missing fundamental from the harmonic
+	  series, so TTS voice sounds full while the transducer is never
+	  driven at the frequencies that trip the battery IC.
+
+	  The harmonics enter the chain ahead of the sidechain and limiter,
+	  so this cannot raise output energy past the protection budget.
+
+	  100 mixes the shaped harmonics at unity relative to the extracted
+	  band; tune by ear (60-120 is a sensible range). Note the lower
+	  half of the harmonic band (180-425 Hz) is inside the vibrotactile
+	  range, so verify felt vibration (not just sound) when raising it.
+
+config MAX98357A_AUDIO_PROTECT_TUNING
+	bool "Runtime protection-chain tuning API (bench/lab builds)"
+	default n
+	help
+	  Expose max98357a_audio_protect_tune()/get()/stats(): runtime
+	  overrides for the HPF cutoff, energy budget, limiter timing, static
+	  voicing gains and sidechain current weights, plus a digital pre-gain
+	  and limiter-activity telemetry. For bench characterisation and
+	  listening-test builds; leave off in production images.
+
 endif # MAX98357A_AUDIO_PROTECTION_EQ
 
 endif # MAX98357A_AUDIO

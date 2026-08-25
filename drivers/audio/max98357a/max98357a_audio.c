@@ -42,6 +42,10 @@ struct max98357a_audio_data {
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
 	struct spk_protect prot;                   /* current-protection DSP chain */
 	bool prot_ready;                           /* init succeeded for current config */
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+	struct max98357a_protect_tuning tune;      /* runtime overrides */
+	bool tune_dirty;                           /* apply at next stream start */
+#endif
 #endif
 };
 
@@ -163,6 +167,14 @@ static struct max98357a_block_ctx queue_pop(void) {
 	return ctx;
 }
 
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+/* Scalar override helper: -1 = keep the Kconfig default. */
+static inline int tune_or(int override, int fallback)
+{
+	return (override >= 0) ? override : fallback;
+}
+#endif
+
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
 static void max98357a_protect_init(struct max98357a_audio_data *data)
 {
@@ -175,16 +187,135 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 		.hold_ms = CONFIG_MAX98357A_AUDIO_PROTECT_HOLD_MS,
 		.release_ms = CONFIG_MAX98357A_AUDIO_PROTECT_RELEASE_MS,
 		.ramp_ms = CONFIG_MAX98357A_AUDIO_PROTECT_RAMP_MS,
+		.bass_drive_percent = CONFIG_MAX98357A_AUDIO_BASS_ENHANCE_PERCENT,
 	};
+
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+	params.hpf_cutoff_hz = tune_or(data->tune.hpf_hz, params.hpf_cutoff_hz);
+	params.budget_percent = tune_or(data->tune.budget_percent, params.budget_percent);
+	params.env_ms = tune_or(data->tune.env_ms, params.env_ms);
+	params.hold_ms = tune_or(data->tune.hold_ms, params.hold_ms);
+	params.release_ms = tune_or(data->tune.release_ms, params.release_ms);
+	params.ramp_ms = tune_or(data->tune.ramp_ms, params.ramp_ms);
+	params.bass_drive_percent =
+		tune_or(data->tune.bass_percent, params.bass_drive_percent);
+#endif
 
 	data->prot_ready = (spk_protect_init(&data->prot, &params) == 0);
 	if (!data->prot_ready) {
 		LOG_ERR("speaker protection init failed (rate %u ch %d) - "
 			"audio will play unprotected",
 			data->config.sample_rate, params.channels);
+		return;
 	}
+
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+	if (data->tune.voicing_set) {
+		int32_t gains[SPK_PROTECT_BANDS];
+
+		for (int i = 0; i < SPK_PROTECT_BANDS; i++) {
+			gains[i] = spk_protect_db10_to_q15(data->tune.voicing_db10[i]);
+		}
+		spk_protect_set_voicing(&data->prot, gains);
+	}
+	if (data->tune.weights_set) {
+		int32_t weights[SPK_PROTECT_BANDS];
+
+		for (int i = 0; i < SPK_PROTECT_BANDS; i++) {
+			weights[i] = (int32_t)(((int64_t)data->tune.weights_x100[i] * 4096) / 100);
+		}
+		spk_protect_set_weights(&data->prot, weights);
+	}
+	if (data->tune.pregain_db10 != 0) {
+		spk_protect_set_pregain(&data->prot,
+					spk_protect_db10_to_q15(data->tune.pregain_db10));
+	}
+	data->tune_dirty = false;
+#endif
 }
 #endif
+
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+int max98357a_audio_protect_tune(const struct device *dev,
+				 const struct max98357a_protect_tuning *tuning)
+{
+	struct max98357a_audio_data *data = dev->data;
+
+	if (!tuning) {
+		return -EINVAL;
+	}
+	if (tuning->pregain_db10 < -600 || tuning->pregain_db10 > 120) {
+		return -EINVAL;
+	}
+	if (tuning->budget_percent > 100 ||
+	    (tuning->budget_percent == 0)) {
+		return -EINVAL;
+	}
+
+	data->tune = *tuning;
+
+	/* Streams re-init the chain at START; when idle (or never
+	 * configured) apply immediately so the next play uses it even if
+	 * the stream config is unchanged.
+	 */
+	if (data->configured && data->state != MAX98357A_AUDIO_TRIGGER_START) {
+		max98357a_protect_init(data);
+	} else {
+		data->tune_dirty = true;
+	}
+
+	return 0;
+}
+
+int max98357a_audio_protect_get(const struct device *dev,
+				struct max98357a_protect_tuning *out)
+{
+	struct max98357a_audio_data *data = dev->data;
+
+	if (!out) {
+		return -EINVAL;
+	}
+	*out = data->tune;
+	out->hpf_hz = tune_or(out->hpf_hz, CONFIG_MAX98357A_AUDIO_PROTECT_HPF_HZ);
+	out->budget_percent =
+		tune_or(out->budget_percent, CONFIG_MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT);
+	out->env_ms = tune_or(out->env_ms, CONFIG_MAX98357A_AUDIO_PROTECT_ENV_MS);
+	out->hold_ms = tune_or(out->hold_ms, CONFIG_MAX98357A_AUDIO_PROTECT_HOLD_MS);
+	out->release_ms =
+		tune_or(out->release_ms, CONFIG_MAX98357A_AUDIO_PROTECT_RELEASE_MS);
+	out->ramp_ms = tune_or(out->ramp_ms, CONFIG_MAX98357A_AUDIO_PROTECT_RAMP_MS);
+	out->bass_percent =
+		tune_or(out->bass_percent, CONFIG_MAX98357A_AUDIO_BASS_ENHANCE_PERCENT);
+	return 0;
+}
+
+int max98357a_audio_protect_stats(const struct device *dev,
+				  int32_t *min_gain_q15, uint32_t *frames,
+				  uint32_t *limited_frames, int32_t *peak_out,
+				  bool reset)
+{
+	struct max98357a_audio_data *data = dev->data;
+	struct spk_protect_stats stats;
+
+	if (!data->prot_ready) {
+		return -ENODEV;
+	}
+	spk_protect_stats_read(&data->prot, &stats, reset);
+	if (min_gain_q15) {
+		*min_gain_q15 = stats.min_gain_q15;
+	}
+	if (frames) {
+		*frames = stats.frames;
+	}
+	if (limited_frames) {
+		*limited_frames = stats.limited_frames;
+	}
+	if (peak_out) {
+		*peak_out = stats.peak_out;
+	}
+	return 0;
+}
+#endif /* CONFIG_MAX98357A_AUDIO_PROTECT_TUNING */
 
 /* Silence-feed block: while a session is open (START) and an AEC tap is
  * registered, a drained queue is fed this zero block instead of letting
@@ -334,6 +465,14 @@ static int max98357a_audio_trigger_impl(const struct device *dev,
 		if (cfg->sd_mode_gpio.port) {
 			gpio_pin_set_dt(&cfg->sd_mode_gpio, 1);
 		}
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+		/* Overrides changed while a stream was active: rebuild the
+		 * chain now, before playback begins.
+		 */
+		if (data->tune_dirty) {
+			max98357a_protect_init(data);
+		}
+#endif
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
 		/* Clear filter state (no stale transient) and restart the
 		 * onset ramp to spread turn-on inrush current.
@@ -665,6 +804,18 @@ static int max98357a_audio_init(const struct device *dev)
 	atomic_set(&data->bytes_queued, 0);
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
 	data->prot_ready = false; /* initialised on first configure */
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+	/* No overrides at boot: scalars at -1 mean "Kconfig default" (a
+	 * zeroed struct would read as hpf_hz=0 = HPF disabled).
+	 */
+	data->tune.hpf_hz = -1;
+	data->tune.budget_percent = -1;
+	data->tune.env_ms = -1;
+	data->tune.hold_ms = -1;
+	data->tune.release_ms = -1;
+	data->tune.ramp_ms = -1;
+	data->tune.bass_percent = -1;
+#endif
 #endif
 
 	LOG_INF("MAX98357A audio driver (sync) initialized; block %d x %d", MAX98357A_AUDIO_TX_BLOCK_SIZE, MAX98357A_AUDIO_TX_BLOCK_COUNT);

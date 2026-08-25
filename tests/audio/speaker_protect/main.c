@@ -49,8 +49,23 @@ static struct spk_protect_params params_default(int channels)
 		.hold_ms = 20,
 		.release_ms = 150,
 		.ramp_ms = 15,
+		.bass_drive_percent = 0,
 	};
 	return p;
+}
+
+/** Goertzel magnitude of one bin (double precision). */
+static double goertzel(const int16_t *buf, size_t n, double freq, double fs)
+{
+	double k = 2.0 * cos(2.0 * PI * freq / fs);
+	double s0, s1 = 0, s2 = 0;
+
+	for (size_t i = 0; i < n; i++) {
+		s0 = buf[i] + k * s1 - s2;
+		s2 = s1;
+		s1 = s0;
+	}
+	return sqrt(s1 * s1 + s2 * s2 - k * s1 * s2) / (n / 2.0);
 }
 
 static void gen_sine(int16_t *buf, size_t n, double freq, double amp_fs)
@@ -482,6 +497,129 @@ static void test_noise_energy_cap(void)
 	      spk_protect_gain_q15(&sp) / 32768.0);
 }
 
+static void test_bass_enhancer(void)
+{
+	printf("psychoacoustic bass enhancer:\n");
+
+	enum { N = 2 * FS };
+	static int16_t off_buf[N], on_buf[N];
+	struct spk_protect sp;
+	struct spk_protect_params p = params_default(1);
+
+	p.ramp_ms = 0;
+
+	/* -20 dBFS 100 Hz: below the HPF, inside the source band, limiter idle */
+	gen_sine(off_buf, N, 100, 0.1);
+	memcpy(on_buf, off_buf, sizeof(off_buf));
+
+	spk_protect_init(&sp, &p);          /* drive 0: enhancer off */
+	spk_protect_process(&sp, off_buf, N);
+
+	p.bass_drive_percent = 100;
+	spk_protect_init(&sp, &p);
+	spk_protect_process(&sp, on_buf, N);
+
+	/* Analyse the settled tail */
+	const int16_t *off_t = off_buf + N / 2, *on_t = on_buf + N / 2;
+	double h2_off = goertzel(off_t, N / 2, 200, FS);
+	double h2_on = goertzel(on_t, N / 2, 200, FS);
+	double h4_on = goertzel(on_t, N / 2, 400, FS);
+	double f0_on = goertzel(on_t, N / 2, 100, FS);
+
+	printf("    100 Hz in -> 100 Hz: %.0f | 200 Hz: %.0f (off: %.0f) | 400 Hz: %.0f\n",
+	       f0_on, h2_on, h2_off, h4_on);
+
+	CHECK(h2_on > 4.0 * (h2_off + 1.0),
+	      "2nd harmonic (200 Hz) generated: %.0f vs %.0f without", h2_on, h2_off);
+	/* The 130 Hz HPF only takes ~6 dB at 100 Hz, so the residual
+	 * fundamental legitimately stays larger than the harmonics. Assert a
+	 * floor on the harmonic-to-residual ratio at drive 100; the actual
+	 * voicing level is tuned by ear via the drive knob (linear scaling).
+	 */
+	CHECK(h2_on > 0.15 * f0_on,
+	      "2nd harmonic vs residual fundamental: %.2fx at drive 100 (floor 0.15)",
+	      h2_on / f0_on);
+
+	/* Content above the source band must pass clean: 1 kHz in, no 2 kHz */
+	static int16_t hf_buf[N];
+
+	gen_sine(hf_buf, N, 1000, 0.1);
+	spk_protect_init(&sp, &p);
+	spk_protect_process(&sp, hf_buf, N);
+
+	double hf_h2 = goertzel(hf_buf + N / 2, N / 2, 2000, FS);
+	double hf_f0 = goertzel(hf_buf + N / 2, N / 2, 1000, FS);
+
+	CHECK(hf_h2 < 0.02 * hf_f0,
+	      "1 kHz content stays clean (2 kHz at %.1f%% of fundamental)",
+	      100.0 * hf_h2 / hf_f0);
+}
+
+static void test_bass_enhancer_safety(void)
+{
+	printf("bass enhancer cannot break the current budget (max drive):\n");
+
+	enum { N = 2 * FS };
+	static int16_t buf[N];
+	struct spk_protect sp;
+	struct spk_protect_params p = params_default(1);
+
+	p.ramp_ms = 0;
+	p.bass_drive_percent = 200;
+	spk_protect_init(&sp, &p);
+
+	gen_sine(buf, N, 100, 1.0); /* full-scale, worst source-band case */
+	spk_protect_process(&sp, buf, N);
+
+	struct ref_sidechain ref;
+
+	ref_sidechain_init(&ref, FS, p.env_ms);
+
+	double max_env = 0;
+
+	for (size_t i = 0; i < N; i++) {
+		double env = ref_sidechain_step(&ref, &buf[i], 1);
+
+		if (i > (size_t)N / 2 && env > max_env) {
+			max_env = env;
+		}
+	}
+
+	CHECK(max_env <= budget_threshold() * 1.25,
+	      "full-scale 100 Hz at drive 200%%: energy x%.2f of budget",
+	      max_env / budget_threshold());
+}
+
+static void test_bass_enhancer_chunk_equivalence(void)
+{
+	printf("enhancer state continuity across buffer boundaries:\n");
+
+	enum { N = FS / 2 };
+	static int16_t whole[N], chunked[N];
+	struct spk_protect sp_a, sp_b;
+	struct spk_protect_params p = params_default(1);
+
+	p.bass_drive_percent = 100;
+	spk_protect_init(&sp_a, &p);
+	spk_protect_init(&sp_b, &p);
+
+	for (size_t i = 0; i < N; i++) {
+		double v = 0.6 * sin(2 * PI * 120 * i / (double)FS) +
+			   0.3 * sin(2 * PI * 800 * i / (double)FS);
+
+		whole[i] = (int16_t)lrint(30000.0 * v);
+	}
+	memcpy(chunked, whole, sizeof(whole));
+
+	spk_protect_process(&sp_a, whole, N);
+	for (size_t off = 0; off < N; off += 160) {
+		spk_protect_process(&sp_b, chunked + off, 160);
+	}
+
+	CHECK(memcmp(whole, chunked, sizeof(whole)) == 0,
+	      "chunked output bit-exact with enhancer active");
+}
+
 static void test_param_validation(void)
 {
 	printf("parameter validation:\n");
@@ -501,8 +639,11 @@ static void test_param_validation(void)
 	p = params_default(1);
 	p.sample_rate = 4000;
 	ok &= (spk_protect_init(&sp, &p) != 0);
+	p = params_default(1);
+	p.bass_drive_percent = 201;
+	ok &= (spk_protect_init(&sp, &p) != 0);
 
-	CHECK(ok, "invalid channels/budget/cutoff/rate all rejected");
+	CHECK(ok, "invalid channels/budget/cutoff/rate/drive all rejected");
 }
 
 int main(void)
@@ -521,6 +662,9 @@ int main(void)
 	test_worst_case_safety();
 	test_8k_smoke();
 	test_noise_energy_cap();
+	test_bass_enhancer();
+	test_bass_enhancer_safety();
+	test_bass_enhancer_chunk_equivalence();
 	test_param_validation();
 
 	printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL TESTS PASSED",

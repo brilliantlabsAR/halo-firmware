@@ -80,6 +80,22 @@ static const int32_t current_weight_q12[SPK_PROTECT_BANDS] = {
 #define SOFT_CLIP_KNEE  29491
 #define SOFT_CLIP_SHIFT 2
 
+/* Psychoacoustic bass enhancer corner frequencies.
+ *
+ * Source band 60-240 Hz covers the current-hungry region the HPF/EQ removes
+ * (and the TTS voice fundamentals). Full-wave rectification of that band
+ * generates even harmonics (2f, 4f, ...); the 180 Hz high-pass strips the
+ * rectifier's DC and fundamental residue and the 900 Hz low-pass keeps only
+ * the 2nd-4th harmonics, which land in the transducer's efficient region.
+ * The ear reconstructs the missing fundamental from the harmonic series
+ * (the "missing fundamental" effect), so the voice is perceived as full
+ * without the transducer being driven at the frequencies that draw current.
+ */
+#define BASS_SRC_LO_HZ   60
+#define BASS_SRC_HI_HZ   240
+#define BASS_HARM_LO_HZ  180
+#define BASS_HARM_HI_HZ  900
+
 static inline int16_t sat_i16(int32_t v)
 {
 	if (v > INT16_MAX) {
@@ -101,6 +117,14 @@ static int32_t ilog2_i32(int32_t v)
 		r++;
 	}
 	return r;
+}
+
+static int32_t one_pole_alpha_q15(int sample_rate, int freq_hz)
+{
+	double omega = 2.0 * M_PI * (double)freq_hz;
+
+	return (int32_t)((double)Q15_ONE * omega /
+			 ((double)sample_rate + omega) + 0.5);
 }
 
 /** Integer sqrt of a non-negative int64, result <= 2^31 - 1. */
@@ -144,9 +168,16 @@ int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *pa
 	    params->release_ms < 1 || params->ramp_ms < 0) {
 		return -1;
 	}
+	if (params->bass_drive_percent < 0 || params->bass_drive_percent > 200) {
+		return -1;
+	}
 
 	memset(sp, 0, sizeof(*sp));
 	sp->params = *params;
+
+	memcpy(sp->voicing_q15, static_gain_q15, sizeof(sp->voicing_q15));
+	memcpy(sp->weight_q12, current_weight_q12, sizeof(sp->weight_q12));
+	sp->pregain_q15 = Q15_ONE;
 
 	/* --- HPF: 2nd-order Butterworth (Q = 1/sqrt(2)), bilinear transform.
 	 * Double math at init only; the hot path is pure fixed point.
@@ -174,6 +205,21 @@ int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *pa
 
 		sp->alpha_q15[i] = (int32_t)((double)Q15_ONE * omega /
 					     ((double)params->sample_rate + omega) + 0.5);
+	}
+
+	/* --- Psychoacoustic bass enhancer --- */
+	if (params->bass_drive_percent > 0) {
+		sp->bass_enabled = true;
+		sp->bass_drive_q15 = (int32_t)(((int64_t)Q15_ONE *
+						params->bass_drive_percent) / 100);
+		sp->bass_alpha_lo = one_pole_alpha_q15(params->sample_rate,
+						       BASS_SRC_LO_HZ);
+		sp->bass_alpha_hi = one_pole_alpha_q15(params->sample_rate,
+						       BASS_SRC_HI_HZ);
+		sp->bass_alpha_dc = one_pole_alpha_q15(params->sample_rate,
+						       BASS_HARM_LO_HZ);
+		sp->bass_alpha_out = one_pole_alpha_q15(params->sample_rate,
+							BASS_HARM_HI_HZ);
 	}
 
 	/* --- Limiter sidechain ---
@@ -232,6 +278,128 @@ void spk_protect_reset(struct spk_protect *sp)
 	sp->gain_q15 = Q15_ONE;
 	sp->hold_left = 0;
 	sp->ramp_q15 = (sp->params.ramp_ms > 0) ? 0 : Q15_ONE;
+	/* stats deliberately survive stream restarts; they clear on init or
+	 * an explicit spk_protect_stats_read(reset=true).
+	 */
+	if (sp->stats.min_gain_q15 == 0) {
+		sp->stats.min_gain_q15 = Q15_ONE; /* fresh instance (memset) */
+	}
+}
+
+void spk_protect_set_voicing(struct spk_protect *sp,
+			     const int32_t gains_q15[SPK_PROTECT_BANDS])
+{
+	if (!sp) {
+		return;
+	}
+	memcpy(sp->voicing_q15, gains_q15 ? gains_q15 : static_gain_q15,
+	       sizeof(sp->voicing_q15));
+}
+
+void spk_protect_set_weights(struct spk_protect *sp,
+			     const int32_t weights_q12[SPK_PROTECT_BANDS])
+{
+	if (!sp) {
+		return;
+	}
+	memcpy(sp->weight_q12, weights_q12 ? weights_q12 : current_weight_q12,
+	       sizeof(sp->weight_q12));
+}
+
+void spk_protect_set_pregain(struct spk_protect *sp, int32_t pregain_q15)
+{
+	if (!sp) {
+		return;
+	}
+	if (pregain_q15 < 0) {
+		pregain_q15 = 0;
+	}
+	if (pregain_q15 > 4 * Q15_ONE) {
+		pregain_q15 = 4 * Q15_ONE;
+	}
+	sp->pregain_q15 = pregain_q15;
+}
+
+int32_t spk_protect_db10_to_q15(int db10)
+{
+	double lin = pow(10.0, (double)db10 / 200.0) * (double)Q15_ONE;
+
+	if (lin > 4.0 * Q15_ONE) {
+		lin = 4.0 * Q15_ONE;
+	}
+	return (int32_t)(lin + 0.5);
+}
+
+void spk_protect_stats_read(struct spk_protect *sp,
+			    struct spk_protect_stats *out, bool reset)
+{
+	if (!sp || !out) {
+		return;
+	}
+	*out = sp->stats;
+	if (reset) {
+		sp->stats.min_gain_q15 = Q15_ONE;
+		sp->stats.frames = 0;
+		sp->stats.limited_frames = 0;
+		sp->stats.peak_out = 0;
+	}
+}
+
+const int32_t *spk_protect_default_voicing(void)
+{
+	return static_gain_q15;
+}
+
+const int32_t *spk_protect_default_weights(void)
+{
+	return current_weight_q12;
+}
+
+/*
+ * Psychoacoustic bass: returns the shaped harmonic signal (sample domain)
+ * to be mixed into the input BEFORE the HPF removes the source band.
+ *
+ * Internally Q15-extended for filter accuracy:
+ *   bass = LP240^2(x) - LP60(x)        (source band; the upper edge is two
+ *                                       cascaded poles, 12 dB/oct, so voice
+ *                                       mids stay out of the rectifier)
+ *   rect = |bass|                      (even harmonics + DC)
+ *   harm = LP900(rect - LP180(rect))   (strip DC/fundamental, cap fizz)
+ *   out  = harm * drive
+ */
+static inline int32_t bass_enhance(const struct spk_protect *sp,
+				   struct spk_protect_channel *ch, int32_t x)
+{
+	int32_t x_q15;
+
+	if (x > 2 * 32767) {
+		x = 2 * 32767;
+	} else if (x < -2 * 32767) {
+		x = -2 * 32767;
+	}
+	x_q15 = x * (1 << 15);
+
+	ch->bass_lp_lo += (int32_t)(((int64_t)sp->bass_alpha_lo *
+				     ((int64_t)x_q15 - ch->bass_lp_lo)) >> 15);
+	ch->bass_lp_hi += (int32_t)(((int64_t)sp->bass_alpha_hi *
+				     ((int64_t)x_q15 - ch->bass_lp_hi)) >> 15);
+	ch->bass_lp_hi2 += (int32_t)(((int64_t)sp->bass_alpha_hi *
+				      ((int64_t)ch->bass_lp_hi - ch->bass_lp_hi2)) >> 15);
+
+	int64_t bass = (int64_t)ch->bass_lp_hi2 - ch->bass_lp_lo;
+	int32_t rect = (int32_t)((bass < 0) ? -bass : bass);
+
+	ch->bass_lp_dc += (int32_t)(((int64_t)sp->bass_alpha_dc *
+				     ((int64_t)rect - ch->bass_lp_dc)) >> 15);
+
+	int32_t harm = rect - ch->bass_lp_dc;
+
+	ch->bass_lp_out += (int32_t)(((int64_t)sp->bass_alpha_out *
+				      ((int64_t)harm - ch->bass_lp_out)) >> 15);
+
+	int64_t out = ((int64_t)ch->bass_lp_out * sp->bass_drive_q15) >> 15;
+
+	return (int32_t)(out >> 15); /* Q15-extended -> sample domain */
 }
 
 /** HPF biquad, Direct Form II Transposed, Q30 coefficients. */
@@ -271,6 +439,22 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			/* Onset ramp */
 			x = (int32_t)(((int64_t)x * sp->ramp_q15) >> 15);
 
+			/* Digital pre-gain (may exceed unity; the limiter
+			 * sidechain below sees the boosted level, so the
+			 * energy budget still holds).
+			 */
+			if (sp->pregain_q15 != Q15_ONE) {
+				x = (int32_t)(((int64_t)x * sp->pregain_q15) >> 15);
+			}
+
+			/* Harmonics are generated from (and mixed into) the
+			 * pre-HPF signal, so the added energy is itself
+			 * protection-limited by the chain below.
+			 */
+			if (sp->bass_enabled) {
+				x += bass_enhance(sp, ch, x);
+			}
+
 			if (sp->hpf_enabled) {
 				x = hpf_process(sp, ch, x);
 			}
@@ -281,34 +465,37 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			 */
 			int32_t x_q15;
 
-			if (x > (1 << 16)) { /* headroom guard before *2^15 */
-				x_q15 = INT32_MAX;
-			} else if (x < -(1 << 16)) {
-				x_q15 = INT32_MIN;
-			} else {
-				x_q15 = x * (1 << 15);
+			/* Headroom guard before *2^15: saturate at +/- 2x FS
+			 * (pre-gain and HPF overshoot can exceed int16), so
+			 * x_q15 and the split arithmetic below stay in range.
+			 */
+			if (x > 2 * 32767) {
+				x = 2 * 32767;
+			} else if (x < -2 * 32767) {
+				x = -2 * 32767;
 			}
+			x_q15 = x * (1 << 15);
 
 			int64_t lf = 0, hf = 0, proxy = 0;
 			int32_t prev_lp = 0;
 
 			for (int b = 0; b < SPK_PROTECT_BANDS; b++) {
-				int32_t band;
+				int64_t band;
 
 				if (b < SPK_PROTECT_SPLITS) {
 					int32_t lp = ch->lp[b] +
 						(int32_t)(((int64_t)sp->alpha_q15[b] *
-							   (x_q15 - ch->lp[b])) >> 15);
+							   ((int64_t)x_q15 - ch->lp[b])) >> 15);
 
 					ch->lp[b] = lp;
-					band = lp - prev_lp;
+					band = (int64_t)lp - prev_lp;
 					prev_lp = lp;
 				} else {
-					band = x_q15 - prev_lp;
+					band = (int64_t)x_q15 - prev_lp;
 				}
 
 				/* Post-static-gain band: what is actually driven */
-				int64_t bs = ((int64_t)band * static_gain_q15[b]) >> 15;
+				int64_t bs = (band * sp->voicing_q15[b]) >> 15;
 
 				if (b < LF_DUCK_BANDS) {
 					lf += bs;
@@ -319,7 +506,7 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 				/* Sidechain: post-static-gain, current-weighted,
 				 * so the budget measures real transducer drive.
 				 */
-				proxy += (bs * current_weight_q12[b]) >> 12;
+				proxy += (bs * sp->weight_q12[b]) >> 12;
 			}
 
 			y_lf[c] = lf;
@@ -354,6 +541,14 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			sp->gain_q15 += (step > 0) ? step : 1;
 		}
 
+		sp->stats.frames++;
+		if (sp->gain_q15 < Q15_ONE) {
+			sp->stats.limited_frames++;
+			if (sp->gain_q15 < sp->stats.min_gain_q15) {
+				sp->stats.min_gain_q15 = sp->gain_q15;
+			}
+		}
+
 		/* --- Recombine with LF-first ducking, write frame out --- */
 		int32_t g = sp->gain_q15;
 		int32_t g2 = (int32_t)(((int64_t)g * g) >> 15);
@@ -374,6 +569,12 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			}
 
 			pcm[i + c] = sat_i16((int32_t)y);
+
+			int32_t ay = (int32_t)((y < 0) ? -y : y);
+
+			if (ay > sp->stats.peak_out) {
+				sp->stats.peak_out = ay;
+			}
 		}
 
 		/* Advance onset ramp once per frame */
