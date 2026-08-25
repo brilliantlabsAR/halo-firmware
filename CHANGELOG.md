@@ -11,6 +11,42 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `frame.speaker.start{gain=0..12}`: per-stream digital pre-gain into the
+  protection limiter — lifts quiet sources (un-normalized TTS) toward the
+  loudness ceiling, compresses hot ones; transient per stream
+- `frame.speaker.start{budget=10..100}`: per-stream energy-budget
+  override up to a firmware-clamped maximum — higher = louder ceiling at
+  more battery current; any override engages the fast limiter attack
+  that makes raised budgets safe (bench-validated at 100 against
+  worst-case content); all protection stays active; transient per stream
+- True-peak clamp on the protection chain's weighted drive
+  (`MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT`, default 300 %): backstop
+  against tall transient spikes inside the energy limiter's integration
+  window
+- Display-aware speaker energy budget: while the display is out of power
+  save its current load shares the battery-protection IC with the
+  speakers, so the audio budget is reduced (default 20 points,
+  Kconfig-tunable) and restored when the display sleeps, ramped smoothly
+  even mid-stream
+- Runtime protection-chain tuning API for bench/listening builds
+  (`MAX98357A_AUDIO_PROTECT_TUNING`, off in production), and a
+  psychoacoustic bass enhancer stage (off by default)
+
+### Changed
+
+- Speaker voicing rebalanced for loudness: deeper cuts in the
+  vibrotactile lows, +4 dB top band, protection HPF 130 → 200 Hz —
+  blinded on-head A/B: louder speech at equal buzz
+- Speaker protection sidechain weights recalibrated from bench current
+  measurements: supply current tracks drive amplitude (not frequency),
+  so the per-band weights are now uniform and the energy budget caps
+  current honestly for any spectrum
+- Speaker limiter releases upward when its budget rises mid-clamp
+  (previously the gain ratcheted down until the content itself went
+  quiet)
+
 ## [0.8.8] - 2026-08-17
 
 ### Added

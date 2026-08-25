@@ -52,10 +52,10 @@ config MAX98357A_AUDIO_PROTECTION_EQ
 	help
 	  Protect the bone-conduction transducers (and the battery protection
 	  IC) with a DSP chain applied post-volume, so thresholds reference
-	  absolute output level: 2nd-order HPF, mild static voicing EQ
-	  (half-depth issue #180 curve), a current-proxy energy limiter whose
-	  sidechain approximates transducer current draw vs frequency, an
-	  onset ramp, and a soft-knee true-peak clipper.
+	  absolute output level: 2nd-order HPF, static voicing EQ (loudness
+	  rebalance toward the audible bands), a current-proxy energy limiter
+	  whose bench-calibrated sidechain tracks transducer drive amplitude,
+	  an onset ramp, and a soft-knee true-peak clipper.
 
 	  Replaces the previous static EQ + instant peak limiter: protection
 	  now tracks short-term weighted signal ENERGY (what actually trips
@@ -66,13 +66,17 @@ if MAX98357A_AUDIO_PROTECTION_EQ
 
 config MAX98357A_AUDIO_PROTECT_HPF_HZ
 	int "Protection high-pass cutoff (Hz), 0 disables"
-	default 130
+	default 200
 	range 0 500
 	help
-	  2nd-order Butterworth high-pass removing DC/subsonic content below
-	  the transducer resonance, where drive current is pure waste. Keep
-	  below ~150 Hz so TTS voice fundamentals stay intact; the energy
-	  limiter handles protection above this frequency.
+	  2nd-order Butterworth high-pass removing content below the
+	  bone-conduction transducer's efficient region, where drive current
+	  buys felt vibration rather than audible loudness. 200 Hz was chosen
+	  by blinded on-head A/B together with the rebalanced voicing curve:
+	  louder speech at equal buzz. Voice fundamentals below the cutoff are
+	  deliberately traded away; the psychoacoustic bass enhancer
+	  (MAX98357A_AUDIO_BASS_ENHANCE_PERCENT) can restore perceived
+	  fullness without the current draw.
 
 config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	int "Energy limiter budget, percent of full scale"
@@ -80,17 +84,99 @@ config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	range 10 100
 	help
 	  Current budget for the energy limiter, as a percentage of int16 full
-	  scale for a hypothetical weight-1.0 signal. All bands carry current
-	  weights of 2.0..5.6 (highest below 425 Hz), so e.g. a sustained
-	  >= 1.5 kHz sine is allowed budget/2 of full scale and a 300 Hz sine
-	  budget/5.6 - protection lands hardest where the current is drawn.
+	  scale for a hypothetical weight-1.0 signal. All bands carry a
+	  uniform current weight of 3.0 (bench calibration showed supply
+	  current tracks drive amplitude, not frequency), so a sustained sine
+	  in any band is allowed budget/3 of full scale.
 
-	  Calibrate on the bench: play full-scale sine sweeps, BROADBAND
-	  NOISE, and real TTS at max volume (stereo, worst case), measure
-	  battery current, and pick the largest value that stays below the
-	  battery protection IC's trip point with margin. Noise coverage is
-	  essential - HF/broadband content draws more system current than
-	  sine-sweep models predict (Class-D losses).
+	  Bench-calibrated at 3.7 V through the full chain: audio draw at the
+	  budget-80 ceiling measured ~72 mA above baseline, which keeps the
+	  per-pack share plus quiescent system load under the battery
+	  protection IC's minimum over-discharge trip (50 mA @ 20 ms) with
+	  the display in power save. While the display is active its extra
+	  load rides the same protection IC, so the effective budget is
+	  reduced by MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP points.
+
+	  To recalibrate: play full-scale sine sweeps, BROADBAND NOISE, and
+	  real TTS at max volume, measure battery current, and pick the
+	  largest value that stays below the protection IC's trip point with
+	  margin.
+
+config MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT
+	int "True-peak weighted-drive cap, percent of full scale (0 disables)"
+	default 300
+	range 0 1000
+	help
+	  Instantaneous cap on the current-weighted output amplitude, in the
+	  same units as the energy budget: instant attack (single sample),
+	  ~4 ms release. Guards against tall narrow transients (e.g.
+	  decoder-garbage clicks) that the energy sidechain's ~PROTECT_ENV_MS
+	  integration window would let through.
+
+	  Bench characterisation nuance: the battery-IC trips observed with
+	  pregain-boosted fricatives at budget 100 were caused by drive
+	  DURATION at ~250 % for the few ms the integrator takes to
+	  converge, not by peak height - this cap alone did not prevent
+	  them (a shorter PROTECT_ENV_MS did). Keep the cap as the tall-
+	  spike backstop; treat the integration window as the lever for
+	  high-budget fricative exposure.
+
+	  Normal speech peaks reach roughly 150-200 % weighted; the default
+	  300 stays above them (engaged 0 frames in all bench content), so
+	  it is inaudible in normal operation. Must sit above the energy
+	  budget (the budget needs crest headroom to do its job).
+
+config MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP
+	int "Budget reduction while the display is active (percent points)"
+	default 20
+	range 0 60
+	help
+	  While the display is out of power save, its supply current (bench:
+	  ~19 mA above the idle baseline, ~30 mA total system load) rides the
+	  same battery-protection IC as the audio path's larger share. The
+	  effective energy-limiter budget is reduced by this many points for
+	  as long as the display is active, and restored when it returns to
+	  power save - applied as a smooth ramped step even mid-stream.
+
+	  With the calibrated budget->current mapping, the default 20-point
+	  drop (80 -> 60) keeps the worst-case display-on draw near the
+	  protection IC's minimum trip threshold; raise the drop if a unit
+	  with a low-trip IC sample still cuts out during display-on
+	  playback, or set 0 to disable the coupling entirely.
+
+	  Note the audible consequence: content played with the display on
+	  is up to ~2 dB quieter at the loudness ceiling than display-off
+	  playback. Senders that want full speech loudness should blank the
+	  display during playback.
+
+config MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX
+	int "Highest per-stream energy budget an app may request"
+	default 100
+	range 10 100
+	help
+	  Upper clamp for the per-stream budget override
+	  (frame.speaker.start{budget=N}). Requests above this are limited
+	  here, so the product can restrict the app-reachable envelope
+	  without an API change. The maximum-loudness envelope
+	  (budget 100 + the fast integration window below) is
+	  bench-validated: survived hot full-scale speech with +12 dB
+	  pre-gain on the low-trip-sample unit (display off; the display
+	  budget drop still applies on top).
+
+config MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_ENV_MS
+	int "Integration window while a stream budget override is active (ms)"
+	default 1
+	range 1 10
+	help
+	  Sidechain integration window used whenever a stream requests a
+	  budget override. The short window is what makes raised budgets
+	  safe: the battery IC's effective trip window measured a few
+	  milliseconds, and pre-gain-boosted fricative onsets latch it
+	  during the sidechain's convergence time. 1 ms clamps those onsets
+	  ~3x faster than the default window; the cost is slightly harder
+	  limiting of brief legitimate transients - acceptable in an
+	  explicitly loudness-first stream, and harmlessly conservative
+	  when the requested budget is below the shipped default.
 
 config MAX98357A_AUDIO_PROTECT_ENV_MS
 	int "Energy limiter integration window (ms)"
@@ -127,6 +213,37 @@ config MAX98357A_AUDIO_PROTECT_RAMP_MS
 	  Fade-in applied when a stream (re)starts, spreading amplifier
 	  turn-on inrush current so it does not coincide with a full-level
 	  first buffer (a classic battery-protection trip scenario).
+
+config MAX98357A_AUDIO_BASS_ENHANCE_PERCENT
+	int "Psychoacoustic bass harmonic drive (percent), 0 disables"
+	default 0
+	range 0 200
+	help
+	  Recover perceived bass fullness without the current draw: the
+	  60-240 Hz band (which the HPF and protection remove from the
+	  transducer) is full-wave rectified to generate even harmonics,
+	  band-shaped into 180-900 Hz and mixed back in before the HPF.
+	  The ear reconstructs the missing fundamental from the harmonic
+	  series, so TTS voice sounds full while the transducer is never
+	  driven at the frequencies that trip the battery IC.
+
+	  The harmonics enter the chain ahead of the sidechain and limiter,
+	  so this cannot raise output energy past the protection budget.
+
+	  100 mixes the shaped harmonics at unity relative to the extracted
+	  band; tune by ear (60-120 is a sensible range). Note the lower
+	  half of the harmonic band (180-425 Hz) is inside the vibrotactile
+	  range, so verify felt vibration (not just sound) when raising it.
+
+config MAX98357A_AUDIO_PROTECT_TUNING
+	bool "Runtime protection-chain tuning API (bench/lab builds)"
+	default n
+	help
+	  Expose max98357a_audio_protect_tune()/get()/stats(): runtime
+	  overrides for the HPF cutoff, energy budget, limiter timing, static
+	  voicing gains and sidechain current weights, plus a digital pre-gain
+	  and limiter-activity telemetry. For bench characterisation and
+	  listening-test builds; leave off in production images.
 
 endif # MAX98357A_AUDIO_PROTECTION_EQ
 

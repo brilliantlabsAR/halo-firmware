@@ -190,6 +190,52 @@ int audio_speaker_set_volume(audio_speaker_t *spk, int volume);
 int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume);
 
 /**
+ * @brief Set the per-stream digital pre-gain (dB*10, 0..+120)
+ *
+ * Boosts the signal into the protection chain's limiter: quiet sources
+ * (e.g. un-normalized TTS) get louder, hot sources are compressed - the
+ * current budget still caps real transducer drive. Transient: cleared to
+ * unity on every audio_speaker_init(), so it applies to the current
+ * playback session only.
+ *
+ * @param spk Speaker handle
+ * @param gain_db10 Gain in dB*10 (e.g. 60 = +6 dB); 0 restores unity
+ * @return 0 on success, negative errno on failure
+ */
+int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10);
+
+/**
+ * @brief Set the per-stream energy-budget override (percent, 0 = none)
+ *
+ * Lets a stream choose its loudness/current envelope up to the
+ * Kconfig-clamped maximum (default 100, the loudest bench-validated
+ * point). Any override engages the fast limiter integration window,
+ * which is what makes raised budgets safe against transient exposure.
+ * All protection stays active (weights, limiter, true-peak clamp,
+ * display budget drop). Transient: cleared on every
+ * audio_speaker_init(). Must be set before the stream starts (it takes
+ * effect when the protection chain is built).
+ *
+ * @param spk Speaker handle
+ * @param budget_percent 10..100, or 0 to restore the configured default
+ * @return 0 on success, negative errno on failure
+ */
+int audio_speaker_set_stream_budget(audio_speaker_t *spk, int budget_percent);
+
+/**
+ * @brief Tell the audio path whether the display is out of power save
+ *
+ * The display's supply current shares the battery protection IC with the
+ * speakers, so the protection chain ducks its energy budget while the
+ * display is active (a smooth ramped step, even mid-stream) and restores
+ * it when the display sleeps. Called from the display power path; the
+ * coupling is one-directional (display -> audio).
+ *
+ * @param active true when the display leaves power save, false on entry
+ */
+void audio_speaker_notify_display_active(bool active);
+
+/**
  * @brief Get speaker volume
  *
  * @param spk Speaker handle

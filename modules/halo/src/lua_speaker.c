@@ -300,6 +300,16 @@ static void speaker_stop_thread(void)
  *   - duration: 750 or 1000 (default: 1000, LC3 only)
  *   - bitrate: 8000-96000 (default: 16000, LC3 only)
  *   - volume: 0-100 (default: 50)
+ *   - gain: 0-12 dB digital pre-gain into the protection limiter
+ *     (default: 0). Lifts quiet sources (e.g. un-normalized TTS) toward
+ *     the loudness ceiling; hot sources are compressed instead of
+ *     getting louder. Transient: applies to this stream only.
+ *   - budget: 10-100, per-stream energy-budget override (default:
+ *     the configured budget). Higher = louder ceiling, more battery
+ *     current; any override engages the fast limiter attack that
+ *     makes raised budgets safe. Clamped to the Kconfig maximum. All
+ *     protection stays active. budget=100 with gain=12 is the loudest
+ *     supported voice. Transient per stream.
  *
  * For LC3 stereo: Input format is [Left LC3][Right LC3]...
  * Output PCM will be interleaved LRLRLR...
@@ -406,6 +416,32 @@ static int lua_speaker_start(lua_State *L)
 		return luaL_error(L, "Volume must be 0-100");
 	}
 
+	/* gain (per-stream pre-gain into the protection limiter, dB) */
+	int gain_db = 0;
+
+	lua_getfield(L, 1, "gain");
+	if (lua_isnumber(L, -1)) {
+		gain_db = lua_tointeger(L, -1);
+	}
+	lua_pop(L, 1);
+
+	if (gain_db < 0 || gain_db > 12) {
+		return luaL_error(L, "Gain must be 0-12 dB");
+	}
+
+	/* budget (per-stream energy-budget override) */
+	int budget = 0;
+
+	lua_getfield(L, 1, "budget");
+	if (lua_isnumber(L, -1)) {
+		budget = lua_tointeger(L, -1);
+	}
+	lua_pop(L, 1);
+
+	if (budget != 0 && (budget < 10 || budget > 100)) {
+		return luaL_error(L, "Budget must be 10-100");
+	}
+
 	/* Save configuration */
 	speaker_state.sample_rate = sample_rate;
 	speaker_state.channel_count = channels;
@@ -417,6 +453,13 @@ static int lua_speaker_start(lua_State *L)
 						   AUDIO_OWNER_LUA);
 	if (!speaker_state.speaker) {
 		return luaL_error(L, "Failed to initialize speaker (may be occupied by LE Audio)");
+	}
+
+	/* The budget override must land before the stream starts (the
+	 * protection chain rebuilds while the stream is stopped).
+	 */
+	if (budget > 0) {
+		audio_speaker_set_stream_budget(speaker_state.speaker, budget);
 	}
 
 	/* Initialize LC3 decoder if needed */
@@ -472,6 +515,11 @@ static int lua_speaker_start(lua_State *L)
 
 	/* Set volume */
 	audio_speaker_set_volume(speaker_state.speaker, volume);
+
+	/* Per-stream pre-gain (audio_speaker_init reset it to unity) */
+	if (gain_db > 0) {
+		audio_speaker_set_stream_gain(speaker_state.speaker, gain_db * 10);
+	}
 
 	/* Start background thread if not already running */
 	if (!speaker_state.thread_tid) {

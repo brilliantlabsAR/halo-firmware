@@ -98,6 +98,98 @@ void max98357a_audio_tx_diag_get(struct max98357a_audio_tx_diag *out);
 void max98357a_audio_tx_diag_zero(void);
 
 /**
+ * @brief Runtime overrides for the current-protection chain (bench tuning).
+ *
+ * Available when CONFIG_MAX98357A_AUDIO_PROTECT_TUNING is enabled. A tune
+ * call REPLACES the whole override set: scalar fields at -1 (and unset
+ * voicing/weights) fall back to their Kconfig/built-in defaults, so an
+ * empty struct (scalars -1, flags false, pregain 0) restores stock
+ * behaviour. Overrides take effect immediately when the stream is stopped,
+ * otherwise at the next stream start.
+ */
+struct max98357a_protect_tuning {
+	int hpf_hz;         /**< -1 = Kconfig default */
+	int budget_percent; /**< -1 = Kconfig default */
+	int env_ms;         /**< -1 = Kconfig default */
+	int hold_ms;        /**< -1 = Kconfig default */
+	int release_ms;     /**< -1 = Kconfig default */
+	int ramp_ms;        /**< -1 = Kconfig default */
+	int bass_percent;   /**< psychoacoustic bass drive; -1 = Kconfig default */
+	int peak_percent;   /**< true-peak weighted-drive cap; -1 = Kconfig default */
+	int pregain_db10;   /**< digital pre-gain, dB*10; 0 = unity, max +120 */
+	bool voicing_set;   /**< false = built-in voicing curve */
+	int voicing_db10[6];/**< static voicing gains, dB*10 per band */
+	bool weights_set;   /**< false = built-in current weights */
+	int weights_x100[6];/**< limiter current weights * 100 per band */
+};
+
+/**
+ * @brief Tell the audio path whether the display is out of power save.
+ *
+ * While active, the display's supply current rides the same battery
+ * protection IC as the speakers, so the protection chain's energy budget
+ * is reduced by MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP points (a
+ * smooth ramped step, even mid-stream) and restored when the display
+ * sleeps. Coupling is one-directional: the display side calls in, the
+ * audio path never touches the display. No-op when the protection chain
+ * is disabled.
+ */
+void max98357a_audio_set_display_active(bool active);
+
+/**
+ * @brief Set the per-stream energy-budget override (percent, 0 = none).
+ *
+ * Clamped to [10, MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX]. Any
+ * override also selects the fast integration window
+ * (MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_ENV_MS) - that is what makes
+ * raised budgets safe against transient exposure. Protection stays
+ * fully active: display budget drop, current weights, energy limiter
+ * and true-peak clamp all apply. Transient by convention: the halo
+ * audio_stream layer clears it on every speaker acquisition. Applied
+ * when the chain is (re)built - set it between configure and stream
+ * start. No-op when the protection chain is disabled.
+ */
+void max98357a_audio_set_stream_budget(int budget_percent);
+
+/**
+ * @brief Set the per-stream digital pre-gain (dB*10, clamped to 0..+120).
+ *
+ * Applied at the head of the protection chain; the limiter sidechain sees
+ * the boosted signal, so the current budget still caps real transducer
+ * drive (on hot sources the limiter rides the boost out - this is
+ * compression, intended to lift quiet sources such as un-normalized TTS).
+ *
+ * Transient by convention: the halo audio_stream layer clears it to 0 on
+ * every speaker acquisition, so it applies to one playback session only.
+ * Composes additively with the bench-tuning override's pregain. No-op when
+ * the protection chain is disabled.
+ */
+void max98357a_audio_set_stream_pregain(int gain_db10);
+
+/** @brief Apply protection-chain overrides (see struct docs). */
+int max98357a_audio_protect_tune(const struct device *dev,
+				 const struct max98357a_protect_tuning *tuning);
+
+/** @brief Read back the stored overrides, scalars resolved to effective values. */
+int max98357a_audio_protect_get(const struct device *dev,
+				struct max98357a_protect_tuning *out);
+
+/**
+ * @brief Read limiter activity since the last reset.
+ *
+ * @param min_gain_q15   lowest limiter gain seen (32768 = never limited)
+ * @param frames         frames processed
+ * @param limited_frames frames spent below unity gain
+ * @param peak_out       largest |output sample|
+ * @param peak_capped_frames frames the true-peak clamp engaged
+ * @param reset          clear the counters after reading
+ */
+int max98357a_audio_protect_stats(const struct device *dev,
+				  int32_t *min_gain_q15, uint32_t *frames,
+				  uint32_t *limited_frames, int32_t *peak_out,
+				  uint32_t *peak_capped_frames, bool reset);
+
+/**
  * @brief Configure MAX98357A audio stream
  *
  * @param dev MAX98357A device
