@@ -73,6 +73,14 @@ static struct max98357a_audio_data *g_amp_data; /* single instance pointer */
 /* Single-slot TX tap (AEC reference feed); see max98357a_audio.h */
 static max98357a_audio_tx_tap_t g_tx_tap;
 
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
+/* Per-stream digital pre-gain (dB*10, 0 = unity). Set by the stream layer
+ * for one playback session; the halo audio_stream layer clears it on every
+ * speaker acquisition so it cannot leak into the next owner's stream.
+ */
+static int g_stream_pregain_db10;
+#endif
+
 /* TX-path diagnostic counters (see max98357a_audio.h): every way the tap
  * feed could diverge from real emission is counted, so a reference-
  * timeline slip can be attributed from session data.
@@ -226,14 +234,53 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 		}
 		spk_protect_set_weights(&data->prot, weights);
 	}
-	if (data->tune.pregain_db10 != 0) {
-		spk_protect_set_pregain(&data->prot,
-					spk_protect_db10_to_q15(data->tune.pregain_db10));
-	}
 	data->tune_dirty = false;
 #endif
+
+	/* Total pre-gain = per-stream gain + bench-tuning override (if any) */
+	{
+		int pregain_db10 = g_stream_pregain_db10;
+
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+		pregain_db10 += data->tune.pregain_db10;
+#endif
+		if (pregain_db10 != 0) {
+			spk_protect_set_pregain(&data->prot,
+						spk_protect_db10_to_q15(pregain_db10));
+		}
+	}
 }
 #endif
+
+void max98357a_audio_set_stream_pregain(int gain_db10)
+{
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
+	if (gain_db10 < 0) {
+		gain_db10 = 0;
+	}
+	if (gain_db10 > 120) {
+		gain_db10 = 120;
+	}
+	g_stream_pregain_db10 = gain_db10;
+
+	/* Apply to the live chain too: the stream layer sets the gain after
+	 * the stream has been configured (which rebuilt the chain at unity).
+	 */
+	struct max98357a_audio_data *data = g_amp_data;
+
+	if (data && data->prot_ready) {
+		int total = gain_db10;
+
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
+		total += data->tune.pregain_db10;
+#endif
+		spk_protect_set_pregain(&data->prot,
+					spk_protect_db10_to_q15(total));
+	}
+#else
+	ARG_UNUSED(gain_db10);
+#endif
+}
 
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
 int max98357a_audio_protect_tune(const struct device *dev,

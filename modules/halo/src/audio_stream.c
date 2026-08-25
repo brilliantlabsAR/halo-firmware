@@ -17,6 +17,10 @@
 #include <halo/audio_eq.h>
 #endif
 
+#if defined(CONFIG_MAX98357A_AUDIO)
+#include <max98357a_audio.h>
+#endif
+
 LOG_MODULE_REGISTER(audio_stream, CONFIG_HALO_LOG_LEVEL);
 
 static const char *audio_owner_name(audio_owner_t owner)
@@ -345,6 +349,13 @@ audio_speaker_t *audio_speaker_init(int sample_rate, int bit_depth, int channels
 		return NULL;
 	}
 
+#if defined(CONFIG_MAX98357A_AUDIO)
+	/* Per-stream pre-gain is transient: every acquisition starts at
+	 * unity so one owner's gain cannot leak into the next stream.
+	 */
+	max98357a_audio_set_stream_pregain(0);
+#endif
+
 	/* Configure audio parameters */
 	speaker_singleton.speaker.config.sample_rate = sample_rate;
 	speaker_singleton.speaker.config.bits_per_sample = bit_depth;
@@ -487,6 +498,23 @@ int audio_speaker_set_volume(audio_speaker_t *spk, int volume)
 int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume)
 {
 	return audio_speaker_set_volume_internal(spk, volume, false);
+}
+
+int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10)
+{
+	if (!spk) {
+		return -EINVAL;
+	}
+	if (gain_db10 < 0 || gain_db10 > 120) {
+		return -EINVAL;
+	}
+
+#if defined(CONFIG_MAX98357A_AUDIO)
+	max98357a_audio_set_stream_pregain(gain_db10);
+	return 0;
+#else
+	return (gain_db10 == 0) ? 0 : -ENOTSUP;
+#endif
 }
 
 int audio_speaker_get_volume(audio_speaker_t *spk)

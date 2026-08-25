@@ -122,6 +122,21 @@ struct max98357a_protect_tuning {
 	int weights_x100[6];/**< limiter current weights * 100 per band */
 };
 
+/**
+ * @brief Set the per-stream digital pre-gain (dB*10, clamped to 0..+120).
+ *
+ * Applied at the head of the protection chain; the limiter sidechain sees
+ * the boosted signal, so the current budget still caps real transducer
+ * drive (on hot sources the limiter rides the boost out - this is
+ * compression, intended to lift quiet sources such as un-normalized TTS).
+ *
+ * Transient by convention: the halo audio_stream layer clears it to 0 on
+ * every speaker acquisition, so it applies to one playback session only.
+ * Composes additively with the bench-tuning override's pregain. No-op when
+ * the protection chain is disabled.
+ */
+void max98357a_audio_set_stream_pregain(int gain_db10);
+
 /** @brief Apply protection-chain overrides (see struct docs). */
 int max98357a_audio_protect_tune(const struct device *dev,
 				 const struct max98357a_protect_tuning *tuning);

@@ -1106,6 +1106,7 @@ Initializes the speaker.
   | `duration` | number | 1000 | LC3 frame duration (µs/10, matching the Alif LC3 enum: 750 = 7.5 ms, 1000 = 10 ms) |
   | `bitrate` | number | 16000 | LC3 bitrate (multiple of 8000, ≤96000) |
   | `volume` | number | 50 | Volume (0–100%) |
+  | `gain` | number | 0 | Digital pre-gain into the protection limiter (0–12 dB). Lifts quiet sources (e.g. un-normalized TTS) toward the loudness ceiling; hot sources are compressed instead of getting louder. Transient: applies to this stream only. |
 
 - **Returns:** `nil`
 - **Errors:**
@@ -1116,6 +1117,7 @@ Initializes the speaker.
   - Throws an error if encoder is "lc3" and duration is not 750 or 1000
   - Throws an error if encoder is "lc3" and bitrate is not a multiple of 8000 or > 96000
   - Throws an error if volume is not 0-100
+  - Throws an error if gain is not 0-12
   - Throws an error if speaker initialization fails
   - Throws an error if LC3 decoder creation fails
   - Throws an error if memory allocation fails

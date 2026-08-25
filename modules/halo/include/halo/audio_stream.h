@@ -190,6 +190,21 @@ int audio_speaker_set_volume(audio_speaker_t *spk, int volume);
 int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume);
 
 /**
+ * @brief Set the per-stream digital pre-gain (dB*10, 0..+120)
+ *
+ * Boosts the signal into the protection chain's limiter: quiet sources
+ * (e.g. un-normalized TTS) get louder, hot sources are compressed - the
+ * current budget still caps real transducer drive. Transient: cleared to
+ * unity on every audio_speaker_init(), so it applies to the current
+ * playback session only.
+ *
+ * @param spk Speaker handle
+ * @param gain_db10 Gain in dB*10 (e.g. 60 = +6 dB); 0 restores unity
+ * @return 0 on success, negative errno on failure
+ */
+int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10);
+
+/**
  * @brief Get speaker volume
  *
  * @param spk Speaker handle
