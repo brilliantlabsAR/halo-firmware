@@ -247,6 +247,18 @@ static int display_resume_handler(void)
 
 	/* Note: Framework only calls this if needs_resume=true */
 
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+	/* Duck the audio budget BEFORE the panel starts drawing: the resume
+	 * sequence pulls its load immediately, and full-budget audio plus
+	 * display inrush stacked on the battery-protection IC is the exact
+	 * trip scenario the budget drop exists to prevent (bench: the
+	 * post-resume ordering spiked ~+24 mA for the whole resume). The
+	 * ducking ramp (~15 ms) runs while the resume proceeds. Suspend
+	 * keeps the reverse order - restore only after the load is gone.
+	 */
+	audio_speaker_notify_display_active(true);
+#endif
+
 #ifdef CONFIG_PM_DEVICE
 	if (display_state.panel) {
 		enum pm_device_state pm_state;
@@ -255,6 +267,10 @@ static int display_resume_handler(void)
 			ret = pm_device_action_run(display_state.panel, PM_DEVICE_ACTION_RESUME);
 			if (ret != 0) {
 				LOG_ERR("Failed to resume panel: %d", ret);
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+				/* display did not come up: restore the budget */
+				audio_speaker_notify_display_active(false);
+#endif
 				return ret;
 			}
 		}
@@ -266,6 +282,9 @@ static int display_resume_handler(void)
 		ret = dsi_dw_set_mode(display_state.dsi, DSI_DW_VIDEO_MODE);
 		if (ret != 0) {
 			LOG_ERR("Failed to set DSI to video mode: %d", ret);
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+			audio_speaker_notify_display_active(false);
+#endif
 			return ret;
 		}
 	}
@@ -305,11 +324,6 @@ static int display_resume_handler(void)
 
 	/* Note: is_active state managed by service framework */
 	display_state.hw_active = true;
-
-#if defined(CONFIG_HALO_AUDIO_STREAM)
-	/* Display load now rides the battery IC: duck the audio budget */
-	audio_speaker_notify_display_active(true);
-#endif
 
 	return 0; /* Always return success - errors are logged */
 }
