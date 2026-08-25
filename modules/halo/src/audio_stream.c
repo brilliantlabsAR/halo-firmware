@@ -350,10 +350,12 @@ audio_speaker_t *audio_speaker_init(int sample_rate, int bit_depth, int channels
 	}
 
 #if defined(CONFIG_MAX98357A_AUDIO)
-	/* Per-stream pre-gain is transient: every acquisition starts at
-	 * unity so one owner's gain cannot leak into the next stream.
+	/* Per-stream pre-gain and boost profile are transient: every
+	 * acquisition starts at the defaults so one owner's settings
+	 * cannot leak into the next stream.
 	 */
 	max98357a_audio_set_stream_pregain(0);
+	max98357a_audio_set_stream_budget(0);
 #endif
 
 	/* Configure audio parameters */
@@ -506,6 +508,23 @@ void audio_speaker_notify_display_active(bool active)
 	max98357a_audio_set_display_active(active);
 #else
 	ARG_UNUSED(active);
+#endif
+}
+
+int audio_speaker_set_stream_budget(audio_speaker_t *spk, int budget_percent)
+{
+	if (!spk) {
+		return -EINVAL;
+	}
+	if (budget_percent < 0 || budget_percent > 100) {
+		return -EINVAL;
+	}
+
+#if defined(CONFIG_MAX98357A_AUDIO)
+	max98357a_audio_set_stream_budget(budget_percent);
+	return 0;
+#else
+	return (budget_percent == 0) ? 0 : -ENOTSUP;
 #endif
 }
 

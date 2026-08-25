@@ -1107,6 +1107,7 @@ Initializes the speaker.
   | `bitrate` | number | 16000 | LC3 bitrate (multiple of 8000, ≤96000) |
   | `volume` | number | 50 | Volume (0–100%) |
   | `gain` | number | 0 | Digital pre-gain into the protection limiter (0–12 dB). Lifts quiet sources (e.g. un-normalized TTS) toward the loudness ceiling; hot sources are compressed instead of getting louder. Transient: applies to this stream only. |
+  | `budget` | number | configured | Per-stream energy-budget override (10–100): higher = louder ceiling, more battery current. Any override engages the fast limiter attack that makes raised budgets safe; all protection stays active, and the value is clamped to a firmware-configured maximum. `budget=100` with `gain=12` is the loudest supported voice. Transient: applies to this stream only. |
 
 - **Returns:** `nil`
 - **Errors:**
@@ -1118,6 +1119,7 @@ Initializes the speaker.
   - Throws an error if encoder is "lc3" and bitrate is not a multiple of 8000 or > 96000
   - Throws an error if volume is not 0-100
   - Throws an error if gain is not 0-12
+  - Throws an error if budget is not 10-100
   - Throws an error if speaker initialization fails
   - Throws an error if LC3 decoder creation fails
   - Throws an error if memory allocation fails

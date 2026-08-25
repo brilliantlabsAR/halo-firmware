@@ -205,6 +205,24 @@ int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume);
 int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10);
 
 /**
+ * @brief Set the per-stream energy-budget override (percent, 0 = none)
+ *
+ * Lets a stream choose its loudness/current envelope up to the
+ * Kconfig-clamped maximum (default 100, the loudest bench-validated
+ * point). Any override engages the fast limiter integration window,
+ * which is what makes raised budgets safe against transient exposure.
+ * All protection stays active (weights, limiter, true-peak clamp,
+ * display budget drop). Transient: cleared on every
+ * audio_speaker_init(). Must be set before the stream starts (it takes
+ * effect when the protection chain is built).
+ *
+ * @param spk Speaker handle
+ * @param budget_percent 10..100, or 0 to restore the configured default
+ * @return 0 on success, negative errno on failure
+ */
+int audio_speaker_set_stream_budget(audio_speaker_t *spk, int budget_percent);
+
+/**
  * @brief Tell the audio path whether the display is out of power save
  *
  * The display's supply current shares the battery protection IC with the

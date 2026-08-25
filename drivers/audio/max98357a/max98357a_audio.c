@@ -80,6 +80,13 @@ static max98357a_audio_tx_tap_t g_tx_tap;
  */
 static int g_stream_pregain_db10;
 
+/* Per-stream budget override (0 = none). Any override also selects the
+ * fast integration window - that is what makes raised budgets safe.
+ * Transient like the pre-gain: the halo audio_stream layer clears it on
+ * every speaker acquisition.
+ */
+static int g_stream_budget;
+
 /* Display power state (display-aware budget ducking). Tracked here so the
  * chain can be rebuilt at any time (stream reconfiguration) without asking
  * the display; the display side pushes changes via
@@ -212,6 +219,12 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 		.peak_cap_percent = CONFIG_MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT,
 	};
 
+	if (g_stream_budget > 0) {
+		params.budget_percent = g_stream_budget;
+		params.env_ms =
+			CONFIG_MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_ENV_MS;
+	}
+
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECT_TUNING)
 	params.hpf_cutoff_hz = tune_or(data->tune.hpf_hz, params.hpf_cutoff_hz);
 	params.budget_percent = tune_or(data->tune.budget_percent, params.budget_percent);
@@ -282,6 +295,40 @@ void max98357a_audio_set_display_active(bool active)
 	}
 #else
 	ARG_UNUSED(active);
+#endif
+}
+
+void max98357a_audio_set_stream_budget(int budget_percent)
+{
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
+	if (budget_percent < 0) {
+		budget_percent = 0;
+	}
+	if (budget_percent > 0 && budget_percent < 10) {
+		budget_percent = 10;
+	}
+	if (budget_percent > CONFIG_MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX) {
+		budget_percent = CONFIG_MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX;
+	}
+	if (g_stream_budget == budget_percent) {
+		return;
+	}
+	g_stream_budget = budget_percent;
+
+	/* Budget and integration window live in precomputed chain state:
+	 * rebuild when idle (the stream layer sets the override between
+	 * configure and start). While a stream is running the change
+	 * applies at its next (re)configure - the override is chosen at
+	 * stream start by design.
+	 */
+	struct max98357a_audio_data *data = g_amp_data;
+
+	if (data && data->configured &&
+	    data->state != MAX98357A_AUDIO_TRIGGER_START) {
+		max98357a_protect_init(data);
+	}
+#else
+	ARG_UNUSED(budget_percent);
 #endif
 }
 

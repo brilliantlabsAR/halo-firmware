@@ -16,6 +16,15 @@ release pages and tags are not publicly reachable.
 - `frame.speaker.start{gain=0..12}`: per-stream digital pre-gain into the
   protection limiter — lifts quiet sources (un-normalized TTS) toward the
   loudness ceiling, compresses hot ones; transient per stream
+- `frame.speaker.start{budget=10..100}`: per-stream energy-budget
+  override up to a firmware-clamped maximum — higher = louder ceiling at
+  more battery current; any override engages the fast limiter attack
+  that makes raised budgets safe (bench-validated at 100 against
+  worst-case content); all protection stays active; transient per stream
+- True-peak clamp on the protection chain's weighted drive
+  (`MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT`, default 300 %): backstop
+  against tall transient spikes inside the energy limiter's integration
+  window
 - Display-aware speaker energy budget: while the display is out of power
   save its current load shares the battery-protection IC with the
   speakers, so the audio budget is reduced (default 20 points,

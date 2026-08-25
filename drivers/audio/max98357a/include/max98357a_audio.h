@@ -137,6 +137,21 @@ struct max98357a_protect_tuning {
 void max98357a_audio_set_display_active(bool active);
 
 /**
+ * @brief Set the per-stream energy-budget override (percent, 0 = none).
+ *
+ * Clamped to [10, MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX]. Any
+ * override also selects the fast integration window
+ * (MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_ENV_MS) - that is what makes
+ * raised budgets safe against transient exposure. Protection stays
+ * fully active: display budget drop, current weights, energy limiter
+ * and true-peak clamp all apply. Transient by convention: the halo
+ * audio_stream layer clears it on every speaker acquisition. Applied
+ * when the chain is (re)built - set it between configure and stream
+ * start. No-op when the protection chain is disabled.
+ */
+void max98357a_audio_set_stream_budget(int budget_percent);
+
+/**
  * @brief Set the per-stream digital pre-gain (dB*10, clamped to 0..+120).
  *
  * Applied at the head of the protection chain; the limiter sidechain sees

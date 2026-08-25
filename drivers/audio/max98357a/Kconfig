@@ -149,6 +149,35 @@ config MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP
 	  playback. Senders that want full speech loudness should blank the
 	  display during playback.
 
+config MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX
+	int "Highest per-stream energy budget an app may request"
+	default 100
+	range 10 100
+	help
+	  Upper clamp for the per-stream budget override
+	  (frame.speaker.start{budget=N}). Requests above this are limited
+	  here, so the product can restrict the app-reachable envelope
+	  without an API change. The maximum-loudness envelope
+	  (budget 100 + the fast integration window below) is
+	  bench-validated: survived hot full-scale speech with +12 dB
+	  pre-gain on the low-trip-sample unit (display off; the display
+	  budget drop still applies on top).
+
+config MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_ENV_MS
+	int "Integration window while a stream budget override is active (ms)"
+	default 1
+	range 1 10
+	help
+	  Sidechain integration window used whenever a stream requests a
+	  budget override. The short window is what makes raised budgets
+	  safe: the battery IC's effective trip window measured a few
+	  milliseconds, and pre-gain-boosted fricative onsets latch it
+	  during the sidechain's convergence time. 1 ms clamps those onsets
+	  ~3x faster than the default window; the cost is slightly harder
+	  limiting of brief legitimate transients - acceptable in an
+	  explicitly loudness-first stream, and harmlessly conservative
+	  when the requested budget is below the shipped default.
+
 config MAX98357A_AUDIO_PROTECT_ENV_MS
 	int "Energy limiter integration window (ms)"
 	default 3

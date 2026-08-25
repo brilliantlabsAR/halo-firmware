@@ -304,6 +304,12 @@ static void speaker_stop_thread(void)
  *     (default: 0). Lifts quiet sources (e.g. un-normalized TTS) toward
  *     the loudness ceiling; hot sources are compressed instead of
  *     getting louder. Transient: applies to this stream only.
+ *   - budget: 10-100, per-stream energy-budget override (default:
+ *     the configured budget). Higher = louder ceiling, more battery
+ *     current; any override engages the fast limiter attack that
+ *     makes raised budgets safe. Clamped to the Kconfig maximum. All
+ *     protection stays active. budget=100 with gain=12 is the loudest
+ *     supported voice. Transient per stream.
  *
  * For LC3 stereo: Input format is [Left LC3][Right LC3]...
  * Output PCM will be interleaved LRLRLR...
@@ -423,6 +429,19 @@ static int lua_speaker_start(lua_State *L)
 		return luaL_error(L, "Gain must be 0-12 dB");
 	}
 
+	/* budget (per-stream energy-budget override) */
+	int budget = 0;
+
+	lua_getfield(L, 1, "budget");
+	if (lua_isnumber(L, -1)) {
+		budget = lua_tointeger(L, -1);
+	}
+	lua_pop(L, 1);
+
+	if (budget != 0 && (budget < 10 || budget > 100)) {
+		return luaL_error(L, "Budget must be 10-100");
+	}
+
 	/* Save configuration */
 	speaker_state.sample_rate = sample_rate;
 	speaker_state.channel_count = channels;
@@ -434,6 +453,13 @@ static int lua_speaker_start(lua_State *L)
 						   AUDIO_OWNER_LUA);
 	if (!speaker_state.speaker) {
 		return luaL_error(L, "Failed to initialize speaker (may be occupied by LE Audio)");
+	}
+
+	/* The budget override must land before the stream starts (the
+	 * protection chain rebuilds while the stream is stopped).
+	 */
+	if (budget > 0) {
+		audio_speaker_set_stream_budget(speaker_state.speaker, budget);
 	}
 
 	/* Initialize LC3 decoder if needed */
