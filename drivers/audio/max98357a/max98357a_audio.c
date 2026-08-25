@@ -79,6 +79,19 @@ static max98357a_audio_tx_tap_t g_tx_tap;
  * speaker acquisition so it cannot leak into the next owner's stream.
  */
 static int g_stream_pregain_db10;
+
+/* Display power state (display-aware budget ducking). Tracked here so the
+ * chain can be rebuilt at any time (stream reconfiguration) without asking
+ * the display; the display side pushes changes via
+ * max98357a_audio_set_display_active().
+ */
+static bool g_display_active;
+
+static inline int display_budget_drop(void)
+{
+	return g_display_active ?
+	       CONFIG_MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP : 0;
+}
 #endif
 
 /* TX-path diagnostic counters (see max98357a_audio.h): every way the tap
@@ -237,6 +250,8 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 	data->tune_dirty = false;
 #endif
 
+	spk_protect_set_budget_drop(&data->prot, display_budget_drop());
+
 	/* Total pre-gain = per-stream gain + bench-tuning override (if any) */
 	{
 		int pregain_db10 = g_stream_pregain_db10;
@@ -251,6 +266,21 @@ static void max98357a_protect_init(struct max98357a_audio_data *data)
 	}
 }
 #endif
+
+void max98357a_audio_set_display_active(bool active)
+{
+#if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
+	g_display_active = active;
+
+	struct max98357a_audio_data *data = g_amp_data;
+
+	if (data && data->prot_ready) {
+		spk_protect_set_budget_drop(&data->prot, display_budget_drop());
+	}
+#else
+	ARG_UNUSED(active);
+#endif
+}
 
 void max98357a_audio_set_stream_pregain(int gain_db10)
 {

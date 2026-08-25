@@ -156,11 +156,16 @@ static double ref_sidechain_step(struct ref_sidechain *r, const int16_t *frame, 
 	return r->env;
 }
 
-static double budget_threshold(void)
+static double budget_threshold_pct(int budget)
 {
-	double amp = 32767.0 * BUDGET / 100.0;
+	double amp = 32767.0 * budget / 100.0;
 
 	return amp * amp / 2.0;
+}
+
+static double budget_threshold(void)
+{
+	return budget_threshold_pct(BUDGET);
 }
 
 /* ------------------------------------------------------------------ */
@@ -640,6 +645,97 @@ static void test_bass_enhancer_chunk_equivalence(void)
 	      "chunked output bit-exact with enhancer active");
 }
 
+static void test_budget_drop(void)
+{
+	printf("runtime budget drop (display-aware ducking):\n");
+
+	enum { N = FS }; /* 1 s blocks of full-scale 500 Hz (32-sample
+			  * period: regenerating the block continues the
+			  * phase seamlessly) */
+	static int16_t buf[N];
+	struct spk_protect sp;
+	struct spk_protect_params p = params_default(1);
+
+	spk_protect_init(&sp, &p);
+
+	/* Settle at the full budget */
+	gen_sine(buf, N, 500, 1.0);
+	spk_protect_process(&sp, buf, N);
+
+	double full_rms = rms(buf + N / 2, N / 2);
+	int32_t g0 = spk_protect_gain_q15(&sp);
+
+	/* Drop 20 points mid-stream; track per-frame gain steps through the
+	 * transition - the threshold slews over ~ramp_ms, so no single frame
+	 * may step the gain audibly (a click would be a large step).
+	 */
+	spk_protect_set_budget_drop(&sp, 20);
+	gen_sine(buf, N, 500, 1.0);
+
+	double max_step = 0;
+	int32_t g_prev = g0;
+
+	for (size_t i = 0; i < N; i++) {
+		spk_protect_process(&sp, &buf[i], 1);
+		int32_t g = spk_protect_gain_q15(&sp);
+		double step = fabs((double)(g - g_prev)) / g_prev;
+
+		if (step > max_step) {
+			max_step = step;
+		}
+		g_prev = g;
+	}
+
+	int32_t g1 = spk_protect_gain_q15(&sp);
+
+	CHECK(g1 < g0, "gain reduced after drop (%.3f -> %.3f)",
+	      g0 / 32768.0, g1 / 32768.0);
+	/* The limiter quantizes attacks to the env-ripple cycle, so single
+	 * frames legitimately step a fraction of a dB; a click would be tens
+	 * of percent. 3 % ~= 0.26 dB.
+	 */
+	CHECK(max_step < 0.03,
+	      "largest per-frame gain step %.2f%% (slewed, not stepped)",
+	      max_step * 100.0);
+
+	/* Settled energy now honours the reduced budget */
+	struct ref_sidechain ref;
+
+	ref_sidechain_init(&ref, FS, p.env_ms);
+
+	double max_env = 0;
+
+	for (size_t i = 0; i < N; i++) {
+		double env = ref_sidechain_step(&ref, &buf[i], 1);
+
+		if (i > (size_t)N / 2 && env > max_env) {
+			max_env = env;
+		}
+	}
+	CHECK(max_env <= budget_threshold_pct(BUDGET - 20) * 1.25,
+	      "settled energy honours budget %d (x%.2f of reduced threshold)",
+	      BUDGET - 20, max_env / budget_threshold_pct(BUDGET - 20));
+
+	/* Restoring the budget recovers the original level */
+	spk_protect_set_budget_drop(&sp, 0);
+	gen_sine(buf, N, 500, 1.0);
+	spk_protect_process(&sp, buf, N);
+
+	double back_rms = rms(buf + N / 2, N / 2);
+
+	CHECK(fabs(back_rms - full_rms) < 0.05 * full_rms,
+	      "output recovers after restore (RMS %.0f vs %.0f)",
+	      back_rms, full_rms);
+
+	/* Effective budget is floored: a huge drop must not mute entirely */
+	spk_protect_set_budget_drop(&sp, 95);
+	gen_sine(buf, N, 500, 1.0);
+	spk_protect_process(&sp, buf, N);
+	CHECK(rms(buf + N / 2, N / 2) > 0.01 * 32767.0,
+	      "5%% budget floor keeps audio audible (RMS %.0f)",
+	      rms(buf + N / 2, N / 2));
+}
+
 static void test_param_validation(void)
 {
 	printf("parameter validation:\n");
@@ -685,6 +781,7 @@ int main(void)
 	test_bass_enhancer();
 	test_bass_enhancer_safety();
 	test_bass_enhancer_chunk_equivalence();
+	test_budget_drop();
 	test_param_validation();
 
 	printf("\n%s (%d failure%s)\n", g_failures ? "FAILED" : "ALL TESTS PASSED",

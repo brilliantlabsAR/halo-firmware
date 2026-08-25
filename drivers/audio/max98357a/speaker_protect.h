@@ -146,7 +146,18 @@ struct spk_protect {
 	/* Limiter */
 	int64_t env;            /**< leaky-integrated proxy energy */
 	int32_t env_shift;      /**< integrator: env += (p2 - env) >> shift */
-	int64_t threshold_env;  /**< energy budget in envelope units */
+	int64_t threshold_env;  /**< energy budget in envelope units (current,
+				 *   may be mid-slew toward threshold_target) */
+
+	/* Runtime budget reduction (display-aware ducking). The request is a
+	 * single aligned int32 store, safe from another thread; the process
+	 * loop applies it by slewing threshold_env to the recomputed target
+	 * over ~ramp_ms (snapped while the onset ramp is still active).
+	 */
+	int32_t budget_drop_req;     /**< requested drop, percent points */
+	int32_t budget_drop_applied; /**< drop threshold_target reflects */
+	int64_t threshold_target;    /**< slew target */
+	int64_t threshold_step;      /**< per-frame slew increment */
 	int32_t gain_q15;       /**< current limiter gain (Q15) */
 	int32_t hold_samples;   /**< configured hold length */
 	int32_t hold_left;      /**< frames of hold remaining */
@@ -209,6 +220,18 @@ void spk_protect_set_weights(struct spk_protect *sp,
  * @brief Set the digital pre-gain (Q15; clamped to [0, 4 * Q15_ONE]).
  */
 void spk_protect_set_pregain(struct spk_protect *sp, int32_t pregain_q15);
+
+/**
+ * @brief Reduce the energy budget by drop_percent points at runtime.
+ *
+ * Effective budget = max(budget_percent - drop_percent, 5). Intended for
+ * ducking audio while another large load (the display) shares the battery
+ * protection IC's current allowance. Thread-safe against a running
+ * process(): the change is picked up per frame and the threshold slews
+ * over ~ramp_ms, so a mid-stream toggle becomes a smooth ramped step
+ * instead of a click. 0 restores the configured budget.
+ */
+void spk_protect_set_budget_drop(struct spk_protect *sp, int drop_percent);
 
 /** @brief dB*10 (e.g. -75 = -7.5 dB) to Q15 linear gain; saturates at 4x. */
 int32_t spk_protect_db10_to_q15(int db10);

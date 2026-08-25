@@ -205,6 +205,19 @@ int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume);
 int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10);
 
 /**
+ * @brief Tell the audio path whether the display is out of power save
+ *
+ * The display's supply current shares the battery protection IC with the
+ * speakers, so the protection chain ducks its energy budget while the
+ * display is active (a smooth ramped step, even mid-stream) and restores
+ * it when the display sleeps. Called from the display power path; the
+ * coupling is one-directional (display -> audio).
+ *
+ * @param active true when the display leaves power save, false on entry
+ */
+void audio_speaker_notify_display_active(bool active);
+
+/**
  * @brief Get speaker volume
  *
  * @param spk Speaker handle

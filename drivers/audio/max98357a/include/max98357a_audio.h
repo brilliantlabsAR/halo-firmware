@@ -123,6 +123,19 @@ struct max98357a_protect_tuning {
 };
 
 /**
+ * @brief Tell the audio path whether the display is out of power save.
+ *
+ * While active, the display's supply current rides the same battery
+ * protection IC as the speakers, so the protection chain's energy budget
+ * is reduced by MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP points (a
+ * smooth ramped step, even mid-stream) and restored when the display
+ * sleeps. Coupling is one-directional: the display side calls in, the
+ * audio path never touches the display. No-op when the protection chain
+ * is disabled.
+ */
+void max98357a_audio_set_display_active(bool active);
+
+/**
  * @brief Set the per-stream digital pre-gain (dB*10, clamped to 0..+120).
  *
  * Applied at the head of the protection chain; the limiter sidechain sees

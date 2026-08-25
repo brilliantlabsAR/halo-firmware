@@ -500,6 +500,15 @@ int audio_speaker_set_volume_transient(audio_speaker_t *spk, int volume)
 	return audio_speaker_set_volume_internal(spk, volume, false);
 }
 
+void audio_speaker_notify_display_active(bool active)
+{
+#if defined(CONFIG_MAX98357A_AUDIO)
+	max98357a_audio_set_display_active(active);
+#else
+	ARG_UNUSED(active);
+#endif
+}
+
 int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10)
 {
 	if (!spk) {

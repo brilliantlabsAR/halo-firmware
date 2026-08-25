@@ -152,6 +152,22 @@ static int64_t isqrt64(int64_t val)
 	return (int64_t)(root >> 1);
 }
 
+/** Envelope threshold for a budget percentage (see file header). */
+static int64_t threshold_env_for(int budget_percent)
+{
+	int64_t amp = (32767LL * budget_percent) / 100;
+
+	return (amp * amp) / 2;
+}
+
+/** Budget after the runtime drop, floored so audio never fully mutes. */
+static int effective_budget(const struct spk_protect *sp)
+{
+	int budget = sp->params.budget_percent - sp->budget_drop_applied;
+
+	return (budget < 5) ? 5 : budget;
+}
+
 int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *params)
 {
 	if (!sp || !params) {
@@ -242,11 +258,8 @@ int spk_protect_init(struct spk_protect *sp, const struct spk_protect_params *pa
 	/* Budget: steady-state envelope of a reference-band (weight 1.0)
 	 * sine of amplitude budget_percent * FS is A^2 / 2.
 	 */
-	{
-		int64_t amp = (32767LL * params->budget_percent) / 100;
-
-		sp->threshold_env = (amp * amp) / 2;
-	}
+	sp->threshold_env = threshold_env_for(params->budget_percent);
+	sp->threshold_target = sp->threshold_env;
 
 	sp->hold_samples = (int32_t)((int64_t)params->sample_rate *
 				     params->hold_ms / 1000);
@@ -284,6 +297,10 @@ void spk_protect_reset(struct spk_protect *sp)
 	sp->gain_q15 = Q15_ONE;
 	sp->hold_left = 0;
 	sp->ramp_q15 = (sp->params.ramp_ms > 0) ? 0 : Q15_ONE;
+	/* A (re)started stream fades in from silence anyway: land any
+	 * pending budget slew instead of carrying it across streams.
+	 */
+	sp->threshold_env = sp->threshold_target;
 	/* stats deliberately survive stream restarts; they clear on init or
 	 * an explicit spk_protect_stats_read(reset=true).
 	 */
@@ -324,6 +341,23 @@ void spk_protect_set_pregain(struct spk_protect *sp, int32_t pregain_q15)
 		pregain_q15 = 4 * Q15_ONE;
 	}
 	sp->pregain_q15 = pregain_q15;
+}
+
+void spk_protect_set_budget_drop(struct spk_protect *sp, int drop_percent)
+{
+	if (!sp) {
+		return;
+	}
+	if (drop_percent < 0) {
+		drop_percent = 0;
+	}
+	if (drop_percent > 95) {
+		drop_percent = 95;
+	}
+	/* Single aligned int32 store; the process loop picks it up per
+	 * frame and slews the threshold (see spk_protect_process).
+	 */
+	sp->budget_drop_req = drop_percent;
 }
 
 int32_t spk_protect_db10_to_q15(int db10)
@@ -527,6 +561,36 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 			frame_proxy += (p < 0) ? -p : p;
 		}
 
+		/* --- Budget slew (display-aware ducking), once per frame --- */
+		if (sp->budget_drop_req != sp->budget_drop_applied) {
+			sp->budget_drop_applied = sp->budget_drop_req;
+			sp->threshold_target =
+				threshold_env_for(effective_budget(sp));
+			if (sp->ramp_q15 < Q15_ONE) {
+				/* stream still fading in: land it now */
+				sp->threshold_env = sp->threshold_target;
+			} else {
+				int32_t frames = Q15_ONE / sp->ramp_step;
+				int64_t delta = sp->threshold_target -
+						sp->threshold_env;
+				int64_t step = delta / (frames > 0 ? frames : 1);
+
+				if (step == 0) {
+					step = (delta > 0) ? 1 : -1;
+				}
+				sp->threshold_step = step;
+			}
+		}
+		if (sp->threshold_env != sp->threshold_target) {
+			sp->threshold_env += sp->threshold_step;
+			if ((sp->threshold_step > 0 &&
+			     sp->threshold_env > sp->threshold_target) ||
+			    (sp->threshold_step < 0 &&
+			     sp->threshold_env < sp->threshold_target)) {
+				sp->threshold_env = sp->threshold_target;
+			}
+		}
+
 		/* --- Sidechain + gain update, once per frame --- */
 		sp->env += (frame_proxy * frame_proxy - sp->env) >> sp->env_shift;
 
@@ -537,6 +601,21 @@ void spk_protect_process(struct spk_protect *sp, int16_t *pcm, size_t num_sample
 
 			if (target < sp->gain_q15) {
 				sp->gain_q15 = target;   /* instant attack */
+			} else if (sp->gain_q15 < target) {
+				/* Clamped harder than the current threshold
+				 * requires - happens when the budget is raised
+				 * mid-clamp (display back to power save).
+				 * Release toward the exact safe clamp; without
+				 * this the gain would ratchet down for as long
+				 * as the content stays over budget.
+				 */
+				int32_t step = (target - sp->gain_q15) >>
+					       sp->release_shift;
+
+				sp->gain_q15 += (step > 0) ? step : 1;
+				if (sp->gain_q15 > target) {
+					sp->gain_q15 = target;
+				}
 			}
 			sp->hold_left = sp->hold_samples;
 		} else if (sp->hold_left > 0) {

@@ -22,6 +22,9 @@
 #include <halo/lua_runtime.h>
 #include <halo/pm_manager.h>
 #include <halo/file_manager.h>
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+#include <halo/audio_stream.h>
+#endif
 
 LOG_MODULE_REGISTER(lua_display, CONFIG_HALO_LOG_LEVEL);
 
@@ -227,6 +230,11 @@ static int display_suspend_handler(void)
 	/* Note: is_active state managed by service framework */
 	display_state.hw_active = false;
 
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+	/* Display load off the battery IC: restore the audio budget */
+	audio_speaker_notify_display_active(false);
+#endif
+
 	return 0; /* Return 0 to indicate successful suspend (needs resume) */
 }
 
@@ -297,6 +305,11 @@ static int display_resume_handler(void)
 
 	/* Note: is_active state managed by service framework */
 	display_state.hw_active = true;
+
+#if defined(CONFIG_HALO_AUDIO_STREAM)
+	/* Display load now rides the battery IC: duck the audio budget */
+	audio_speaker_notify_display_active(true);
+#endif
 
 	return 0; /* Always return success - errors are logged */
 }

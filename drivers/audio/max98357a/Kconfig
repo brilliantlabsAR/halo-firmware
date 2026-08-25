@@ -93,12 +93,37 @@ config MAX98357A_AUDIO_PROTECT_BUDGET_PERCENT
 	  budget-80 ceiling measured ~72 mA above baseline, which keeps the
 	  per-pack share plus quiescent system load under the battery
 	  protection IC's minimum over-discharge trip (50 mA @ 20 ms) with
-	  the display in power save.
+	  the display in power save. While the display is active its extra
+	  load rides the same protection IC, so the effective budget is
+	  reduced by MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP points.
 
 	  To recalibrate: play full-scale sine sweeps, BROADBAND NOISE, and
 	  real TTS at max volume, measure battery current, and pick the
 	  largest value that stays below the protection IC's trip point with
 	  margin.
+
+config MAX98357A_AUDIO_PROTECT_DISPLAY_BUDGET_DROP
+	int "Budget reduction while the display is active (percent points)"
+	default 20
+	range 0 60
+	help
+	  While the display is out of power save, its supply current (bench:
+	  ~19 mA above the idle baseline, ~30 mA total system load) rides the
+	  same battery-protection IC as the audio path's larger share. The
+	  effective energy-limiter budget is reduced by this many points for
+	  as long as the display is active, and restored when it returns to
+	  power save - applied as a smooth ramped step even mid-stream.
+
+	  With the calibrated budget->current mapping, the default 20-point
+	  drop (80 -> 60) keeps the worst-case display-on draw near the
+	  protection IC's minimum trip threshold; raise the drop if a unit
+	  with a low-trip IC sample still cuts out during display-on
+	  playback, or set 0 to disable the coupling entirely.
+
+	  Note the audible consequence: content played with the display on
+	  is up to ~2 dB quieter at the loudness ceiling than display-off
+	  playback. Senders that want full speech loudness should blank the
+	  display during playback.
 
 config MAX98357A_AUDIO_PROTECT_ENV_MS
 	int "Energy limiter integration window (ms)"
