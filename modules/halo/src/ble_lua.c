@@ -277,9 +277,17 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 			break;
 		}
 
-		if (data[0] == HALO_LUA_CTRL_DATA_MARKER && len >= 2) {
-			/* Framed data: store the payload after the marker byte. */
+		if (data[0] == HALO_LUA_CTRL_DATA_MARKER) {
+			/* Framed data: store the payload after the marker byte. The
+			 * marker is framing, not content, so it must never reach the
+			 * REPL/Lua path - route on it regardless of length and treat a
+			 * bare marker (len == 1) as an empty frame, ignored like a
+			 * zero-length write. */
 			uint16_t payload_len = len - 1;
+
+			if (payload_len == 0) {
+				break;
+			}
 
 			if (ring_buf_space_get(&lua_ctx.data_rx_ring) < payload_len) {
 				LOG_WRN("Data RX ring full (available=%u, needed=%u)",

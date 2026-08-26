@@ -89,8 +89,11 @@ static int rx_write(uint16_t offset, const uint8_t *data, uint16_t len)
 		ring_buf_reset(&g_data);
 		return 0x00;
 	}
-	if (data[0] == HALO_LUA_CTRL_DATA_MARKER && len >= 2) {
-		uint16_t payload_len = len - 1;
+	if (data[0] == HALO_LUA_CTRL_DATA_MARKER) {
+		uint16_t payload_len = len - 1; /* bare marker (len==1) -> 0 */
+		if (payload_len == 0) {
+			return 0x00; /* empty frame: never reaches the REPL path */
+		}
 		if (ring_buf_space_get(&g_data) < payload_len) {
 			return 0x11; /* ATT_ERR_INSUFF_RESOURCE */
 		}
@@ -228,7 +231,16 @@ int main(void)
 	CHECK(g_data.len == 4 && memcmp(g_data.buf, "ABCD", 4) == 0,
 	      "data marker stripped, 4 payload bytes stored (got %u)", g_data.len);
 
-	/* 6. Unpaired write is refused. */
+	/* 6. A bare data marker (len == 1, e.g. send_data("")) is an empty frame:
+	 *    it must be consumed as framing, never fall through to the REPL ring
+	 *    and reach the Lua parser. */
+	reset_all();
+	rc = att_write(0, "\x01", 1);
+	CHECK(rc == 0x00 && g_repl.len == 0 && g_data.len == 0,
+	      "bare marker is a no-op, not REPL input (repl=%u data=%u)",
+	      g_repl.len, g_data.len);
+
+	/* 7. Unpaired write is refused. */
 	reset_all();
 	g_paired = false;
 	rc = att_write(0, "print(1)", 8);
