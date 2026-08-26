@@ -55,6 +55,8 @@ release pages and tags are not publicly reachable.
 - BLE Lua RX write handler no longer underflows the ring-buffer length on a
   zero-length or offset write, and continuation fragments no longer drop a
   byte or gain a stray newline (#7)
+- BLE Lua RX handler routes a bare data marker (`send_data("")`) as an empty
+  frame instead of passing the marker byte to the Lua REPL (#8)
 
 ## [0.8.8] - 2026-08-17
 
