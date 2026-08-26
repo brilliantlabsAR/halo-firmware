@@ -11,41 +11,45 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-08-27
+
 ### Added
 
 - `frame.speaker.start{gain=0..12}`: per-stream digital pre-gain into the
   protection limiter — lifts quiet sources (un-normalized TTS) toward the
-  loudness ceiling, compresses hot ones; transient per stream
+  loudness ceiling, compresses hot ones; transient per stream (#6)
 - `frame.speaker.start{budget=10..100}`: per-stream energy-budget
   override up to a firmware-clamped maximum — higher = louder ceiling at
   more battery current; any override engages the fast limiter attack
   that makes raised budgets safe (bench-validated at 100 against
-  worst-case content); all protection stays active; transient per stream
+  worst-case content); all protection stays active; transient per
+  stream (#6)
 - True-peak clamp on the protection chain's weighted drive
   (`MAX98357A_AUDIO_PROTECT_PEAK_CAP_PERCENT`, default 300 %): backstop
   against tall transient spikes inside the energy limiter's integration
-  window
+  window (#6)
 - Display-aware speaker energy budget: while the display is out of power
   save its current load shares the battery-protection IC with the
   speakers, so the audio budget is reduced (default 20 points,
   Kconfig-tunable) and restored when the display sleeps, ramped smoothly
-  even mid-stream
+  even mid-stream (#6)
 - Runtime protection-chain tuning API for bench/listening builds
   (`MAX98357A_AUDIO_PROTECT_TUNING`, off in production), and a
-  psychoacoustic bass enhancer stage (off by default)
+  psychoacoustic bass enhancer stage (off by default) (#6)
 
 ### Changed
 
 - Speaker voicing rebalanced for loudness: deeper cuts in the
   vibrotactile lows, +4 dB top band, protection HPF 130 → 200 Hz —
-  blinded on-head A/B: louder speech at equal buzz
+  blinded on-head A/B: louder speech at equal buzz (#6)
 - Speaker protection sidechain weights recalibrated from bench current
   measurements: supply current tracks drive amplitude (not frequency),
   so the per-band weights are now uniform and the energy budget caps
-  current honestly for any spectrum
+  current honestly for any spectrum (#6)
 - Speaker limiter releases upward when its budget rises mid-clamp
   (previously the gain ratcheted down until the content itself went
-  quiet)
+  quiet) (#6)
+- Battery readings average a four-conversion ADC burst per fetch (#5)
 - BLE Lua RX and audio-RX characteristics refuse ATT offset (long/prepared)
   writes (`NO_OFFSET`), matching the rest of the GATT database; one ATT write
   is treated as one complete message (#7)
@@ -57,6 +61,25 @@ release pages and tags are not publicly reachable.
   byte or gain a stray newline (#7)
 - BLE Lua RX handler routes a bare data marker (`send_data("")`) as an empty
   frame instead of passing the marker byte to the Lua REPL (#8)
+- Reported battery level converges toward the measured charge at a
+  bounded rate (at most one percentage point per update after three
+  confirming samples) instead of holding monotonic between charger
+  events (#5)
+- Battery level filter seeds from steady-state readings taken 15 s
+  after boot instead of the first three fetches; until seeding
+  completes the raw measured level is reported directly (#5)
+- `frame.GIT_TAG` is populated in CI-built images: the build container's
+  workspace is marked safe for git, so the build-time `git describe` no
+  longer fails silently (#3)
+
+### Documentation
+
+- PROTOCOL.md errata: advertising and pairing summary, display and SDK
+  corrections; button/pairing/BLE docs aligned with multi-bond
+  behaviour; pairing flowchart vendored into the repo; SETUP.md
+  container-build section hardened (#1)
+- `frame.display.get_font_list()` return shape and example
+  corrected (#2)
 
 ## [0.8.8] - 2026-08-17
 
