@@ -17,7 +17,7 @@ static uint8_t internal_mem_pool[CONFIG_HALO_MEM_INTERNAL_SIZE] __aligned(8);
 /* Memory manager context */
 static struct {
 	bool initialized;
-	struct k_mutex lock;
+	struct k_spinlock lock;
 
 	/* Internal heap */
 	struct sys_heap internal_heap;
@@ -31,6 +31,37 @@ static struct {
 #endif
 } mem_ctx;
 
+/* sys_heap is not thread-safe (k_heap is the locked wrapper). halo_malloc()
+ * and halo_free() are called from the Lua REPL thread (the Lua allocator),
+ * Bluetooth host callbacks (ble_lua RX, LE audio datapaths) and the sfxr
+ * thread, so every heap operation is serialised here with the same spinlock
+ * discipline k_heap uses: short critical sections, ISR-safe, no sleeping. */
+static inline void *heap_alloc_locked(struct sys_heap *heap, size_t size)
+{
+	k_spinlock_key_t key = k_spin_lock(&mem_ctx.lock);
+	void *ptr = sys_heap_alloc(heap, size);
+
+	k_spin_unlock(&mem_ctx.lock, key);
+	return ptr;
+}
+
+static inline void heap_free_locked(struct sys_heap *heap, void *ptr)
+{
+	k_spinlock_key_t key = k_spin_lock(&mem_ctx.lock);
+
+	sys_heap_free(heap, ptr);
+	k_spin_unlock(&mem_ctx.lock, key);
+}
+
+static inline size_t heap_usable_size_locked(struct sys_heap *heap, void *ptr)
+{
+	k_spinlock_key_t key = k_spin_lock(&mem_ctx.lock);
+	size_t size = sys_heap_usable_size(heap, ptr);
+
+	k_spin_unlock(&mem_ctx.lock, key);
+	return size;
+}
+
 int halo_mem_init(void)
 {
 	if (mem_ctx.initialized) {
@@ -38,7 +69,6 @@ int halo_mem_init(void)
 	}
 
 	memset(&mem_ctx, 0, sizeof(mem_ctx));
-	k_mutex_init(&mem_ctx.lock);
 
 	/* Initialize internal heap from static pool */
 	mem_ctx.internal_size = CONFIG_HALO_MEM_INTERNAL_SIZE;
@@ -93,14 +123,14 @@ void *halo_malloc(size_t size, halo_mem_region_t region)
 	switch (region) {
 	case HALO_MEM_REGION_INTERNAL:
 		/* Use internal heap */
-		ptr = sys_heap_alloc(&mem_ctx.internal_heap, size);
+		ptr = heap_alloc_locked(&mem_ctx.internal_heap, size);
 		break;
 
 #if defined(CONFIG_HALO_MEM_USE_EXTERNAL_SRAM)
 	case HALO_MEM_REGION_EXTERNAL:
 		/* Use external SRAM heap */
 		if (mem_ctx.external_mem != NULL && mem_ctx.external_size > 0) {
-			ptr = sys_heap_alloc(&mem_ctx.external_heap, size);
+			ptr = heap_alloc_locked(&mem_ctx.external_heap, size);
 		} else {
 			LOG_WRN("External SRAM not available, allocation failed");
 			ptr = NULL;
@@ -111,10 +141,10 @@ void *halo_malloc(size_t size, halo_mem_region_t region)
 	case HALO_MEM_REGION_AUTO:
 	default:
 		/* Try internal first, then external if available */
-		ptr = sys_heap_alloc(&mem_ctx.internal_heap, size);
+		ptr = heap_alloc_locked(&mem_ctx.internal_heap, size);
 #if defined(CONFIG_HALO_MEM_USE_EXTERNAL_SRAM)
 		if (!ptr && mem_ctx.external_mem != NULL && mem_ctx.external_size > 0) {
-			ptr = sys_heap_alloc(&mem_ctx.external_heap, size);
+			ptr = heap_alloc_locked(&mem_ctx.external_heap, size);
 		}
 #endif
 		break;
@@ -173,7 +203,7 @@ void *halo_realloc(void *ptr, size_t size, halo_mem_region_t region)
 #endif
 
 	if (old_heap) {
-		old_size = sys_heap_usable_size(old_heap, ptr);
+		old_size = heap_usable_size_locked(old_heap, ptr);
 	}
 
 	if (old_size == 0) {
@@ -213,12 +243,12 @@ void halo_free(void *ptr)
 	/* Determine which heap the pointer belongs to */
 	if ((uint8_t *)ptr >= internal_mem_pool &&
 	    (uint8_t *)ptr < internal_mem_pool + CONFIG_HALO_MEM_INTERNAL_SIZE) {
-		sys_heap_free(&mem_ctx.internal_heap, ptr);
+		heap_free_locked(&mem_ctx.internal_heap, ptr);
 	}
 #if defined(CONFIG_HALO_MEM_USE_EXTERNAL_SRAM)
 	else if ((uint8_t *)ptr >= mem_ctx.external_mem &&
 		 (uint8_t *)ptr < mem_ctx.external_mem + mem_ctx.external_size) {
-		sys_heap_free(&mem_ctx.external_heap, ptr);
+		heap_free_locked(&mem_ctx.external_heap, ptr);
 	}
 #endif
 	else {

@@ -11,6 +11,13 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- `mem_manager` heap operations are serialised with a spinlock. `halo_malloc`
+  / `halo_free` are called concurrently from the Lua REPL thread, Bluetooth
+  host callbacks and the sfxr thread, and `sys_heap` is not thread-safe; the
+  `mem_ctx.lock` mutex was initialised but never taken (#11)
+
 ## [0.8.9] - 2026-08-27
 
 ### Added
