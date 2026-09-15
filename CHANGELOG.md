@@ -22,6 +22,9 @@ release pages and tags are not publicly reachable.
   magnetometer, but the always-on IMU service never receives RESUME and
   `imu_hardware_init()` short-circuited on `hardware_configured` before its
   PM-resume block; the PM-state reconciliation now runs on every entry
+- `frame.standby()` no longer throws `"interrupted"` after a break signal that
+  arrived while nothing was sleeping: the interrupt flag is now reset on entry,
+  as `frame.sleep()` already did. A break during standby still interrupts it
 
 ## [0.8.9] - 2026-08-27
 

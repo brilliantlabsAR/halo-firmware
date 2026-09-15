@@ -132,6 +132,11 @@ static int lua_standby(lua_State *L)
 		timeout_ms = (uint32_t)(seconds * 1000);
 	}
 
+	/* Reset interrupt flag before starting standby, as frame.sleep() does:
+	 * a break signal that arrived while nothing was sleeping leaves it set,
+	 * and an uninterrupted standby would then report "interrupted". */
+	sleep_interrupted = false;
+
 	int ret = halo_pm_sleep_standby(timeout_ms);
 	if (ret < 0) {
 		return luaL_error(L, "failed to enter standby: %d", ret);
