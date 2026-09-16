@@ -77,13 +77,47 @@ void halo_lua_runtime_reset(void);
 void halo_lua_runtime_exit(void);
 
 /**
- * @brief Signal button event to Lua runtime
- * 
- * Called from button ISR to queue button event for processing
- * in the REPL thread context.
- * 
- * @param action Button action that occurred
+ * @brief Asynchronous event sources delivered on the Lua thread
+ *
+ * The Lua VM is single-threaded: every callback into Lua must run on the
+ * REPL thread. Producers on other threads (BLE host, button driver, sensor
+ * work, T5838 AAD work) queue their event in their own module, then call
+ * halo_lua_event_signal(). The runtime owns Lua's single debug-hook slot:
+ * the signal arms one shared hook, and when it fires on the REPL thread it
+ * drains every source with a pending bit set, in the order below, so
+ * sources can never clobber each other's hook and no event is lost.
  */
-void halo_lua_runtime_button_event(int action);
+enum halo_lua_event_source {
+	HALO_LUA_EVENT_SRC_BLE_DATA = 0, /* frame.bluetooth.receive_callback */
+	HALO_LUA_EVENT_SRC_BUTTON,       /* frame.button.* callbacks */
+	HALO_LUA_EVENT_SRC_IMU,          /* frame.imu.tap_callback */
+	HALO_LUA_EVENT_SRC_MIC_AAD,      /* frame.microphone.aad_callback */
+	HALO_LUA_EVENT_SRC_ANCS,         /* frame.ancs.* callbacks */
+	HALO_LUA_EVENT_SRC_COUNT,
+};
+
+/**
+ * @brief Drain function for one event source
+ *
+ * Runs on the REPL thread inside the shared hook with the VM available.
+ * Must consume every queued event for its source (the pending bit was
+ * cleared before the call) and must not call lua_sethook().
+ */
+typedef void (*halo_lua_event_drain_t)(lua_State *L);
+
+/**
+ * @brief Register the drain function for an event source
+ *
+ * Idempotent; call from the module's library-open or init path.
+ */
+void halo_lua_event_drain_set(enum halo_lua_event_source src, halo_lua_event_drain_t drain);
+
+/**
+ * @brief Mark an event source pending and arm the Lua hook
+ *
+ * Safe to call from any thread. A no-op when the VM is not running - the
+ * source keeps its own queue, so it can decide whether to buffer or drop.
+ */
+void halo_lua_event_signal(enum halo_lua_event_source src);
 
 #endif /* HALO_LUA_RUNTIME_H_ */

@@ -119,17 +119,23 @@ static struct {
 	bool running;
 	bool exited; /* Flag to indicate complete exit (not restart) */
 	bool interrupted; /* Flag for Ctrl+C interrupt */
-	bool interrupt_hook_active; /* Flag to track if interrupt hook is installed */
-	bool data_thread_should_exit;
+	bool standby_hold; /* Standby: pause the VM in place until wake */
 	lua_State *L;
+
+	/* Guards L against the VM being torn down while another thread arms
+	 * the hook (lua_hook_arm vs lua_vm_cleanup). Held only for the few
+	 * instructions of lua_sethook / the pointer swap. */
+	struct k_spinlock hook_lock;
+
+	/* Async event dispatch (see halo_lua_event_signal) */
+	atomic_t pending; /* bitmask of enum halo_lua_event_source */
+	halo_lua_event_drain_t drains[HALO_LUA_EVENT_SRC_COUNT];
 
 	/* Threads */
 	struct k_thread repl_thread;
-	struct k_thread data_thread;
 
 	/* Thread start synchronization */
 	struct k_sem repl_thread_started;
-	struct k_sem data_thread_started;
 
 	/* Thread exit synchronization - for PM to wait for REPL cleanup */
 	struct k_sem repl_exited_sem;
@@ -143,63 +149,102 @@ static struct {
 	uint8_t repl_buffer[CONFIG_HALO_LUA_MAX_REPL_SIZE];
 	size_t repl_len;
 	uint8_t line_buffer[CONFIG_HALO_LUA_MAX_REPL_SIZE];
-	uint8_t data_buffer[CONFIG_HALO_LUA_MAX_DATA_SIZE];
 
 } lua_ctx = {
 	.initialized = false,
 	.running = false,
 	.exited = false,
 	.interrupted = false,
-	.interrupt_hook_active = false,
-	.data_thread_should_exit = false,
+	.standby_hold = false,
 	.L = NULL,
+	.pending = ATOMIC_INIT(0),
 };
 
 /* Thread stacks */
 K_THREAD_STACK_DEFINE(lua_repl_stack, CONFIG_HALO_LUA_REPL_TASK_STACK_SIZE);
-K_THREAD_STACK_DEFINE(lua_data_stack, CONFIG_HALO_LUA_DATA_TASK_STACK_SIZE);
 
 /* Forward declarations */
 static void lua_repl_thread_fn(void *p1, void *p2, void *p3);
-static void lua_data_thread_fn(void *p1, void *p2, void *p3);
 static void lua_vm_init(lua_State *L);
 static void lua_vm_cleanup(void);
 
-/* Lua break signal handler */
-static void lua_break_signal_handler(lua_State *L, lua_Debug *ar)
+/*
+ * Shared Lua hook.
+ *
+ * Lua has exactly one debug-hook slot per state, and lua_sethook() is the
+ * only VM call that is safe from another thread (ldebug.c documents it as
+ * signal-safe). Every asynchronous need - Ctrl+C / restart / exit breaks,
+ * standby pause, and the module callbacks (BLE data, button, IMU tap, AAD,
+ * ANCS) - therefore funnels through this one handler, which runs on the
+ * REPL thread on the next VM instruction. Producers never touch the slot
+ * directly; they set state and call lua_hook_arm().
+ */
+static void lua_hook_dispatch(lua_State *L, lua_Debug *ar)
 {
 	ARG_UNUSED(ar);
-	
-	/* Check if still interrupted */
-	if (!lua_ctx.interrupted) {
-		/* Interrupt cleared - remove hook and return normally */
-		lua_sethook(L, NULL, 0, 0);
-		lua_ctx.interrupt_hook_active = false;
-		return;
+
+	/* Break request (Ctrl+C, restart, exit, light sleep): unwind the
+	 * running chunk. The hook stays armed so a break raised while the
+	 * REPL is between commands still trips the next chunk. Pending
+	 * module events are kept; they drain once the flag clears. */
+	if (lua_ctx.interrupted || !lua_ctx.running) {
+		luaL_error(L, "interrupted");
 	}
-	
-	/* Still interrupted - throw error to break execution */
-	luaL_error(L, "interrupted");
+
+	/* Disarm before reading pending bits: a signal that lands after
+	 * this point re-arms the hook, so it fires again for anything the
+	 * loop below misses. */
+	lua_sethook(L, NULL, 0, 0);
+
+	/* Standby: hold the VM in place; execution resumes at this
+	 * statement on wake. */
+	if (lua_ctx.standby_hold) {
+		while (halo_pm_is_sleeping()) {
+			k_sleep(K_MSEC(100));
+		}
+		lua_ctx.standby_hold = false;
+	}
+
+	uint32_t mask;
+	while ((mask = (uint32_t)atomic_clear(&lua_ctx.pending)) != 0) {
+		for (int src = 0; src < HALO_LUA_EVENT_SRC_COUNT; src++) {
+			if ((mask & BIT(src)) && lua_ctx.drains[src]) {
+				lua_ctx.drains[src](L);
+			}
+		}
+	}
 }
 
-/* Lua sleep hook - pauses script execution during light sleep */
-static void lua_sleep_hook(lua_State *L, lua_Debug *ar)
+/* Arm the shared hook on the live VM (any thread). */
+static void lua_hook_arm(void)
 {
-	ARG_UNUSED(ar);
+	k_spinlock_key_t key = k_spin_lock(&lua_ctx.hook_lock);
 
-	/* Check if still in sleep mode */
-	if (!halo_pm_is_sleeping()) {
-		/* Sleep ended, remove hook */
-		lua_sethook(L, NULL, 0, 0);
+	if (lua_ctx.L) {
+		lua_sethook(lua_ctx.L, lua_hook_dispatch,
+			    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
+	}
+	k_spin_unlock(&lua_ctx.hook_lock, key);
+}
+
+void halo_lua_event_drain_set(enum halo_lua_event_source src, halo_lua_event_drain_t drain)
+{
+	if (src < HALO_LUA_EVENT_SRC_COUNT) {
+		lua_ctx.drains[src] = drain;
+	}
+}
+
+void halo_lua_event_signal(enum halo_lua_event_source src)
+{
+	if (src >= HALO_LUA_EVENT_SRC_COUNT) {
 		return;
 	}
 
-	while (halo_pm_is_sleeping()) {
-		k_sleep(K_MSEC(100));
-	}
+	atomic_or(&lua_ctx.pending, BIT(src));
 
-	/* Remove hook when woken up */
-	lua_sethook(L, NULL, 0, 0);
+	if (lua_ctx.running) {
+		lua_hook_arm();
+	}
 }
 
 #ifdef CONFIG_HALO_PM_MANAGER
@@ -241,11 +286,7 @@ static int lua_pm_callback_handler(halo_pm_event_t event, halo_pm_sleep_mode_t m
 			/* Prepare to break out of current Lua execution after wake */
 			lua_ctx.running = false;
 			lua_ctx.interrupted = true;
-			if (lua_ctx.L) {
-				lua_sethook(lua_ctx.L, lua_break_signal_handler,
-					    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE |
-						    LUA_MASKCOUNT, 1);
-			}
+			lua_hook_arm();
 			return 0;
 		}
 
@@ -256,7 +297,8 @@ static int lua_pm_callback_handler(halo_pm_event_t event, halo_pm_sleep_mode_t m
 			return ret;
 		}
 		if (lua_ctx.L && lua_ctx.running) {
-			lua_sethook(lua_ctx.L, lua_sleep_hook, LUA_MASKCOUNT, 1);
+			lua_ctx.standby_hold = true;
+			lua_hook_arm();
 			return 0; /* Hook installed (needs removal on resume) */
 		}
 		return 1; /* Skip if Lua not running */
@@ -271,10 +313,10 @@ static int lua_pm_callback_handler(halo_pm_event_t event, halo_pm_sleep_mode_t m
 			return 0;
 		}
 
-		/* Standby / other: remove hook and resume services */
-		if (lua_ctx.L && lua_ctx.running) {
-			lua_sethook(lua_ctx.L, NULL, 0, 0);
-		}
+		/* Standby / other: release the held VM and resume services.
+		 * The hook itself is left alone - module events that queued
+		 * during standby are still pending on it. */
+		lua_ctx.standby_hold = false;
 		halo_lua_service_notify(HALO_LUA_EVENT_RESUME);
 		return 0;
 	}
@@ -394,9 +436,16 @@ static void lua_vm_cleanup(void)
 		/* Notify services: VM shutting down */
 		halo_lua_service_notify(HALO_LUA_EVENT_DEINIT);
 
-		/* Close Lua state */
-		lua_close(lua_ctx.L);
+		/* Detach the state under the hook lock so no producer can arm a
+		 * hook on a state that is being closed, then close it. */
+		k_spinlock_key_t key = k_spin_lock(&lua_ctx.hook_lock);
+		lua_State *L = lua_ctx.L;
+
 		lua_ctx.L = NULL;
+		k_spin_unlock(&lua_ctx.hook_lock, key);
+
+		lua_close(L);
+		atomic_clear(&lua_ctx.pending);
 	}
 }
 
@@ -440,7 +489,7 @@ static void lua_repl_thread_fn(void *p1, void *p2, void *p3)
 		/* Initialize VM */
 		lua_ctx.running = true;
 		lua_ctx.interrupted = false;
-		lua_ctx.interrupt_hook_active = false;
+		lua_ctx.standby_hold = false;
 		lua_vm_init(lua_ctx.L);
 
 		/* REPL loop */
@@ -522,8 +571,11 @@ static void lua_repl_thread_fn(void *p1, void *p2, void *p3)
 							const char *lua_error =
 								lua_tostring(lua_ctx.L, -1);
 							if (lua_error) {
+								/* A chunk unwound by exit, restart or
+								 * sleep is not a script error. */
 								bool expected_shutdown_error =
-									(lua_ctx.exited || halo_pm_is_sleeping());
+									(lua_ctx.exited || !lua_ctx.running ||
+									 halo_pm_is_sleeping());
 
 								if (expected_shutdown_error) {
 									LOG_DBG("Lua execution stopped during shutdown: %s",
@@ -577,11 +629,16 @@ static void lua_repl_thread_fn(void *p1, void *p2, void *p3)
 							sizeof(lua_ctx.repl_buffer));
 				}
 			} else if (lua_ctx.running && !lua_ctx.exited) {
-				// trigger hook
+				/* Idle: run a trivial chunk so the shared hook gets
+				 * a VM instruction to fire on (pending callbacks,
+				 * breaks). A break that lands with nothing running
+				 * is consumed here rather than left to trip the
+				 * next command. */
 				int status = luaL_dostring(lua_ctx.L, "frame.yield()");
 				if (status != LUA_OK) {
 					lua_pop(lua_ctx.L, 1);
 				}
+				lua_ctx.interrupted = false;
 			}
 		}
 
@@ -598,32 +655,6 @@ static void lua_repl_thread_fn(void *p1, void *p2, void *p3)
 	LOG_DBG("REPL thread exit final");
 }
 
-/* Data handler thread - processes binary data from BLE */
-static void lua_data_thread_fn(void *p1, void *p2, void *p3)
-{
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
-
-	/* Signal that thread has started */
-	k_sem_give(&lua_ctx.data_thread_started);
-
-	while (!lua_ctx.data_thread_should_exit) {
-		/* Read from BLE data channel */
-		int32_t len = halo_ble_lua_data_read(lua_ctx.data_buffer,
-					    sizeof(lua_ctx.data_buffer), K_MSEC(100));
-
-		if (lua_ctx.data_thread_should_exit) {
-			break;
-		}
-
-		if (len > 0 && lua_ctx.L && lua_ctx.running) {
-			/* Call Lua bluetooth callback for data interrupt */
-			lua_bluetooth_data_interrupt(lua_ctx.L, lua_ctx.data_buffer, len);
-		}
-	}
-}
-
 /* Public API implementations */
 
 int halo_lua_runtime_init(void)
@@ -632,9 +663,8 @@ int halo_lua_runtime_init(void)
 		return 0;
 	}
 
-	/* Initialize thread start semaphores */
+	/* Initialize thread start semaphore */
 	k_sem_init(&lua_ctx.repl_thread_started, 0, 1);
-	k_sem_init(&lua_ctx.data_thread_started, 0, 1);
 
 	/* Initialize thread exit synchronization semaphore */
 	k_sem_init(&lua_ctx.repl_exited_sem, 0, 1);
@@ -659,16 +689,8 @@ int halo_lua_runtime_init(void)
 			K_NO_WAIT);
 	k_thread_name_set(&lua_ctx.repl_thread, "lua_repl");
 
-	/* Start data handler thread */
-	lua_ctx.data_thread_should_exit = false;
-	k_thread_create(&lua_ctx.data_thread, lua_data_stack, K_THREAD_STACK_SIZEOF(lua_data_stack),
-			lua_data_thread_fn, NULL, NULL, NULL, CONFIG_HALO_LUA_DATA_TASK_PRIORITY, 0,
-			K_NO_WAIT);
-	k_thread_name_set(&lua_ctx.data_thread, "lua_data");
-
-	/* Wait for threads to start */
+	/* Wait for the thread to start */
 	k_sem_take(&lua_ctx.repl_thread_started, K_FOREVER);
-	k_sem_take(&lua_ctx.data_thread_started, K_FOREVER);
 
 	lua_ctx.initialized = true;
 	LOG_INF("Lua runtime initialized successfully");
@@ -712,12 +734,8 @@ void halo_lua_runtime_interrupt(void)
 	/* Set interrupt flag */
 	lua_ctx.interrupted = true;
 
-	/* Set Lua hook to interrupt execution */
-	if (lua_ctx.L && lua_ctx.running) {
-		lua_sethook(lua_ctx.L, lua_break_signal_handler,
-			    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
-		lua_ctx.interrupt_hook_active = true;
-	}
+	/* Arm the hook so the running chunk unwinds */
+	lua_hook_arm();
 
 	/* Notify services first */
 	halo_lua_service_notify(HALO_LUA_EVENT_INTERRUPT);
@@ -727,14 +745,10 @@ void halo_lua_runtime_restart(void)
 {
 	LOG_INF("Lua restart (Ctrl+D)");
 
-	/* Set Lua hook to interrupt execution */
-	if (lua_ctx.L && lua_ctx.running) {
-		lua_sethook(lua_ctx.L, lua_break_signal_handler,
-			    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
-	}
-
-	/* Stop current VM - REPL thread will restart it */
+	/* Stop current VM - REPL thread will restart it. The hook trips on
+	 * !running, so a busy script is unwound rather than waited for. */
 	lua_ctx.running = false;
+	lua_hook_arm();
 }
 
 void halo_lua_runtime_reset(void)
@@ -766,10 +780,8 @@ void halo_lua_runtime_exit(void)
 	/* Install break hook before flipping runtime flags. */
 	if (lua_ctx.L) {
 		LOG_DBG("Runtime exit installing break hook");
-		lua_sethook(lua_ctx.L, lua_break_signal_handler,
-			    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
-		/* Ensure break hook trips immediately */
 		lua_ctx.interrupted = true;
+		lua_hook_arm();
 	}
 
 	/* Set exit flag to stop REPL thread from restarting */
@@ -795,24 +807,20 @@ void halo_lua_runtime_exit(void)
 			halo_lua_service_notify(HALO_LUA_EVENT_DEINIT);
 
 			/* Close Lua state if REPL did not reach normal cleanup. */
-			if (lua_ctx.L) {
-				lua_close(lua_ctx.L);
-				lua_ctx.L = NULL;
+			k_spinlock_key_t key = k_spin_lock(&lua_ctx.hook_lock);
+			lua_State *L = lua_ctx.L;
+
+			lua_ctx.L = NULL;
+			k_spin_unlock(&lua_ctx.hook_lock, key);
+			if (L) {
+				lua_close(L);
 			}
+			atomic_clear(&lua_ctx.pending);
 		} else {
 			LOG_DBG("REPL thread exited cleanly");
 		}
 	}
 
-	/* Stop data thread cooperatively, then fallback to abort only if needed. */
-	lua_ctx.data_thread_should_exit = true;
-	LOG_DBG("Runtime exit waiting data thread join");
-	int data_ret = k_thread_join(&lua_ctx.data_thread, K_MSEC(1500));
-	if (data_ret != 0) {
-		LOG_WRN("Data thread did not exit in time (%d), aborting", data_ret);
-		k_thread_abort(&lua_ctx.data_thread);
-		k_thread_join(&lua_ctx.data_thread, K_FOREVER);
-	}
 	LOG_DBG("Runtime exit done");
 
 	lua_ctx.initialized = false;

@@ -1,11 +1,28 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.1.1,<4", "lz4>=4"]
 # ///
 import asyncio
+import struct
 from brilliant_ble import BrilliantBle
 from halo_device_file import preserve_main_lua
 import argparse
+import lz4.block
+
+
+def lz4_frame(blocks):
+    """Hand-build an LZ4 frame with one compressed block per entry.
+
+    frame.compression.decompress() walks the block list itself, so the
+    per-block size limit of the real frame format does not apply and small
+    blocks let a multi-block frame fit one BLE write.
+    """
+    hdr = b"\x04\x22\x4d\x18" + b"\x60" + b"\x40" + b"\x00"  # magic, FLG, BD, HC (unchecked)
+    body = b""
+    for blk in blocks:
+        c = lz4.block.compress(blk, store_size=False)
+        body += struct.pack("<I", len(c)) + c
+    return hdr + body + b"\x00\x00\x00\x00"
 
 
 async def main():
@@ -22,7 +39,13 @@ async def main():
 
     b = BrilliantBle()
 
-    name = await b.connect(name=args.name, print_response_handler=lambda s: print(s))
+    prints = []
+
+    def on_print(s):
+        prints.append(s)
+        print(s)
+
+    name = await b.connect(name=args.name, print_response_handler=on_print)
     fw = await b.send_lua("print(frame.FIRMWARE_VERSION)", await_print=True)
     tag = await b.send_lua("print(frame.GIT_TAG)", await_print=True)
     batt = await b.send_lua("print(frame.battery_level())", await_print=True)
@@ -66,6 +89,19 @@ async def main():
 
         await b.send_data(compressed_data)
         await asyncio.sleep(10)
+
+        # Multi-block frame: process_function must run once per block, in
+        # order.
+        blocks = [b"block-one ", b"block-two ", b"block-three"]
+        prints.clear()
+        await b.send_data(lz4_frame(blocks))
+        await asyncio.sleep(3)
+        got = [p for p in prints if p.startswith("block-")]
+        want = [blk.decode() for blk in blocks]
+        if got == want:
+            print(f"Passed: multi-block decompress delivered {len(got)} blocks in order")
+        else:
+            print(f"FAILED: multi-block decompress => {got!r}, wanted {want!r}")
 
     # preserve_main_lua() has removed this test's main.lua and restored the
     # original, so its receive callback no longer re-registers at every boot

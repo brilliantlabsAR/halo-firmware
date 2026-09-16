@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <lz4.h>
@@ -24,18 +25,17 @@ LOG_MODULE_REGISTER(lua_compression, CONFIG_HALO_LOG_LEVEL);
 
 /**
  * @brief Compression callback state
- * 
- * Stores the Lua callback reference and decompressed data buffer.
  */
 static struct {
 	int callback_ref;                     /* LUA_REGISTRYINDEX reference */
-	uint8_t buffer[4096];                 /* Decompressed data buffer */
-	size_t buffer_size;                   /* Size of decompressed data */
-	bool has_data;                        /* Flag indicating data is ready */
 } decompress_state = {
 	.callback_ref = LUA_NOREF,
-	.buffer_size = 0,
-	.has_data = false,
+};
+
+/* Per-call context threaded through decompress_lz4 to the block callback */
+struct decompress_ctx {
+	lua_State *L;
+	bool failed; /* callback raised; its error message is on the Lua stack */
 };
 
 /**
@@ -84,70 +84,33 @@ static int get_header_size(const void *src, size_t src_size)
 }
 
 /**
- * @brief Lua hook handler for decompression callback
- * 
- * Called asynchronously after each block is decompressed.
+ * @brief Deliver one decompressed block to the Lua process_function
+ *
+ * frame.compression.decompress() runs on the Lua thread, so the callback
+ * is invoked directly, once per block, in order. A Lua error stops the
+ * decode; the message is left on the stack for the caller to re-raise.
+ *
+ * @return 0 to continue, -1 to stop decoding
  */
-static void decompression_hook_handler(lua_State *L, lua_Debug *ar)
+static int process_decompressed_block(void *context, void *data, size_t data_size)
 {
-	ARG_UNUSED(ar);
-	
-	/* Clear hook immediately */
-	lua_sethook(L, NULL, 0, 0);
+	struct decompress_ctx *ctx = context;
+	lua_State *L = ctx->L;
 
 	if (decompress_state.callback_ref == LUA_NOREF) {
-		LOG_WRN("Decompression complete but no callback registered");
-		decompress_state.has_data = false;
-		return;
+		LOG_WRN("Decompressed block but no callback registered");
+		return 0;
 	}
 
-	if (!decompress_state.has_data) {
-		LOG_WRN("Hook called but no data available");
-		return;
-	}
-
-	/* Get callback function from registry */
 	lua_rawgeti(L, LUA_REGISTRYINDEX, decompress_state.callback_ref);
+	lua_pushlstring(L, (const char *)data, data_size);
 
-	/* Push decompressed data as string */
-	lua_pushlstring(L, (const char *)decompress_state.buffer, 
-	                decompress_state.buffer_size);
-
-	/* Clear data flag */
-	decompress_state.has_data = false;
-
-	/* Call callback */
 	if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-		const char *error = lua_tostring(L, -1);
-		LOG_ERR("Decompression callback error: %s", error);
-		lua_pop(L, 1);
-	}
-}
-
-/**
- * @brief Process decompressed block callback
- * 
- * Called by decompression function for each decompressed block.
- * Stores data and triggers Lua hook.
- */
-static void process_decompressed_block(void *context, void *data, size_t data_size)
-{
-	lua_State *L = (lua_State *)context;
-
-	if (data_size > sizeof(decompress_state.buffer)) {
-		LOG_ERR("Decompressed block too large: %u > %u", 
-		        data_size, sizeof(decompress_state.buffer));
-		data_size = sizeof(decompress_state.buffer);
+		ctx->failed = true;
+		return -1;
 	}
 
-	/* Copy decompressed data */
-	memcpy(decompress_state.buffer, data, data_size);
-	decompress_state.buffer_size = data_size;
-	decompress_state.has_data = true;
-
-	/* Trigger Lua callback via hook */
-	lua_sethook(L, decompression_hook_handler,
-	           LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
+	return 0;
 }
 
 /**
@@ -156,12 +119,13 @@ static void process_decompressed_block(void *context, void *data, size_t data_si
  * @param dest_size Destination block size
  * @param source Compressed source data
  * @param source_size Compressed data size
- * @param callback Callback function for each decompressed block
- * @param context Callback context (Lua state)
+ * @param callback Callback function for each decompressed block; a
+ *                 non-zero return stops decoding with -ECANCELED
+ * @param context Callback context
  * @return 0 on success, negative error code on failure
  */
 static int decompress_lz4(size_t dest_size, const void *source, size_t source_size,
-                          void (*callback)(void *, void *, size_t), void *context)
+                          int (*callback)(void *, void *, size_t), void *context)
 {
 	int status = 0;
 
@@ -216,7 +180,10 @@ static int decompress_lz4(size_t dest_size, const void *source, size_t source_si
 		}
 
 		/* Call callback with decompressed data */
-		callback(context, output, status);
+		if (callback(context, output, status) != 0) {
+			status = -ECANCELED;
+			break;
+		}
 
 		/* Move to next block */
 		block_ptr += block_size + 4;
@@ -240,7 +207,6 @@ static int lua_compression_process_function(lua_State *L)
 		if (decompress_state.callback_ref != LUA_NOREF) {
 			luaL_unref(L, LUA_REGISTRYINDEX, decompress_state.callback_ref);
 			decompress_state.callback_ref = LUA_NOREF;
-			decompress_state.has_data = false;
 		}
 		LOG_DBG("Compression process function cleared");
 		return 0;
@@ -258,7 +224,6 @@ static int lua_compression_process_function(lua_State *L)
 
 	/* Store new callback */
 	decompress_state.callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-	decompress_state.has_data = false;
 	LOG_DBG("Compression process function registered");
 	return 0;
 }
@@ -292,8 +257,13 @@ static int lua_compression_decompress(lua_State *L)
 		return luaL_error(L, "no process_function registered");
 	}
 
-	int ret = decompress_lz4(block_size, data, data_len, 
-	                         process_decompressed_block, L);
+	struct decompress_ctx ctx = { .L = L, .failed = false };
+	int ret = decompress_lz4(block_size, data, data_len,
+	                         process_decompressed_block, &ctx);
+
+	if (ctx.failed) {
+		return lua_error(L); /* process_function's error, still on the stack */
+	}
 
 	if (ret < 0) {
 		return luaL_error(L, "decompression failed: %d", ret);
@@ -312,18 +282,15 @@ static int compression_service_event_handler(halo_lua_event_t event, void *user_
 	switch (event) {
 	case HALO_LUA_EVENT_INIT:
 		decompress_state.callback_ref = LUA_NOREF;
-		decompress_state.has_data = false;
 		break;
 		
 	case HALO_LUA_EVENT_DEINIT:
 		decompress_state.callback_ref = LUA_NOREF;
-		decompress_state.has_data = false;
 		break;
 		
 	case HALO_LUA_EVENT_INTERRUPT:
 		/* Clear callback on Ctrl+C */
 		decompress_state.callback_ref = LUA_NOREF;
-		decompress_state.has_data = false;
 		break;
 	
 	default:

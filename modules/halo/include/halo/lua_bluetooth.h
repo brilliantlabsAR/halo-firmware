@@ -63,18 +63,6 @@ extern "C" {
  */
 int lua_open_bluetooth_library(lua_State *L);
 
-/**
- * @brief Handle incoming data from BLE Data channel
- * 
- * Called by lua_runtime when data is received on BLE Data channel.
- * This triggers the Lua callback if registered.
- * 
- * @param L Lua state
- * @param data Data buffer
- * @param length Data length
- */
-void lua_bluetooth_data_interrupt(lua_State *L, const uint8_t *data, size_t length);
-
 #ifdef __cplusplus
 }
 #endif

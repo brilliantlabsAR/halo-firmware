@@ -19,24 +19,26 @@
                     │     (lua_runtime.c)            │
                     │                                │
                     │  • VM lifecycle                │
-                    │  • Thread management           │
+                    │  • REPL thread                 │
                     │  • Memory allocator            │
                     │  • Service event dispatcher    │
+                    │  • Async event hook            │
                     └────────────┬───────────────────┘
                                  │
            ┌─────────────────────┼─────────────────────┐
            │                     │                     │
            ▼                     ▼                     ▼
   ┌────────────────┐   ┌────────────────┐   ┌────────────────┐
-  │  REPL Thread   │   │  Data Thread   │   │ Lua Services   │
-  │  (Priority 7)  │   │  (Priority 7)  │   │  (Lifecycle)   │
+  │  REPL Thread   │   │ Event sources  │   │ Lua Services   │
+  │  (Priority 7)  │   │ (other threads)│   │  (Lifecycle)   │
   ├────────────────┤   ├────────────────┤   ├────────────────┤
-  │ • Execute Lua  │   │ • BLE binary   │   │ • INIT         │
-  │ • REPL loop    │   │   data         │   │ • DEINIT       │
-  │ • Stack mgmt   │   │ • Interrupt    │   │ • INTERRUPT    │
-  │ • 128KB stack  │   │ • 8KB stack    │   │ • SUSPEND      │
-  └────────┬───────┘   └────────┬───────┘   │ • RESUME       │
-           │                    │           └────────────────┘
+  │ • Execute Lua  │   │ • BLE data     │   │ • INIT         │
+  │ • REPL loop    │   │ • Button       │   │ • DEINIT       │
+  │ • Drains async │   │ • IMU tap      │   │ • INTERRUPT    │
+  │   events via   │   │ • Mic AAD      │   │ • SUSPEND      │
+  │   shared hook  │   │ • ANCS         │   │ • RESUME       │
+  │ • 64KB stack   │   │ (queue+signal) │   └────────────────┘
+  └────────┬───────┘   └────────┬───────┘             │
            │                    │                     │
            └────────────────────┴─────────────────────┘
                                      │
@@ -48,10 +50,56 @@
                               ├────────────────┤
                               │ • REPL channel │
                               │ • Data channel │
+                              │   (framed queue)│
                               │ • Video        │
                               │ • Audio        │
                               └────────────────┘
 ```
+
+### Asynchronous callbacks (the shared hook)
+
+The Lua VM is single-threaded: every call into it - including every
+`frame.*` callback - runs on the REPL thread. Events originate elsewhere
+(the BLE host thread for data and ANCS, the button driver thread, the
+sensor work thread for taps, the T5838 work thread for AAD), so each module
+keeps its own small queue and asks the runtime to run its *drain* on the
+REPL thread:
+
+```
+producer thread                       REPL thread
+---------------                       -----------
+module queue.push(event)
+halo_lua_event_signal(SRC)  ─────▶    (next VM instruction)
+  • sets pending bit                  lua_hook_dispatch()
+  • lua_sethook(dispatch)               • break requested?  → error("interrupted")
+                                        • standby hold?     → sleep until wake
+                                        • for each pending SRC: module drain(L)
+                                            drain pops every queued event and
+                                            lua_pcall()s the Lua callback
+```
+
+`lua_sethook()` is the one VM entry point Lua documents as safe to call
+asynchronously, and Lua has exactly **one** hook slot per state - which is why
+the runtime owns it. Modules never call `lua_sethook()` themselves; they
+register a drain with `halo_lua_event_drain_set()` on `HALO_LUA_EVENT_INIT`
+and call `halo_lua_event_signal()` from the producing thread. Ctrl+C /
+restart / exit and the standby pause go through the same handler, so a data
+burst can never displace a pending break (or vice versa).
+
+Consequences worth knowing:
+
+- Callbacks run only when the VM executes an instruction. While a script is
+  blocked inside a C call (`frame.sleep()`, a display write, ...) events queue
+  and are delivered, in order, as soon as it returns. The idle REPL runs a
+  trivial chunk every 20 ms so callbacks still fire with no script running.
+- BLE data frames are queued in `ble_lua.c` as `[len16][payload]` records in a
+  `CONFIG_HALO_LUA_MAX_DATA_SIZE` ring. **One client write is one callback**,
+  whatever the script was doing. If the ring is full the write is refused
+  with `ATT_ERR_INSUFF_RESOURCE` so the client sees back-pressure instead of
+  silent loss.
+- Frames that arrive with no `receive_callback` registered are discarded.
+- `frame.compression.decompress()` calls its `process_function` synchronously,
+  once per block, from inside the decompress call - it needs no hook at all.
 
 ### Memory Management
 

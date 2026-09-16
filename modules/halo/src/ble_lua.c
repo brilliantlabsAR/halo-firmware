@@ -77,10 +77,14 @@ struct ble_lua_ctx {
 	struct ring_buf repl_rx_ring;
 	struct k_sem repl_rx_sem;
 
-	/* Data ring buffer */
+	/* Data ring buffer: a queue of frames, each stored as a 2-byte LE
+	 * length header followed by the payload. The lock keeps a frame's
+	 * header + payload atomic against the reader and makes reset safe
+	 * against a concurrent read. */
 	uint8_t *data_rx_buf;
 	struct ring_buf data_rx_ring;
-	struct k_sem data_rx_sem;
+	struct k_spinlock data_lock;
+	halo_ble_lua_data_handler_t data_handler;
 
 	/* Audio ring buffer */
 	uint8_t *audio_rx_buf;
@@ -222,6 +226,31 @@ static void on_att_read_get(uint8_t conidx, uint8_t user_lid, uint16_t token, ui
 	}
 }
 
+/* Queue one framed data payload. Returns 0, or -ENOSPC if it does not fit. */
+static int data_ring_put_frame(const uint8_t *payload, uint16_t len)
+{
+	uint8_t hdr[2] = {len & 0xFF, len >> 8};
+	k_spinlock_key_t key = k_spin_lock(&lua_ctx.data_lock);
+
+	if (ring_buf_space_get(&lua_ctx.data_rx_ring) < (uint32_t)sizeof(hdr) + len) {
+		k_spin_unlock(&lua_ctx.data_lock, key);
+		return -ENOSPC;
+	}
+	ring_buf_put(&lua_ctx.data_rx_ring, hdr, sizeof(hdr));
+	ring_buf_put(&lua_ctx.data_rx_ring, payload, len);
+	k_spin_unlock(&lua_ctx.data_lock, key);
+
+	return 0;
+}
+
+static void data_ring_reset(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&lua_ctx.data_lock);
+
+	ring_buf_reset(&lua_ctx.data_rx_ring);
+	k_spin_unlock(&lua_ctx.data_lock, key);
+}
+
 /* GATT write callback */
 static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uint16_t hdl,
 			   uint16_t offset, co_buf_t *p_data)
@@ -270,7 +299,7 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 			// clear REPL buffer
 			ring_buf_reset(&lua_ctx.repl_rx_ring);
 			// clear Data buffer
-			ring_buf_reset(&lua_ctx.data_rx_ring);
+			data_ring_reset();
 			if (lua_ctx.ctrl_handler) {
 				lua_ctx.ctrl_handler(data[0]);
 			}
@@ -289,14 +318,16 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 				break;
 			}
 
-			if (ring_buf_space_get(&lua_ctx.data_rx_ring) < payload_len) {
+			if (data_ring_put_frame(data + 1, payload_len) != 0) {
 				LOG_WRN("Data RX ring full (available=%u, needed=%u)",
-					ring_buf_space_get(&lua_ctx.data_rx_ring), payload_len);
+					ring_buf_space_get(&lua_ctx.data_rx_ring),
+					payload_len + 2);
 				status = ATT_ERR_INSUFF_RESOURCE;
 				break;
 			}
-			ring_buf_put(&lua_ctx.data_rx_ring, data + 1, payload_len);
-			k_sem_give(&lua_ctx.data_rx_sem);
+			if (lua_ctx.data_handler) {
+				lua_ctx.data_handler();
+			}
 		} else {
 			/* REPL: one write is one line - store it and append a single
 			 * '\n' terminator that the runtime splits on. */
@@ -438,7 +469,7 @@ static int ble_lua_on_disconnected(uint8_t conidx)
 
 	/* Clear ring buffers */
 	ring_buf_reset(&lua_ctx.repl_rx_ring);
-	ring_buf_reset(&lua_ctx.data_rx_ring);
+	data_ring_reset();
 	ring_buf_reset(&lua_ctx.audio_rx_ring);
 
 	/* Release waiting semaphores */
@@ -567,6 +598,7 @@ int halo_ble_lua_init(bool reset)
 		lua_ctx.video_ccc_cfg = 0;
 		lua_ctx.audio_tx_ccc_cfg = 0;
 		lua_ctx.ctrl_handler = NULL;
+		lua_ctx.data_handler = NULL;
 		lua_ctx.user_lid = GATT_INVALID_USER_LID;
 		lua_ctx.start_hdl = GATT_INVALID_HDL;
 
@@ -616,9 +648,9 @@ int halo_ble_lua_init(bool reset)
 	ring_buf_init(&lua_ctx.audio_rx_ring, CONFIG_HALO_AUDIO_MAX_DATA_SIZE + 1,
 		      lua_ctx.audio_rx_buf);
 
-	/* Initialize synchronization primitives */
+	/* Initialize synchronization primitives (lua_ctx is noinit) */
+	lua_ctx.data_lock = (struct k_spinlock){};
 	k_sem_init(&lua_ctx.repl_rx_sem, 0, 1);
-	k_sem_init(&lua_ctx.data_rx_sem, 0, 1);
 	k_sem_init(&lua_ctx.audio_rx_sem, 0, 1);
 	k_sem_init(&lua_ctx.tx_ntf_sem, 1, 1);
 	k_sem_init(&lua_ctx.video_ntf_sem, 1, 1);
@@ -660,7 +692,6 @@ int halo_ble_lua_deinit(void)
 	lua_ctx.video_ccc_cfg = GATT_CCC_STOP_NTFIND;
 	lua_ctx.audio_tx_ccc_cfg = GATT_CCC_STOP_NTFIND;
 	k_sem_give(&lua_ctx.repl_rx_sem);
-	k_sem_give(&lua_ctx.data_rx_sem);
 	k_sem_give(&lua_ctx.audio_rx_sem);
 	k_sem_give(&lua_ctx.tx_ntf_sem);
 	k_sem_give(&lua_ctx.video_ntf_sem);
@@ -709,28 +740,38 @@ int32_t halo_ble_lua_repl_write(const uint8_t *data, size_t len)
 				 LUA_METAINFO_TX_SEND);
 }
 
-int32_t halo_ble_lua_data_read(uint8_t *data, size_t len, k_timeout_t timeout)
+int32_t halo_ble_lua_data_read_frame(uint8_t *data, size_t len)
 {
 	if (lua_ctx.initialized != BLE_LUA_INIT_MAGIC) {
 		return 0;
 	}
 
-	if (k_sem_take(&lua_ctx.data_rx_sem, timeout) != 0) {
-		return 0;
-	}
+	uint8_t hdr[2];
+	int32_t ret = 0;
+	k_spinlock_key_t key = k_spin_lock(&lua_ctx.data_lock);
 
+	if (ring_buf_get(&lua_ctx.data_rx_ring, hdr, sizeof(hdr)) == sizeof(hdr)) {
+		uint16_t frame_len = hdr[0] | (hdr[1] << 8);
+
+		if (frame_len <= len) {
+			ret = ring_buf_get(&lua_ctx.data_rx_ring, data, frame_len);
+		} else {
+			ring_buf_get(&lua_ctx.data_rx_ring, NULL, frame_len);
+			ret = -EMSGSIZE;
+		}
+	}
+	k_spin_unlock(&lua_ctx.data_lock, key);
+
+	return ret;
+}
+
+void halo_ble_lua_data_flush(void)
+{
 	if (lua_ctx.initialized != BLE_LUA_INIT_MAGIC) {
-		return 0;
+		return;
 	}
 
-	uint32_t read_len = ring_buf_get(&lua_ctx.data_rx_ring, data, len);
-
-	/* If buffer not empty, keep semaphore available */
-	if (!ring_buf_is_empty(&lua_ctx.data_rx_ring)) {
-		k_sem_give(&lua_ctx.data_rx_sem);
-	}
-
-	return read_len;
+	data_ring_reset();
 }
 
 int32_t halo_ble_lua_data_write(const uint8_t *data, size_t len)
@@ -790,6 +831,11 @@ int32_t halo_ble_lua_audio_write(const uint8_t *data, size_t len)
 void halo_ble_lua_register_ctrl_handler(halo_ble_lua_ctrl_handler_t handler)
 {
 	lua_ctx.ctrl_handler = handler;
+}
+
+void halo_ble_lua_register_data_handler(halo_ble_lua_data_handler_t handler)
+{
+	lua_ctx.data_handler = handler;
 }
 
 /* ============================================================================

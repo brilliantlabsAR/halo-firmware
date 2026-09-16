@@ -6,8 +6,8 @@
  *
  * BLE-thread events (Notification Source packets, attribute responses,
  * availability changes) are queued here and drained on the Lua REPL thread
- * via the lua_sethook mechanism, following the pattern used by
- * frame.bluetooth.receive_callback / frame.imu.tap_callback.
+ * via the runtime's shared event hook (halo_lua_event_signal), following
+ * the pattern used by frame.bluetooth.receive_callback / frame.imu.tap_callback.
  *
  * A k_spinlock protects the queues. The Lua thread never calls into the
  * BLE ANCS module while holding it, and the BLE thread only holds it for
@@ -306,14 +306,10 @@ static void push_action_result_table(lua_State *L, const struct action_result_en
 }
 
 /**
- * @brief Lua hook: drain all pending ANCS events on the Lua thread
+ * @brief Drain all pending ANCS events on the Lua thread
  */
-static void ancs_hook_handler(lua_State *L, lua_Debug *ar)
+static void ancs_drain(lua_State *L)
 {
-	ARG_UNUSED(ar);
-
-	lua_sethook(L, NULL, 0, 0);
-
 	/* Drain until all queues are empty. Each iteration copies one item
 	 * out under the spinlock, then calls into Lua unlocked. */
 	while (true) {
@@ -381,17 +377,14 @@ static void ancs_hook_handler(lua_State *L, lua_Debug *ar)
 	}
 }
 
-/* Arm the Lua hook so pending events are delivered on the Lua thread */
+/* Ask the runtime to run ancs_drain on the Lua thread */
 static void ancs_arm_hook(void)
 {
-	lua_State *L = halo_lua_get_state();
-
-	if (!L || !halo_lua_is_running()) {
+	if (!halo_lua_is_running()) {
 		return;
 	}
 
-	lua_sethook(L, ancs_hook_handler, LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT,
-		    1);
+	halo_lua_event_signal(HALO_LUA_EVENT_SRC_ANCS);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -836,6 +829,7 @@ static int ancs_service_event_handler(halo_lua_event_t event, void *user_data)
 		state.action_ref = LUA_NOREF;
 		state.availability_ref = LUA_NOREF;
 		clear_queues();
+		halo_lua_event_drain_set(HALO_LUA_EVENT_SRC_ANCS, ancs_drain);
 		break;
 
 	case HALO_LUA_EVENT_DEINIT:

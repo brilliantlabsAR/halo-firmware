@@ -25,6 +25,30 @@ release pages and tags are not publicly reachable.
 - `frame.standby()` no longer throws `"interrupted"` after a break signal that
   arrived while nothing was sleeping: the interrupt flag is now reset on entry,
   as `frame.sleep()` already did. A break during standby still interrupts it
+- `frame.bluetooth.receive_callback` lost packets under load: data writes
+  that arrived while a script was inside `frame.sleep()` (or any blocking
+  call) overwrote each other so only the last one was delivered, and a
+  burst during a busy Lua loop arrived as one concatenated blob. The BLE
+  data path is now a framed queue drained on the Lua thread — one client
+  write is one callback, in order, and a full queue refuses the write at
+  the ATT level instead of dropping it
+- `frame.compression.decompress()` delivered only the last block of a
+  multi-block LZ4 frame to `process_function`; it now runs the callback
+  once per block, in order
+- `frame.microphone.aad_callback` ran its Lua function on the microphone
+  driver's thread, concurrently with the REPL thread; it is now queued and
+  delivered on the Lua thread like every other callback
+- Ctrl+D (VM restart) sent while a script was busy waited for the script
+  to finish; it now unwinds the script like Ctrl+C does
+
+### Changed
+
+- All asynchronous Lua callbacks (BLE data, button, IMU tap, mic AAD, ANCS)
+  and the Ctrl+C / restart / standby breaks share one runtime-owned Lua
+  hook, so two events landing together can no longer displace each other.
+  The dedicated `lua_data` thread and its 8 KB stack are gone
+  (`CONFIG_HALO_LUA_DATA_TASK_*` removed); `CONFIG_HALO_LUA_MAX_DATA_SIZE`
+  now sizes the frame queue
 
 ## [0.8.9] - 2026-08-27
 

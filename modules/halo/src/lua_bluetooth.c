@@ -11,6 +11,7 @@
 #include "lauxlib.h"
 #include <halo/lua_bluetooth.h>
 #include <halo/lua_service.h>
+#include <halo/lua_runtime.h>
 #include <halo/ble_manager.h>
 #include <halo/ble_lua.h>
 
@@ -20,86 +21,55 @@ LOG_MODULE_REGISTER(lua_bluetooth, CONFIG_HALO_LOG_LEVEL);
 /**
  * @brief Bluetooth callback state
  *
- * Stores the Lua callback reference and data for async interrupt handling.
+ * Frames live in the ble_lua data ring until the Lua thread drains them;
+ * this is just the callback reference plus a scratch buffer for one frame.
  */
 static struct {
 	int callback_ref; /* LUA_REGISTRYINDEX reference */
-	uint8_t data[CONFIG_HALO_LUA_MAX_DATA_SIZE];
-	size_t length;
-	bool has_data;
+	uint8_t frame[HALO_BLE_LUA_DATA_FRAME_MAX];
 } bt_callback_state = {
 	.callback_ref = LUA_NOREF,
-	.length = 0,
-	.has_data = false,
 };
 
 /**
- * @brief Lua hook handler for data interrupt
+ * @brief Drain queued data frames into the Lua callback (REPL thread)
  *
- * Called asynchronously when BLE data is received.
- * Executes the registered Lua callback with received data.
+ * One ATT write becomes exactly one callback invocation, in arrival order.
+ * Frames that arrive while the callback is unregistered are discarded so
+ * the ring cannot fill and back-pressure the client.
  */
-static void bluetooth_receive_hook_handler(lua_State *L, lua_Debug *ar)
+static void bluetooth_drain(lua_State *L)
 {
-	ARG_UNUSED(ar);
+	int32_t len;
 
-	/* Clear the hook immediately */
-	lua_sethook(L, NULL, 0, 0);
+	while ((len = halo_ble_lua_data_read_frame(bt_callback_state.frame,
+						    sizeof(bt_callback_state.frame))) != 0) {
+		if (len < 0) {
+			LOG_ERR("Data frame dropped: %d", len);
+			continue;
+		}
+		if (bt_callback_state.callback_ref == LUA_NOREF) {
+			LOG_WRN("Data received but no callback registered");
+			continue;
+		}
 
-	if (bt_callback_state.callback_ref == LUA_NOREF) {
-		LOG_WRN("Data interrupt but no callback registered");
-		bt_callback_state.has_data = false;
-		return;
-	}
+		lua_rawgeti(L, LUA_REGISTRYINDEX, bt_callback_state.callback_ref);
+		lua_pushlstring(L, (const char *)bt_callback_state.frame, len);
 
-	if (!bt_callback_state.has_data) {
-		LOG_WRN("Hook called but no data available");
-		return;
-	}
-
-	/* Get callback function from registry */
-	lua_rawgeti(L, LUA_REGISTRYINDEX, bt_callback_state.callback_ref);
-
-	/* Push data as string argument */
-	lua_pushlstring(L, (const char *)bt_callback_state.data, bt_callback_state.length);
-
-	/* Clear data flag */
-	bt_callback_state.has_data = false;
-
-	/* Call callback function */
-	if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-		const char *error = lua_tostring(L, -1);
-		LOG_ERR("Bluetooth callback error: %s", error);
-		lua_pop(L, 1);
+		if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+			const char *error = lua_tostring(L, -1);
+			LOG_ERR("Bluetooth callback error: %s", error);
+			lua_pop(L, 1);
+		}
 	}
 }
 
 /**
- * @brief Handle incoming BLE data (called from lua_runtime data thread)
- *
- * @param L Lua state
- * @param data Received data buffer
- * @param length Data length
+ * @brief ble_lua data-frame notification (BLE host thread)
  */
-void lua_bluetooth_data_interrupt(lua_State *L, const uint8_t *data, size_t length)
+static void bluetooth_data_available(void)
 {
-	if (bt_callback_state.callback_ref == LUA_NOREF) {
-		return;
-	}
-
-	if (length > sizeof(bt_callback_state.data)) {
-		LOG_ERR("Data too large: %u > %u", length, sizeof(bt_callback_state.data));
-		length = sizeof(bt_callback_state.data);
-	}
-
-	/* Copy data to callback state */
-	memcpy(bt_callback_state.data, data, length);
-	bt_callback_state.length = length;
-	bt_callback_state.has_data = true;
-
-	/* Set hook to trigger callback on next Lua instruction */
-	lua_sethook(L, bluetooth_receive_hook_handler,
-		    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
+	halo_lua_event_signal(HALO_LUA_EVENT_SRC_BLE_DATA);
 }
 
 /**
@@ -248,7 +218,6 @@ static int lua_bluetooth_receive_callback(lua_State *L)
 		if (bt_callback_state.callback_ref != LUA_NOREF) {
 			luaL_unref(L, LUA_REGISTRYINDEX, bt_callback_state.callback_ref);
 			bt_callback_state.callback_ref = LUA_NOREF;
-			bt_callback_state.has_data = false;
 		}
 		LOG_DBG("Bluetooth receive_callback cleared");
 		return 0;
@@ -266,7 +235,6 @@ static int lua_bluetooth_receive_callback(lua_State *L)
 
 	/* Store new callback in registry */
 	bt_callback_state.callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-	bt_callback_state.has_data = false;
 
 	LOG_DBG("Bluetooth receive_callback registered");
 	return 0;
@@ -284,19 +252,20 @@ static int bluetooth_service_event_handler(halo_lua_event_t event, void *user_da
 	switch (event) {
 	case HALO_LUA_EVENT_INIT:
 		bt_callback_state.callback_ref = LUA_NOREF;
-		bt_callback_state.has_data = false;
+		/* Anything queued while no VM was running is stale */
+		halo_ble_lua_data_flush();
+		halo_lua_event_drain_set(HALO_LUA_EVENT_SRC_BLE_DATA, bluetooth_drain);
+		halo_ble_lua_register_data_handler(bluetooth_data_available);
 		break;
 
 	case HALO_LUA_EVENT_DEINIT:
 		/* Callback will be cleaned up by Lua GC */
 		bt_callback_state.callback_ref = LUA_NOREF;
-		bt_callback_state.has_data = false;
 		break;
 
 	case HALO_LUA_EVENT_INTERRUPT:
 		/* Clear callback on Ctrl+C */
 		bt_callback_state.callback_ref = LUA_NOREF;
-		bt_callback_state.has_data = false;
 		break;
 
 	default:
