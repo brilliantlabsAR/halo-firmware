@@ -75,6 +75,22 @@
 typedef void (*halo_ble_lua_ctrl_handler_t)(uint8_t ctrl_code);
 
 /**
+ * @brief Data-frame-available callback
+ *
+ * Invoked on the BLE host thread after a framed data write (0x01 marker)
+ * has been queued. Must not block; the consumer reads the frame later
+ * with halo_ble_lua_data_read_frame().
+ */
+typedef void (*halo_ble_lua_data_handler_t)(void);
+
+/**
+ * @brief Largest data frame the RX characteristic can carry
+ *
+ * One ATT write (CFG_ATT_VAL_MAX = 512 bytes) minus the 0x01 marker byte.
+ */
+#define HALO_BLE_LUA_DATA_FRAME_MAX 511
+
+/**
  * @brief Initialize the BLE Lua service
  * 
  * @param reset If true, reset the service state
@@ -109,14 +125,29 @@ int32_t halo_ble_lua_repl_read(uint8_t *data, size_t len, k_timeout_t timeout);
 int32_t halo_ble_lua_repl_write(const uint8_t *data, size_t len);
 
 /**
- * @brief Read binary data from the data channel
- * 
- * @param data Buffer to store read data
- * @param len Maximum length to read
- * @param timeout Timeout for the operation
- * @return int32_t Number of bytes read, 0 on timeout, negative on error
+ * @brief Read one queued data frame from the data channel (non-blocking)
+ *
+ * Frames preserve ATT write boundaries: one client write is returned as
+ * exactly one frame, however many have queued up meanwhile.
+ *
+ * @param data Buffer to store the frame
+ * @param len Buffer size; HALO_BLE_LUA_DATA_FRAME_MAX always fits a frame
+ * @return int32_t Frame length, 0 if no frame is queued, -EMSGSIZE if the
+ *         next frame did not fit in @p len (that frame is discarded)
  */
-int32_t halo_ble_lua_data_read(uint8_t *data, size_t len, k_timeout_t timeout);
+int32_t halo_ble_lua_data_read_frame(uint8_t *data, size_t len);
+
+/**
+ * @brief Discard every queued data frame
+ */
+void halo_ble_lua_data_flush(void);
+
+/**
+ * @brief Register a callback for queued data frames
+ *
+ * @param handler Callback function, or NULL to unregister
+ */
+void halo_ble_lua_register_data_handler(halo_ble_lua_data_handler_t handler);
 
 /**
  * @brief Write binary data to the data channel

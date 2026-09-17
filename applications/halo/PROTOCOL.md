@@ -832,6 +832,15 @@ Registers or clears data receive callback.
 - **Returns:** `nil`
 - **Errors:**
   - Throws an error if func is not a function or nil
+- **Delivery:** one client data write (one `0x01`-marked ATT write) is one
+  callback invocation carrying exactly that write's payload, in arrival
+  order. The callback runs on the Lua thread between VM instructions, so
+  packets that land while the script is inside a blocking call
+  (`frame.sleep()`, a display write, ...) queue and are delivered as soon as
+  it returns. The queue holds about 4 KB; when it is full the device refuses
+  the write at the ATT level (`Insufficient Resources`) so the client can
+  retry — packets are never silently dropped. Packets received while no
+  callback is registered are discarded.
 - **Example:**
   ```lua
   frame.bluetooth.receive_callback(function(data)

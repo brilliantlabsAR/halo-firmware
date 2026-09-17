@@ -72,19 +72,13 @@ static struct {
 } tap_ring;
 
 /**
- * @brief Tap event callback handler (hook-based async callback)
+ * @brief Drain pending tap events into the Lua callback (REPL thread)
  *
- * Called when a tap/motion event is detected by the accelerometer. Drains
- * all pending tap events, invoking the Lua callback once per event with the
- * gesture kind ('single' | 'double' | 'triple') as its argument.
+ * Invokes the Lua callback once per queued event with the gesture kind
+ * ('single' | 'double' | 'triple') as its argument.
  */
-static void lua_imu_tap_callback_handler(lua_State *L, lua_Debug *ar)
+static void lua_imu_tap_drain(lua_State *L)
 {
-	ARG_UNUSED(ar);
-
-	/* Clear the hook immediately */
-	lua_sethook(L, NULL, 0, 0);
-
 	while (atomic_get(&tap_ring.tail) != atomic_get(&tap_ring.head)) {
 		uint8_t kind = tap_ring.kind[atomic_get(&tap_ring.tail) & (TAP_RING_SIZE - 1)];
 		atomic_inc(&tap_ring.tail);
@@ -172,12 +166,11 @@ static void imu_trigger_handler(const struct device *dev, const struct sensor_tr
 		halo_pm_wakeup(HALO_PM_WAKEUP_IMU);
 	}
 
-	lua_State *L = halo_lua_get_state();
-	if (!L || !halo_lua_is_running()) {
+	if (!halo_lua_is_running()) {
 		return;
 	}
 
-	/* Queue the gesture kind for the hook handler (drop when full). */
+	/* Queue the gesture kind for the drain (drop when full). */
 	uint8_t kind;
 	switch ((int)trig->type) {
 	case SENSOR_TRIG_TAP:
@@ -198,9 +191,7 @@ static void imu_trigger_handler(const struct device *dev, const struct sensor_tr
 		atomic_inc(&tap_ring.head);
 	}
 
-	/* Set hook to trigger callback on next Lua instruction */
-	lua_sethook(L, lua_imu_tap_callback_handler,
-	           LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
+	halo_lua_event_signal(HALO_LUA_EVENT_SRC_IMU);
 }
 
 /**
@@ -836,6 +827,8 @@ static int imu_service_event_handler(halo_lua_event_t event, void *user_data)
 	switch (event) {
 	case HALO_LUA_EVENT_INIT:
 		imu_state.tap_callback_ref = LUA_NOREF;
+		atomic_set(&tap_ring.tail, atomic_get(&tap_ring.head));
+		halo_lua_event_drain_set(HALO_LUA_EVENT_SRC_IMU, lua_imu_tap_drain);
 		break;
 		
 	case HALO_LUA_EVENT_DEINIT:

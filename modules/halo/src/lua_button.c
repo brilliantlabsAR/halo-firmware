@@ -48,57 +48,48 @@ static struct {
 	.long_press_level3_ref = LUA_NOREF,
 };
 
-/**
- * @brief Pending button callback for hook-based execution
- *
- * Stores the callback reference and action name to be executed
- * in the Lua runtime thread via lua_sethook.
- */
+/* Pending button events, produced on the button driver thread and drained
+ * on the Lua thread by the runtime's shared hook. Single producer / single
+ * consumer; monotonically increasing indices. Entries hold the callback
+ * registry reference captured at event time. */
+#define BUTTON_RING_SIZE 8 /* power of two */
 static struct {
-	int ref;                /* Callback reference to execute */
-	const char *action_name; /* Action name for logging */
-	bool pending;           /* Whether a button event is pending */
-} button_pending = {
-	.ref = LUA_NOREF,
-	.action_name = NULL,
-	.pending = false,
-};
+	struct {
+		int ref;
+		const char *action_name; /* for logging */
+	} ev[BUTTON_RING_SIZE];
+	atomic_t head; /* next write slot */
+	atomic_t tail; /* next read slot */
+} button_ring;
 
 /**
- * @brief Lua hook handler for button callback
- *
- * Called in the Lua runtime thread when a button event is pending.
- * Executes the registered Lua callback safely.
+ * @brief Drain pending button events into their Lua callbacks (REPL thread)
  */
-static void button_hook_handler(lua_State *L, lua_Debug *ar)
+static void button_drain(lua_State *L)
 {
-	ARG_UNUSED(ar);
+	while (atomic_get(&button_ring.tail) != atomic_get(&button_ring.head)) {
+		unsigned int slot = atomic_get(&button_ring.tail) & (BUTTON_RING_SIZE - 1);
+		int ref = button_ring.ev[slot].ref;
+		const char *action_name = button_ring.ev[slot].action_name;
 
-	/* Clear the hook immediately */
-	lua_sethook(L, NULL, 0, 0);
+		atomic_inc(&button_ring.tail);
 
-	if (!button_pending.pending || button_pending.ref == LUA_NOREF) {
-		return;
-	}
+		if (ref == LUA_NOREF) {
+			continue;
+		}
 
-	int ref = button_pending.ref;
-	const char *action_name = button_pending.action_name;
-	button_pending.pending = false;
+		lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
 
-	/* Get callback function from registry */
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-
-	if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-		const char *error = lua_tostring(L, -1);
-		LOG_ERR("Button %s callback error: %s", action_name, error);
-		lua_pop(L, 1);
+		if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+			const char *error = lua_tostring(L, -1);
+			LOG_ERR("Button %s callback error: %s", action_name, error);
+			lua_pop(L, 1);
+		}
 	}
 }
 
 /**
- * @brief Execute a Lua button callback by reference
- *
- * Uses lua_sethook to defer callback execution to the Lua runtime thread.
+ * @brief Queue a Lua button callback for the Lua thread
  *
  * @param ref Callback reference in LUA_REGISTRYINDEX
  * @param action_name Action name for logging (e.g., "single click")
@@ -113,19 +104,22 @@ static void run_lua_button_callback(int ref, const char *action_name)
 		return;
 	}
 
-	lua_State *L = halo_lua_get_state();
-	if (!L || !halo_lua_is_running()) {
+	if (!halo_lua_is_running()) {
 		return;
 	}
 
-	/* Store pending callback info */
-	button_pending.ref = ref;
-	button_pending.action_name = action_name;
-	button_pending.pending = true;
+	if (atomic_get(&button_ring.head) - atomic_get(&button_ring.tail) >= BUTTON_RING_SIZE) {
+		LOG_WRN("Button event queue full, dropping %s", action_name);
+		return;
+	}
 
-	/* Set hook to trigger callback in Lua runtime thread */
-	lua_sethook(L, button_hook_handler,
-		    LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT, 1);
+	unsigned int slot = atomic_get(&button_ring.head) & (BUTTON_RING_SIZE - 1);
+
+	button_ring.ev[slot].ref = ref;
+	button_ring.ev[slot].action_name = action_name;
+	atomic_inc(&button_ring.head);
+
+	halo_lua_event_signal(HALO_LUA_EVENT_SRC_BUTTON);
 }
 
 /**
@@ -408,8 +402,8 @@ static int button_service_event_handler(halo_lua_event_t event, void *user_data)
 		button_callback_state.long_press_level1_ref = LUA_NOREF;
 		button_callback_state.long_press_level2_ref = LUA_NOREF;
 		button_callback_state.long_press_level3_ref = LUA_NOREF;
-		button_pending.pending = false;
-		button_pending.ref = LUA_NOREF;
+		atomic_set(&button_ring.tail, atomic_get(&button_ring.head));
+		halo_lua_event_drain_set(HALO_LUA_EVENT_SRC_BUTTON, button_drain);
 		break;
 
 	case HALO_LUA_EVENT_DEINIT:
@@ -420,8 +414,7 @@ static int button_service_event_handler(halo_lua_event_t event, void *user_data)
 		button_callback_state.long_press_level1_ref = LUA_NOREF;
 		button_callback_state.long_press_level2_ref = LUA_NOREF;
 		button_callback_state.long_press_level3_ref = LUA_NOREF;
-		button_pending.pending = false;
-		button_pending.ref = LUA_NOREF;
+		atomic_set(&button_ring.tail, atomic_get(&button_ring.head));
 		break;
 
 	case HALO_LUA_EVENT_INTERRUPT:
@@ -432,8 +425,7 @@ static int button_service_event_handler(halo_lua_event_t event, void *user_data)
 		button_callback_state.long_press_level1_ref = LUA_NOREF;
 		button_callback_state.long_press_level2_ref = LUA_NOREF;
 		button_callback_state.long_press_level3_ref = LUA_NOREF;
-		button_pending.pending = false;
-		button_pending.ref = LUA_NOREF;
+		atomic_set(&button_ring.tail, atomic_get(&button_ring.head));
 		break;
 
 	default:

@@ -462,12 +462,16 @@ config HALO_LUA_MAX_REPL_SIZE
 	  before they are processed by the Lua interpreter.
 
 config HALO_LUA_MAX_DATA_SIZE
-	int "Maximum data buffer size (bytes)"
+	int "Data receive queue size (bytes)"
 	default 4096
 	help
-	  Size of the ring buffer for binary data transfer.
-	  This buffer is used for data transfers between the BLE client
-	  and the Lua engine (separate from REPL commands).
+	  Size of the ring buffer that queues framed binary data (0x01
+	  marker writes) from the BLE client for frame.bluetooth's
+	  receive_callback. Each queued frame costs its payload plus a
+	  2-byte length header; a frame is at most one ATT write (511
+	  bytes of payload). Writes that do not fit are refused with
+	  ATT_ERR_INSUFF_RESOURCE, so the client sees back-pressure rather
+	  than silent loss while a script is busy.
 
 config HALO_AUDIO_MAX_DATA_SIZE
 	int "Maximum audio buffer size (bytes)"
@@ -630,20 +634,6 @@ config HALO_LUA_REPL_TASK_PRIORITY
 	help
 	  Priority level for the Lua REPL thread.
 	  Lower number = higher priority.
-
-config HALO_LUA_DATA_TASK_STACK_SIZE
-	int "Data handler thread stack size (bytes)"
-	default 8192
-	help
-	  Stack size for the Lua data handler thread (default 8KB).
-	  Handles binary data from BLE and invokes Lua callbacks.
-
-config HALO_LUA_DATA_TASK_PRIORITY
-	int "Data handler thread priority"
-	default 7
-	range 0 15
-	help
-	  Priority level for the Lua data handler thread.
 
 config HALO_LUA_VIDEO_TASK_STACK_SIZE
 	int "Camera capture thread stack size (bytes)"

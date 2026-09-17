@@ -51,6 +51,7 @@ MANIFEST = {
     "test_microphone.py":             dict(timeout=180, tags={"auto"}),
     "test_microphone_lc3.py":         dict(timeout=120, tags={"auto"}),
     "test_bluetooth_callback_api.py": dict(timeout=90,  tags={"auto"}),
+    "test_bluetooth_burst.py":        dict(timeout=120, tags={"auto"}),
     "test_imu_raw.py":                dict(timeout=60,  tags={"auto"},
                                            note="polls for --duration (default 30 s); "
                                                 "columns are RAW DEVICE axes"),
@@ -62,7 +63,7 @@ MANIFEST = {
                                            note="press the button; runs for --duration "
                                                 "(default 60 s)"),
     "test_taps.py":                   dict(timeout=120, tags={"interactive"},
-                                           note="DOUBLE-tap the device (single will not fire)"),
+                                           note="tap the device: single, double and triple"),
     "test_aad.py":                    dict(timeout=90,  tags={"interactive"},
                                            note="make a loud noise (>=90 dB); runs for "
                                                 "--duration (default 60 s)"),

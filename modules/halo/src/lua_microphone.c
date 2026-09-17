@@ -703,19 +703,20 @@ static int mic_ble_event_handler(const struct halo_ble_event_data *event, void *
  * Power Management Callbacks
  * ============================================================================ */
 
-static void mic_aad_callback_wrapper(void)
-{
-	/* Wakeup system if sleeping */
-	if (halo_pm_is_sleeping()) {
-		halo_pm_wakeup(HALO_PM_WAKEUP_MICROPHONE);
-	}
+/* Set by the T5838 AAD work thread, consumed on the Lua thread. AAD events
+ * coalesce: the callback means "activity was detected", not a count. */
+static atomic_t mic_aad_pending = ATOMIC_INIT(0);
 
-	if (mic_state.aad_callback_ref == LUA_NOREF) {
+/**
+ * @brief Deliver a pending AAD event to the Lua callback (REPL thread)
+ */
+static void mic_aad_drain(lua_State *L)
+{
+	if (!atomic_cas(&mic_aad_pending, 1, 0)) {
 		return;
 	}
 
-	lua_State *L = halo_lua_get_state();
-	if (!L || !halo_lua_is_running()) {
+	if (mic_state.aad_callback_ref == LUA_NOREF) {
 		return;
 	}
 
@@ -728,6 +729,30 @@ static void mic_aad_callback_wrapper(void)
 		LOG_ERR("AAD callback error: %s", error);
 		lua_pop(L, 1);
 	}
+}
+
+/**
+ * @brief AAD wake notification (T5838 driver work thread)
+ *
+ * Must not touch the VM here: queue for the Lua thread instead.
+ */
+static void mic_aad_callback_wrapper(void)
+{
+	/* Wakeup system if sleeping */
+	if (halo_pm_is_sleeping()) {
+		halo_pm_wakeup(HALO_PM_WAKEUP_MICROPHONE);
+	}
+
+	if (mic_state.aad_callback_ref == LUA_NOREF) {
+		return;
+	}
+
+	if (!halo_lua_is_running()) {
+		return;
+	}
+
+	atomic_set(&mic_aad_pending, 1);
+	halo_lua_event_signal(HALO_LUA_EVENT_SRC_MIC_AAD);
 }
 
 /* ============================================================================
@@ -1403,6 +1428,8 @@ static int microphone_service_event_handler(halo_lua_event_t event, void *user_d
 	int ret = 0;
 	switch (event) {
 	case HALO_LUA_EVENT_INIT:
+		atomic_clear(&mic_aad_pending);
+		halo_lua_event_drain_set(HALO_LUA_EVENT_SRC_MIC_AAD, mic_aad_drain);
 		break;
 
 	case HALO_LUA_EVENT_DEINIT:
