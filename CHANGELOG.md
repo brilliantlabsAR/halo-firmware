@@ -11,35 +11,37 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-09-17
+
 ### Fixed
 
 - `mem_manager` heap operations are serialised with a spinlock. `halo_malloc`
   / `halo_free` are called concurrently from the Lua REPL thread, Bluetooth
   host callbacks and the sfxr thread, and `sys_heap` is not thread-safe; the
-  `mem_ctx.lock` mutex was initialised but never taken (#11)
+  `mem_ctx.lock` mutex was initialised but never taken (#11, #12)
 - `frame.imu.raw()` / `direction()` no longer fail with `-116` (QMC6308 data-ready
   timeout) after `frame.standby()`. The standby SUSPEND handler PM-suspends the
   magnetometer, but the always-on IMU service never receives RESUME and
   `imu_hardware_init()` short-circuited on `hardware_configured` before its
-  PM-resume block; the PM-state reconciliation now runs on every entry
+  PM-resume block; the PM-state reconciliation now runs on every entry (#13)
 - `frame.standby()` no longer throws `"interrupted"` after a break signal that
   arrived while nothing was sleeping: the interrupt flag is now reset on entry,
-  as `frame.sleep()` already did. A break during standby still interrupts it
+  as `frame.sleep()` already did. A break during standby still interrupts it (#14)
 - `frame.bluetooth.receive_callback` lost packets under load: data writes
   that arrived while a script was inside `frame.sleep()` (or any blocking
   call) overwrote each other so only the last one was delivered, and a
   burst during a busy Lua loop arrived as one concatenated blob. The BLE
   data path is now a framed queue drained on the Lua thread — one client
   write is one callback, in order, and a full queue refuses the write at
-  the ATT level instead of dropping it
+  the ATT level instead of dropping it (#15)
 - `frame.compression.decompress()` delivered only the last block of a
   multi-block LZ4 frame to `process_function`; it now runs the callback
-  once per block, in order
+  once per block, in order (#15)
 - `frame.microphone.aad_callback` ran its Lua function on the microphone
   driver's thread, concurrently with the REPL thread; it is now queued and
-  delivered on the Lua thread like every other callback
+  delivered on the Lua thread like every other callback (#15)
 - Ctrl+D (VM restart) sent while a script was busy waited for the script
-  to finish; it now unwinds the script like Ctrl+C does
+  to finish; it now unwinds the script like Ctrl+C does (#15)
 
 ### Changed
 
@@ -48,7 +50,7 @@ release pages and tags are not publicly reachable.
   hook, so two events landing together can no longer displace each other.
   The dedicated `lua_data` thread and its 8 KB stack are gone
   (`CONFIG_HALO_LUA_DATA_TASK_*` removed); `CONFIG_HALO_LUA_MAX_DATA_SIZE`
-  now sizes the frame queue
+  now sizes the frame queue (#15)
 
 ## [0.8.9] - 2026-08-27
 
