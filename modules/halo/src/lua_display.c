@@ -710,6 +710,13 @@ static int lua_display_bitmap(lua_State *L)
 		return luaL_error(L, "palette_offset must be between 0 and 15");
 	}
 
+	/* width is a divisor below (row stride -> height): 0 is a hard fault
+	 * on Cortex-M (DIV_0_TRP), and anything past INT16_MAX is meaningless
+	 * for a 256px display and would truncate in canvas_draw_bitmap(int). */
+	if (width < 1 || width > INT16_MAX) {
+		return luaL_error(L, "width must be between 1 and %d", INT16_MAX);
+	}
+
 	/* Handle RGB888 direct rendering */
 	if (color_format == 0) {
 		return rgb_display_bitmap(x, y, width, data_len / (width * 3), pixel_data,

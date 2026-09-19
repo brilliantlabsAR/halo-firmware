@@ -11,6 +11,15 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- `frame.display.bitmap()` with a `width` of 0 divided by zero in native
+  code (the width is the row stride used to derive the bitmap height) on
+  the 2/4/16-colour indexed paths, raising a UsageFault that rebooted the
+  device and dropped the BLE connection. `width` is now validated
+  (1–32767) on every colour format, and out-of-range values raise a Lua
+  error instead
+
 ## [0.8.10] - 2026-09-17
 
 ### Fixed

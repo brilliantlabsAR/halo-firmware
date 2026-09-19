@@ -195,6 +195,26 @@ async def main():
     await b.send_lua(lua_command)
     await asyncio.sleep(1)
 
+    # Regression: width is a divisor in the native code (data length ->
+    # height). A zero width used to be a divide-by-zero UsageFault that
+    # rebooted the device and dropped BLE. Every bad width must now come
+    # back as a Lua error, on the RGB path and on every indexed path.
+    for width in (0, -1, 40000):
+        for fmt in (0, 2, 4, 16):
+            # A single-value print (not print(pcall(...))) avoids a tab in
+            # the printed line, which BLE notification fragmentation can
+            # otherwise split across two [print] events and race await_print.
+            ok = await b.send_lua(
+                f"local ok = pcall(frame.display.bitmap, 1, 1, {width}, {fmt}, 0, 'abc'); "
+                f"print(tostring(ok))",
+                await_print=True,
+            )
+            assert ok == "false", f"width={width} fmt={fmt}: expected error, got {ok!r}"
+    # Prove the device is still alive after the bad calls.
+    alive = await b.send_lua("print(frame.display.width())", await_print=True)
+    assert alive == "256", f"device did not answer after bad-width calls: {alive!r}"
+    print("bad-width calls rejected, device still up")
+
     # Leave the display as the firmware boots it: cleared and in power-save,
     # and resume the app we interrupted with the break signal.
     await b.send_lua("frame.display.clear(0x000000)")
