@@ -18,7 +18,7 @@ release pages and tags are not publicly reachable.
   the 2/4/16-colour indexed paths, raising a UsageFault that rebooted the
   device and dropped the BLE connection. `width` is now validated
   (1–32767) on every colour format, and out-of-range values raise a Lua
-  error instead
+  error instead. Reported by Sigolon
 - `require()` loaded staged `/lfs` modules through `luaL_loadbuffer()`,
   which accepts binary as well as text Lua chunks. Lua's binary loader
   doesn't validate bytecode operands, so a malformed binary chunk could
