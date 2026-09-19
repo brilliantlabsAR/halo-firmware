@@ -19,6 +19,12 @@ release pages and tags are not publicly reachable.
   device and dropped the BLE connection. `width` is now validated
   (1–32767) on every colour format, and out-of-range values raise a Lua
   error instead
+- `require()` loaded staged `/lfs` modules through `luaL_loadbuffer()`,
+  which accepts binary as well as text Lua chunks. Lua's binary loader
+  doesn't validate bytecode operands, so a malformed binary chunk could
+  corrupt VM state or crash the interpreter; a client is only ever
+  expected to hand us Lua source, so the loader is now restricted to
+  text chunks. Reported by Sigolon
 
 ## [0.8.10] - 2026-09-17
 
