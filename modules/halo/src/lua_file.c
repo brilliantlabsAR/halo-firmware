@@ -525,8 +525,11 @@ static int lua_file_require(lua_State *L)
 
 	fs_close(&file);
 
-	/* Load and execute buffer */
-	int status = luaL_loadbuffer(L, buffer, size, filename);
+	/* Load and execute buffer. Restrict to text chunks: Lua's binary loader
+	 * does not validate bytecode operands, so an attacker who can stage a
+	 * file under /lfs could otherwise craft a malformed binary chunk that
+	 * corrupts VM state. */
+	int status = luaL_loadbufferx(L, buffer, size, filename, "t");
 	halo_free(buffer);
 
 	if (status != LUA_OK) {

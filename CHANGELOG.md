@@ -18,7 +18,13 @@ release pages and tags are not publicly reachable.
   the 2/4/16-colour indexed paths, raising a UsageFault that rebooted the
   device and dropped the BLE connection. `width` is now validated
   (1–32767) on every colour format, and out-of-range values raise a Lua
-  error instead
+  error instead. Reported by Sigolon
+- `require()` loaded staged `/lfs` modules through `luaL_loadbuffer()`,
+  which accepts binary as well as text Lua chunks. Lua's binary loader
+  doesn't validate bytecode operands, so a malformed binary chunk could
+  corrupt VM state or crash the interpreter; a client is only ever
+  expected to hand us Lua source, so the loader is now restricted to
+  text chunks. Reported by Sigolon
 
 ## [0.8.10] - 2026-09-17
 
@@ -108,7 +114,8 @@ release pages and tags are not publicly reachable.
 
 - BLE Lua RX write handler no longer underflows the ring-buffer length on a
   zero-length or offset write, and continuation fragments no longer drop a
-  byte or gain a stray newline (#7)
+  byte or gain a stray newline. Originally reported by @cjfreeze in #4; this
+  fix takes the fuller approach (#7)
 - BLE Lua RX handler routes a bare data marker (`send_data("")`) as an empty
   frame instead of passing the marker byte to the Lua REPL (#8)
 - Reported battery level converges toward the measured charge at a
