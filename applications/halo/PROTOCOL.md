@@ -1541,7 +1541,8 @@ Displays an indexed-color bitmap with optional scaling and custom palette.
 
 - **Parameters:**
   - `x, y`: Top-left position (1–256; values below 1 are clamped to 1)
-  - `width`: Bitmap width in pixels
+  - `width`: Bitmap width in pixels (1–32767; the row stride of `data`,
+    so it may exceed the display width — columns past the edge are clipped)
   - `color_format`: Number of colours in the data (0=RGB888 direct,
     2=1 bit/px, 4=2 bits/px, 16=4 bits/px)
   - `palette_offset`: Added to each non-zero pixel index to select the
