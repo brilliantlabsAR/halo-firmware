@@ -213,6 +213,8 @@ config HALO_BLE_MANAGER
 	default y
 	depends on BT
 	depends on ALIF_BLE_HOST
+	select TINYCRYPT
+	select TINYCRYPT_SHA256
 	help
 	  Enable unified BLE management framework.
 	  Provides:

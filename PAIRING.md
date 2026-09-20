@@ -28,6 +28,7 @@ Goal: support several bonded devices with semantics a consumer can predict,
 | C6 | `sec_ctx` lives in `noinit` RAM guarded by a magic word so bonds survive warm reboots (OTA swap, `sys_reboot` recovery paths) without a settings reload. Any layout change **must** change the magic. | `ble_security.c` |
 | C7 | LE Secure Connections, Just Works (no display/keypad on device: `GAP_IO_CAP_NO_INPUT_NO_OUTPUT`). | `ble_security.c` |
 | C8 | The pairing LED state (`HALO_LED_STATE_PAIRING`) is the only on-device pairing UI. | `led_manager` |
+| C9 | Halo advertises and connects with its static random identity address (`GAPM_STATIC_ADDR`, controller privacy off) — it never uses RPAs of its own. Its local IRK therefore protects nothing, but Windows indexes LE bonds by peer IRK and refuses to pair a second device presenting one it already holds (BTHUSB event 35). The IRK must be unique per unit: `halo_ble_sec_derive_irk()` hashes the EUI-64, and the same key goes to both `gapm_configure()` (the stack's identity IRK) and `gapc_le_pairing_provide_irk()`. Because peers key bonds on identity address + LTK, changing the local IRK does not invalidate existing bonds. | Windows |
 
 ## 3. Design summary
 

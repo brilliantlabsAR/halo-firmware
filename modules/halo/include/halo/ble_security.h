@@ -30,6 +30,18 @@ struct halo_ble_bond_info {
 };
 
 /**
+ * @brief Derive this unit's local IRK (deterministic, per-unit)
+ *
+ * Safe to call before halo_ble_sec_init(); halo_ble_conn_init() uses it so
+ * the identity IRK given to gapm_configure() and the IRK distributed during
+ * pairing are the same key.
+ *
+ * @param irk Output key
+ * @return 0 on success, negative error code on failure
+ */
+int halo_ble_sec_derive_irk(gap_sec_key_t *irk);
+
+/**
  * @brief Initialize security manager
  * 
  * @return 0 on success, negative error code on failure

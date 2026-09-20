@@ -25,6 +25,9 @@
 /* SE Service for EUI */
 #include "se_service.h"
 
+#include <tinycrypt/sha256.h>
+#include <tinycrypt/constants.h>
+
 #include <zephyr/drivers/led.h>
 #include <halo/led_manager.h>
 
@@ -376,8 +379,70 @@ static void pairing_window_close(void)
 /* Init                                                                    */
 /* ---------------------------------------------------------------------- */
 
+int halo_ble_sec_derive_irk(gap_sec_key_t *irk)
+{
+	/* Deterministic per-unit IRK: SHA-256("halo-irk-v1" || EUI-64), truncated
+	 * to 128 bits. Peers see an opaque key rather than the raw EUI, the value
+	 * survives factory reset / reflash, and a custom build that keeps this
+	 * derivation gets the same key. The same value must go to gapm_configure()
+	 * and to gapc_le_pairing_provide_irk(): the stack owns the identity IRK
+	 * and may distribute that one regardless of what info_req is answered
+	 * with. A constant here made every Halo present the same IRK to peers,
+	 * which Windows rejects as a duplicate bond (BTHUSB event 35). */
+	static const char label[] = "halo-irk-v1";
+	/* Computed once per boot so both callers - gapm_configure() and the
+	 * pairing info_req - get the same key even on the random fallback. */
+	static gap_sec_key_t cached;
+	static bool cached_valid;
+	uint8_t eui[8] = {0x2C, 0xF7, 0xF1, 0, 0, 0, 0, 0};
+	uint8_t digest[TC_SHA256_DIGEST_SIZE];
+	struct tc_sha256_state_struct sha;
+	int ret;
+
+	if (cached_valid) {
+		memcpy(irk, &cached, sizeof(*irk));
+		return 0;
+	}
+
+	ret = se_system_get_eui_extension(false, &eui[3]);
+	if (ret == 0 && !eui[3] && !eui[4] && !eui[5] && !eui[6] && !eui[7]) {
+		ret = -ENODATA; /* unprovisioned extension - not unique, don't hash it */
+	}
+	if (ret != 0) {
+		/* No hardware identity: fall back to a random IRK. Unique per unit,
+		 * but not stable across cold boots - harmless, since Halo never
+		 * advertises RPAs and bonds are keyed on the static address + LTK. */
+		LOG_WRN("EUI-64 unavailable (%d); using random IRK", ret);
+		ret = se_service_get_rnd_num(cached.key, GAP_KEY_LEN);
+		if (ret != 0) {
+			LOG_ERR("Random IRK failed: %d", ret);
+			return -EIO;
+		}
+	} else {
+		tc_sha256_init(&sha);
+		tc_sha256_update(&sha, (const uint8_t *)label, sizeof(label) - 1);
+		tc_sha256_update(&sha, eui, sizeof(eui));
+		tc_sha256_final(digest, &sha);
+		memcpy(cached.key, digest, GAP_KEY_LEN);
+	}
+
+	cached_valid = true;
+	memcpy(irk, &cached, sizeof(*irk));
+	return 0;
+}
+
 int halo_ble_sec_init(void)
 {
+	int ret;
+
+	/* Always regenerate: this is deterministic, and doing it before the
+	 * warm-reboot early return means an OTA that changes the derivation
+	 * takes effect immediately rather than after the next cold boot. */
+	ret = halo_ble_sec_derive_irk(&sec_ctx.irk);
+	if (ret != 0) {
+		return ret;
+	}
+
 	if (sec_ctx.initialized == BLE_SECURITY_INIT_MAGIC) {
 		/* Warm reboot: bond table survived in noinit RAM */
 		update_pairing_led();
@@ -385,36 +450,6 @@ int halo_ble_sec_init(void)
 	}
 
 	k_mutex_init(&sec_ctx.lock);
-
-	/* Generate Local IRK from device EUI-64 for privacy address generation */
-	uint8_t eui[8];
-	int ret;
-
-	/* Get complete 8-byte EUI-64: OUI (2C:F7:F1) + 5-byte extension */
-	ret = se_system_get_eui_extension(false, &eui[3]);
-	if (ret == 0) {
-		eui[0] = 0x2C;
-		eui[1] = 0xF7;
-		eui[2] = 0xF1;
-
-		/* Derive 16-byte IRK from 8-byte EUI-64 */
-		/* Method: EUI-64 forward + EUI-64 reversed (provides good mixing) */
-		memcpy(&sec_ctx.irk.key[0], eui, 8);  /* Bytes 0-7: forward */
-		for (int i = 0; i < 8; i++) {
-			sec_ctx.irk.key[8 + i] = eui[7 - i];  /* Bytes 8-15: reversed */
-		}
-
-		LOG_DBG("Local IRK generated from EUI-64: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-			eui[0], eui[1], eui[2], eui[3], eui[4], eui[5], eui[6], eui[7]);
-	} else {
-		LOG_WRN("Failed to get EUI-64, using static fallback IRK: %d", ret);
-		/* Fallback: use static IRK to maintain consistency across reboots */
-		static const uint8_t fallback_irk[GAP_KEY_LEN] = {
-			0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
-			0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10
-		};
-		memcpy(sec_ctx.irk.key, fallback_irk, GAP_KEY_LEN);
-	}
 
 	k_mutex_lock(&sec_ctx.lock, K_FOREVER);
 
@@ -832,6 +867,14 @@ int halo_ble_sec_provide_irk(uint8_t conidx)
 
 	/* Provide IRK using Alif BLE API */
 	err = gapc_le_pairing_provide_irk(conidx, &sec_ctx.irk);
+
+	/* Logged so the key a peer stored can be checked against what we sent;
+	 * it protects nothing here (no RPAs), so this leaks no secret. */
+	LOG_INF("IRK distributed: %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+		sec_ctx.irk.key[0], sec_ctx.irk.key[1], sec_ctx.irk.key[2], sec_ctx.irk.key[3],
+		sec_ctx.irk.key[4], sec_ctx.irk.key[5], sec_ctx.irk.key[6], sec_ctx.irk.key[7],
+		sec_ctx.irk.key[8], sec_ctx.irk.key[9], sec_ctx.irk.key[10], sec_ctx.irk.key[11],
+		sec_ctx.irk.key[12], sec_ctx.irk.key[13], sec_ctx.irk.key[14], sec_ctx.irk.key[15]);
 
 	k_mutex_unlock(&sec_ctx.lock);
 
