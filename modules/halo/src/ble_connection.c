@@ -308,8 +308,7 @@ int halo_ble_conn_init(const char *device_name)
 			.privacy_cfg = GAPM_PRIV_CFG_PRIV_ADDR_BIT,
 			.renew_dur = 1500,
 			.private_identity.addr = {0, 0, 0, 0, 0, 0},
-			.irk.key = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x08, 0x11, 0x22,
-				    0x33, 0x44, 0x55, 0x66, 0x77, 0x88},
+			.irk.key = {0}, /* set from halo_ble_sec_derive_irk() below */
 			.gap_start_hdl = 0,
 			.gatt_start_hdl = 0,
 			.att_cfg = 0,
@@ -331,6 +330,13 @@ int halo_ble_conn_init(const char *device_name)
 #ifdef MCU_BOOT
 		gapm_cfg.private_identity.addr[4] = 58;
 #endif
+
+		/* Per-unit identity IRK; must match what pairing distributes. */
+		err = halo_ble_sec_derive_irk(&gapm_cfg.irk);
+		if (err) {
+			LOG_ERR("IRK derivation failed: %d", err);
+			return err;
+		}
 
 		/* Configure GAPM with callbacks - this uses the real Alif API */
 		err = gapm_configure(0, &gapm_cfg, &gapm_cbs, on_gapm_process_complete);

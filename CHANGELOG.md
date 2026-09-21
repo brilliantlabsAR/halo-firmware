@@ -13,6 +13,17 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- Every Halo distributed the same Identity Resolving Key during pairing
+  (the stack's identity IRK was a build-time constant, and the per-unit
+  key handed to the pairing `info_req` was not the one that reached the
+  peer). Windows indexes LE bonds by peer IRK and rejects a second device
+  presenting one it already holds ("trying to distribute an Identity
+  Resolving Key that is already used by a paired device", BTHUSB event
+  35), so a Windows PC could bond with only one Halo at a time. The IRK is
+  now derived per unit as `SHA-256("halo-irk-v1" || EUI-64)` and the same
+  key is used for both the stack identity and pairing distribution.
+  Existing bonds are unaffected: Halo advertises with its static address,
+  so peers never consult the stored IRK.
 - `frame.display.bitmap()` with a `width` of 0 divided by zero in native
   code (the width is the row stride used to derive the bitmap height) on
   the 2/4/16-colour indexed paths, raising a UsageFault that rebooted the
