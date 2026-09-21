@@ -263,11 +263,6 @@ static int bluetooth_service_event_handler(halo_lua_event_t event, void *user_da
 		bt_callback_state.callback_ref = LUA_NOREF;
 		break;
 
-	case HALO_LUA_EVENT_INTERRUPT:
-		/* Clear callback on Ctrl+C */
-		bt_callback_state.callback_ref = LUA_NOREF;
-		break;
-
 	default:
 		break;
 	}

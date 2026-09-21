@@ -11,6 +11,23 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- A break (Ctrl+C) is now raised exactly once. The break hook raised
+  `interrupted` on every VM instruction until the running chunk had fully
+  unwound, and `frame.sleep()` / `frame.standby()` raised a second
+  `interrupted` of their own, so a `pcall` that caught the break was broken
+  again on its next instruction and a script could not handle a break and
+  clean up. The hook is now the only source of the error and raises it once;
+  a `pcall` handler runs to completion. Restart (Ctrl+D), exit and
+  light-sleep wake still unwind the chunk fully.
+- Callbacks registered from Lua persist across a break. A break cleared
+  `frame.bluetooth.receive_callback`, all `frame.button` callbacks, the
+  `frame.imu` tap callback and the `frame.compression` and ANCS callbacks
+  (and the ANCS subscription), so code that registers a callback once and
+  relies on it across a break stopped receiving events. Only a VM restart
+  (Ctrl+D) clears callbacks now.
+
 ## [0.8.11] - 2026-09-21
 
 ### Fixed

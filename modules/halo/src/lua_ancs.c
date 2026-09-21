@@ -833,7 +833,6 @@ static int ancs_service_event_handler(halo_lua_event_t event, void *user_data)
 		break;
 
 	case HALO_LUA_EVENT_DEINIT:
-	case HALO_LUA_EVENT_INTERRUPT:
 		/* Script is gone: unsubscribe so iOS stops streaming events
 		 * nobody consumes. References are reclaimed by the Lua GC. */
 		state.notification_ref = LUA_NOREF;

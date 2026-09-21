@@ -45,9 +45,12 @@ lua_State *halo_lua_get_state(void);
 
 /**
  * @brief Interrupt Lua execution (Ctrl+C)
- * 
- * Triggers interrupt signal to stop current script execution.
- * Notifies all registered services via HALO_LUA_EVENT_INTERRUPT.
+ *
+ * Raises a single "interrupted" error in the running chunk on its next
+ * VM instruction. A pcall can catch it and run to completion; nothing
+ * else is reset, so callbacks registered from Lua stay registered.
+ * Notifies all registered services via HALO_LUA_EVENT_INTERRUPT so
+ * blocking calls return and hardware streams stop.
  */
 void halo_lua_runtime_interrupt(void);
 

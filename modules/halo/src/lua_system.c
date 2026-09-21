@@ -85,11 +85,11 @@ static int lua_sleep(lua_State *L)
 		total_ms -= sleep_ms;
 	}
 
-	/* If interrupted, throw Lua error to break execution */
-	if (sleep_interrupted) {
-		sleep_interrupted = false; /* Reset flag */
-		return luaL_error(L, "interrupted");
-	}
+	/* A break only cuts the sleep short. The runtime's hook raises the
+	 * one "interrupted" error on the next VM instruction; raising here
+	 * too would break the script twice, the second time outside any
+	 * pcall that caught the first. */
+	sleep_interrupted = false;
 
 	return 0;
 }
@@ -132,23 +132,15 @@ static int lua_standby(lua_State *L)
 		timeout_ms = (uint32_t)(seconds * 1000);
 	}
 
-	/* Reset interrupt flag before starting standby, as frame.sleep() does:
-	 * a break signal that arrived while nothing was sleeping leaves it set,
-	 * and an uninterrupted standby would then report "interrupted". */
-	sleep_interrupted = false;
-
 	int ret = halo_pm_sleep_standby(timeout_ms);
 	if (ret < 0) {
 		return luaL_error(L, "failed to enter standby: %d", ret);
 	}
 
-	if(sleep_interrupted) {
-		sleep_interrupted = false; /* Reset flag */
-		return luaL_error(L, "interrupted");
-	}
-
 	/* Standby resumes in place: execution continues with the statement
-	 * after frame.standby(); frame.wakeup_source() reports the reason. */
+	 * after frame.standby(); frame.wakeup_source() reports the reason.
+	 * A break that woke it is raised once by the runtime hook, on the
+	 * next VM instruction, not here. */
 	return 0;
 }
 
@@ -484,9 +476,9 @@ static int system_service_event_handler(halo_lua_event_t event, void *user_data)
 		break;
 
 	case HALO_LUA_EVENT_INTERRUPT:
-		/* Set interrupt flag to break out of sleep */
+		/* Cut a frame.sleep() short so the break hook gets a VM
+		 * instruction to fire on. */
 		sleep_interrupted = true;
-		/* Reset state on Ctrl+C */
 		break;
 
 	default:
