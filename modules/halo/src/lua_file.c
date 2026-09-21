@@ -452,24 +452,22 @@ static int lua_file_mkdir(lua_State *L)
  * @brief Lua: require(module_name)
  *
  * Custom require function that loads from /lfs/
- * Loads and executes /lfs/<module_name>.lua once per VM, caching the result in
- * package.loaded as standard Lua does. Clear that entry to force a re-read.
+ * Loads and executes /lfs/<module_name>.lua on every call and returns the
+ * module's first result (nil if it returned nothing).
+ *
+ * Deliberately NOT memoised in package.loaded. Halo apps are started by
+ * require()-ing their main module, which runs the app's main loop; a cache
+ * would mean a module that exits cleanly cannot be started again without a
+ * VM reset, and a module re-uploaded mid-session would keep running the old
+ * copy. This matches the original Frame firmware, the halo_emulator, and the
+ * SDK's start_frame_app(), all of which treat require() as "load and run".
+ * The consequence is standard-Lua's: a module required from two places is
+ * loaded twice, so stateful modules (e.g. data.min, which registers the BLE
+ * receive callback) should be required once by the app and passed down.
  */
 static int lua_file_require(lua_State *L)
 {
 	const char *module_name = luaL_checkstring(L, 1);
-
-	/* Already loaded in this VM? Return the same value rather than running
-	 * the file again, so a module's side effects happen once.
-	 * Stack from here on: 1 = name, 2 = package, 3 = package.loaded.
-	 */
-	lua_getglobal(L, "package");
-	lua_getfield(L, 2, "loaded");
-	if (lua_getfield(L, 3, module_name) != LUA_TNIL) {
-		return 1;
-	}
-	lua_pop(L, 1); /* the nil */
-
 	const char *filename = lua_pushfstring(L, "%s.lua", module_name);
 
 	/* Get full path */
@@ -541,24 +539,13 @@ static int lua_file_require(lua_State *L)
 	 * Asking for exactly one result also means the `filename` string still on
 	 * the stack can no longer be mistaken for the module's value, which is
 	 * what the old fixed `return 1` handed back whenever a module returned
-	 * nothing of its own.
+	 * nothing of its own. A module that returns nothing yields nil here;
+	 * the `true` placeholder only made sense as a cache sentinel.
 	 */
 	if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
 		return luaL_error(L, "error executing module '%s': %s", module_name,
 				  lua_tostring(L, -1));
 	}
-
-	/* A module that returns nothing is recorded as `true`. Lua does this so
-	 * that "loaded" stays distinguishable from "not loaded yet"; leaving it
-	 * nil would re-run the file on every require and defeat the cache.
-	 */
-	if (lua_isnil(L, -1)) {
-		lua_pop(L, 1);
-		lua_pushboolean(L, 1);
-	}
-
-	lua_pushvalue(L, -1);
-	lua_setfield(L, 3, module_name); /* package.loaded[name] = result */
 
 	return 1;
 }
@@ -676,19 +663,6 @@ int lua_open_file_library(lua_State *L)
 	/* Override global 'require' function */
 	lua_pushcfunction(L, lua_file_require);
 	lua_setglobal(L, "require");
-
-	/* package.loaded backs require()'s module cache. The package library
-	 * itself is not opened (see lua_vm_init), so only 'loaded' exists --
-	 * there are no searchers and no package.path. It is exposed rather than
-	 * kept in the registry because clearing an entry is how Lua users force
-	 * a module to be re-read, which matters on a device where a module can
-	 * be re-uploaded between calls:
-	 *     package.loaded['mymodule'] = nil
-	 */
-	lua_newtable(L);       /* package */
-	lua_newtable(L);       /* package.loaded */
-	lua_setfield(L, -2, "loaded");
-	lua_setglobal(L, "package");
 
 	LOG_DBG("File library registered successfully");
 	return 0;

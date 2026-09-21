@@ -11,6 +11,19 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Changed
+
+- `require()` no longer caches modules in `package.loaded`; it loads and runs
+  the file on every call, as the original Frame firmware and the Halo
+  emulator do. Apps are started by `require()`-ing their main module, so
+  with the cache (added in 0.8.8, #260) an app that exited its main loop
+  cleanly could not be started again without a VM reset, and a module
+  re-uploaded mid-session kept running the old copy. The `package` global
+  is gone with it. A module that returns nothing now yields `nil` from
+  `require()` rather than `true`. A module `require()`d from two places is
+  loaded twice, so stateful modules (e.g. `data.min`, which registers the
+  BLE receive callback) should be required once by the app and passed down.
+
 ### Fixed
 
 - A break (Ctrl+C) is now raised exactly once. The break hook raised
