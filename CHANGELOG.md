@@ -13,24 +13,20 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
-- A break (Ctrl+C) could not be handled by the script. The break hook raised
-  `interrupted` on every VM instruction until the whole chunk had unwound,
-  so a `pcall` caught the first raise only to be broken again on its next
-  instruction: the SDK app-loop idiom ("the break arrives as an error in
-  the pcall; clean up and exit") never got to run its handler, and the
-  escaped error was attributed to the `pcall` line itself. `frame.sleep()`
-  also raised its own `interrupted` on top of the hook's. A break now
-  raises exactly once, from the hook, as on Frame; a `pcall` handler runs
-  to completion. Restart (Ctrl+D), exit and light-sleep wake still unwind
-  the chunk fully.
-- A break cleared every callback registered from Lua: `frame.bluetooth`
-  `receive_callback`, all `frame.button` callbacks, the `frame.imu` tap
-  callback, `frame.compression` and ANCS callbacks (and the ANCS
-  subscription). The SDK's `data.lua` registers its receive callback once
-  when first `require`d and stays cached in `package.loaded`, so an app
-  that was broken and restarted got no data frames until it re-registered
-  by hand. Callbacks now survive a break, as on Frame; only a VM restart
-  (Ctrl+D) drops them.
+- A break (Ctrl+C) is now raised exactly once. The break hook raised
+  `interrupted` on every VM instruction until the running chunk had fully
+  unwound, and `frame.sleep()` / `frame.standby()` raised a second
+  `interrupted` of their own, so a `pcall` that caught the break was broken
+  again on its next instruction and a script could not handle a break and
+  clean up. The hook is now the only source of the error and raises it once;
+  a `pcall` handler runs to completion. Restart (Ctrl+D), exit and
+  light-sleep wake still unwind the chunk fully.
+- Callbacks registered from Lua persist across a break. A break cleared
+  `frame.bluetooth.receive_callback`, all `frame.button` callbacks, the
+  `frame.imu` tap callback and the `frame.compression` and ANCS callbacks
+  (and the ANCS subscription), so code that registers a callback once and
+  relies on it across a break stopped receiving events. Only a VM restart
+  (Ctrl+D) clears callbacks now.
 
 ## [0.8.11] - 2026-09-21
 
