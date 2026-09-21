@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-09-21
+
 ### Fixed
 
 - Every Halo distributed the same Identity Resolving Key during pairing
