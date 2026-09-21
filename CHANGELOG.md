@@ -11,6 +11,27 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- A break (Ctrl+C) could not be handled by the script. The break hook raised
+  `interrupted` on every VM instruction until the whole chunk had unwound,
+  so a `pcall` caught the first raise only to be broken again on its next
+  instruction: the SDK app-loop idiom ("the break arrives as an error in
+  the pcall; clean up and exit") never got to run its handler, and the
+  escaped error was attributed to the `pcall` line itself. `frame.sleep()`
+  also raised its own `interrupted` on top of the hook's. A break now
+  raises exactly once, from the hook, as on Frame; a `pcall` handler runs
+  to completion. Restart (Ctrl+D), exit and light-sleep wake still unwind
+  the chunk fully.
+- A break cleared every callback registered from Lua: `frame.bluetooth`
+  `receive_callback`, all `frame.button` callbacks, the `frame.imu` tap
+  callback, `frame.compression` and ANCS callbacks (and the ANCS
+  subscription). The SDK's `data.lua` registers its receive callback once
+  when first `require`d and stays cached in `package.loaded`, so an app
+  that was broken and restarted got no data frames until it re-registered
+  by hand. Callbacks now survive a break, as on Frame; only a VM restart
+  (Ctrl+D) drops them.
+
 ## [0.8.11] - 2026-09-21
 
 ### Fixed

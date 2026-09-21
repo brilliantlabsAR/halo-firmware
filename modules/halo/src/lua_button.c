@@ -417,17 +417,6 @@ static int button_service_event_handler(halo_lua_event_t event, void *user_data)
 		atomic_set(&button_ring.tail, atomic_get(&button_ring.head));
 		break;
 
-	case HALO_LUA_EVENT_INTERRUPT:
-		/* Clear callbacks on Ctrl+C */
-		button_callback_state.single_click_ref = LUA_NOREF;
-		button_callback_state.double_click_ref = LUA_NOREF;
-		button_callback_state.long_press_ref = LUA_NOREF;
-		button_callback_state.long_press_level1_ref = LUA_NOREF;
-		button_callback_state.long_press_level2_ref = LUA_NOREF;
-		button_callback_state.long_press_level3_ref = LUA_NOREF;
-		atomic_set(&button_ring.tail, atomic_get(&button_ring.head));
-		break;
-
 	default:
 		break;
 	}

@@ -14,7 +14,8 @@
 typedef enum {
 	HALO_LUA_EVENT_INIT,      /**< Lua VM initialized */
 	HALO_LUA_EVENT_DEINIT,    /**< Lua VM closing */
-	HALO_LUA_EVENT_INTERRUPT, /**< Ctrl+C - Interrupt execution */
+	HALO_LUA_EVENT_INTERRUPT, /**< Ctrl+C - stop blocking calls / streams;
+				   *   the VM and Lua callbacks stay intact */
 	HALO_LUA_EVENT_SUSPEND,   /**< System suspend */
 	HALO_LUA_EVENT_RESUME,    /**< System resume */
 } halo_lua_event_t;

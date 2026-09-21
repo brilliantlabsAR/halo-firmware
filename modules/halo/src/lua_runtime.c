@@ -183,11 +183,23 @@ static void lua_hook_dispatch(lua_State *L, lua_Debug *ar)
 {
 	ARG_UNUSED(ar);
 
-	/* Break request (Ctrl+C, restart, exit, light sleep): unwind the
-	 * running chunk. The hook stays armed so a break raised while the
-	 * REPL is between commands still trips the next chunk. Pending
-	 * module events are kept; they drain once the flag clears. */
-	if (lua_ctx.interrupted || !lua_ctx.running) {
+	/* Restart / exit / light sleep: the VM is about to be torn down, so
+	 * unwind the whole chunk. The hook stays armed and !running stays
+	 * set, so every instruction re-raises - through any pcall - until
+	 * the REPL loop gets control back. */
+	if (!lua_ctx.running) {
+		luaL_error(L, "interrupted");
+	}
+
+	/* Ctrl+C: raise exactly once (Frame semantics). The flag is cleared
+	 * here, before the raise, so a pcall handler that catches the break
+	 * runs to completion instead of being re-broken on its very next
+	 * instruction. The hook stays armed: the next instruction re-enters
+	 * here with the flag clear, disarms, and drains any module events
+	 * that queued behind the break. Nothing else is reset - callbacks
+	 * registered from Lua survive a break, only Ctrl+D clears them. */
+	if (lua_ctx.interrupted) {
+		lua_ctx.interrupted = false;
 		luaL_error(L, "interrupted");
 	}
 
@@ -731,13 +743,14 @@ void halo_lua_runtime_interrupt(void)
 {
 	LOG_INF("Lua interrupt (Ctrl+C)");
 
-	/* Set interrupt flag */
+	/* Flag first, then arm: the hook raises "interrupted" once on the
+	 * next VM instruction and clears the flag itself. */
 	lua_ctx.interrupted = true;
-
-	/* Arm the hook so the running chunk unwinds */
 	lua_hook_arm();
 
-	/* Notify services first */
+	/* Let blocking calls (frame.sleep) return early so that instruction
+	 * arrives promptly. Services must not drop Lua state here: a break
+	 * stops the running chunk, it does not reset the VM. */
 	halo_lua_service_notify(HALO_LUA_EVENT_INTERRUPT);
 }
 

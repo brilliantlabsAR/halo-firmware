@@ -837,13 +837,6 @@ static int imu_service_event_handler(halo_lua_event_t event, void *user_data)
 		imu_state.tap_callback_ref = LUA_NOREF;
 		break;
 
-	case HALO_LUA_EVENT_INTERRUPT:
-		/* Ctrl+C: disarm hardware trigger so LPGPIO0 stops asserting
-		 * before deep sleep is entered. */
-		imu_disarm_hw_trigger();
-		imu_state.tap_callback_ref = LUA_NOREF;
-		break;
-
 	case HALO_LUA_EVENT_SUSPEND:
 		halo_pm_sleep_mode_t mode = halo_pm_get_sleep_mode();
 		if (mode == HALO_PM_SLEEP_LIGHT || mode == HALO_PM_SLEEP_STANDBY) {
