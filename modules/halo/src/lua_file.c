@@ -74,21 +74,34 @@ static int lua_file_read(lua_State *L)
 			lua_pushstring(L, "");
 			return 1;
 		}
-		if (want > LUAL_BUFFERSIZE) {
-			want = LUAL_BUFFERSIZE;
-		}
+		/* Grow the result in LUAL_BUFFERSIZE steps so the buffer only ever
+		 * holds what the file actually yielded: a caller asking for far more
+		 * than the file contains does not pre-allocate the whole request, and
+		 * a request larger than LUAL_BUFFERSIZE is no longer silently cut. */
 		luaL_Buffer bbuf;
-		char *out = luaL_buffinitsize(L, &bbuf, (size_t)want);
-		ssize_t got = fs_read(&stream->file, out, (size_t)want);
-		if (got < 0) {
-			LOG_ERR("File read error: %d", (int)got);
-			return luaL_error(L, "error reading file: %d", (int)got);
+		luaL_buffinit(L, &bbuf);
+		size_t remaining = (size_t)want;
+		size_t total = 0;
+		while (remaining > 0) {
+			size_t chunk = remaining < LUAL_BUFFERSIZE ? remaining : LUAL_BUFFERSIZE;
+			char *out = luaL_prepbuffsize(&bbuf, chunk);
+			ssize_t got = fs_read(&stream->file, out, chunk);
+			if (got < 0) {
+				LOG_ERR("File read error: %d", (int)got);
+				return luaL_error(L, "error reading file: %d", (int)got);
+			}
+			if (got == 0) {
+				break; /* EOF */
+			}
+			luaL_addsize(&bbuf, (size_t)got);
+			total += (size_t)got;
+			remaining -= (size_t)got;
 		}
-		if (got == 0) {
+		if (total == 0) {
 			lua_pushnil(L); /* EOF */
 			return 1;
 		}
-		luaL_pushresultsize(&bbuf, (size_t)got);
+		luaL_pushresult(&bbuf);
 		return 1;
 	}
 
@@ -98,7 +111,7 @@ static int lua_file_read(lua_State *L)
 	char ch;
 	size_t count = 0;
 
-	while (count < LUAL_BUFFERSIZE) {
+	for (;;) {
 		ssize_t result = fs_read(&stream->file, &ch, 1);
 
 		if (result < 0) {
