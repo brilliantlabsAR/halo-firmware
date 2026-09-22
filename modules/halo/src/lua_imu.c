@@ -545,6 +545,9 @@ static int lua_imu_tap_callback(lua_State *L)
 	}
 
 	/* Store new callback in registry */
+	/* luaL_ref takes the stack top: drop any extra arguments so the
+	 * function in slot 1 is what gets registered. */
+	lua_settop(L, 1);
 	imu_state.tap_callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	/* Mark service as active so SUSPEND is dispatched when tap is armed. */
