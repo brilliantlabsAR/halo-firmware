@@ -369,9 +369,12 @@ static void camera_capture_thread(void *p0, void *p1, void *p2)
 				camera_state.ready = false;
 				continue;
 			}
-			camera_state.ready = true;
+			/* Rewind before publishing: read() on the Lua thread keys off
+			 * ready, so the positions must already be valid for the new
+			 * frame when it flips. */
 			camera_state.raw_pos = 0;
 			camera_state.jpeg_pos = 0;
+			camera_state.ready = true;
 		} else {
 			LOG_ERR("Image processing failed: %d", ret);
 		}
@@ -759,6 +762,15 @@ static int lua_camera_read(lua_State *L)
 
 	if (camera_state.jpeg_buffer == NULL) {
 		return luaL_error(L, "JPEG buffer not allocated");
+	}
+
+	/* Nothing to hand out while the capture thread owns the buffer (the
+	 * encoder may be writing it, and jpeg_data_size can already belong to
+	 * the next, possibly smaller, frame while jpeg_pos still belongs to
+	 * the previous one, which would underflow the subtraction below). */
+	if (!camera_state.ready || camera_state.jpeg_pos >= camera_state.jpeg_data_size) {
+		lua_pushnil(L);
+		return 1;
 	}
 
 	size_t remaining =
