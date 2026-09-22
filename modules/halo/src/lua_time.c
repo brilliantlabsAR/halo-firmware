@@ -23,7 +23,7 @@ LOG_MODULE_REGISTER(lua_time, CONFIG_HALO_LOG_LEVEL);
  * If not explicitly set, UTC time equals uptime (system boot time = epoch 0).
  */
 static struct {
-	uint32_t sync_uptime_ms;      /* Uptime when UTC was last set */
+	int64_t sync_uptime_ms;       /* Uptime when UTC was last set */
 	uint64_t utc_time_ms;         /* UTC time in milliseconds */
 	/* Signed total offset in minutes (-720 = UTC-12:00 .. +840 = UTC+14:00).
 	 * Kept as one signed quantity rather than separate hour/minute fields:
@@ -47,9 +47,9 @@ static struct {
  */
 static uint64_t get_current_utc_ms(void)
 {
-	uint32_t current_uptime = k_uptime_get_32();
-	uint32_t elapsed_ms = current_uptime - time_state.sync_uptime_ms;
-	return time_state.utc_time_ms + elapsed_ms;
+	int64_t elapsed_ms = k_uptime_get() - time_state.sync_uptime_ms;
+
+	return time_state.utc_time_ms + (uint64_t)elapsed_ms;
 }
 
 /**
@@ -82,7 +82,7 @@ static int lua_time_utc(lua_State *L)
 		return luaL_error(L, "timestamp must be non-negative");
 	}
 	
-	time_state.sync_uptime_ms = k_uptime_get_32();
+	time_state.sync_uptime_ms = k_uptime_get();
 	time_state.utc_time_ms = (uint64_t)(timestamp * 1000.0);
 	
 	LOG_DBG("Time UTC set: %.3f", timestamp);
