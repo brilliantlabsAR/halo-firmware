@@ -62,6 +62,15 @@ static inline size_t heap_usable_size_locked(struct sys_heap *heap, void *ptr)
 	return size;
 }
 
+static inline void *heap_realloc_locked(struct sys_heap *heap, void *ptr, size_t size)
+{
+	k_spinlock_key_t key = k_spin_lock(&mem_ctx.lock);
+	void *new_ptr = sys_heap_realloc(heap, ptr, size);
+
+	k_spin_unlock(&mem_ctx.lock, key);
+	return new_ptr;
+}
+
 int halo_mem_init(void)
 {
 	if (mem_ctx.initialized) {
@@ -202,7 +211,29 @@ void *halo_realloc(void *ptr, size_t size, halo_mem_region_t region)
 	}
 #endif
 
+	/* When the requested region is the heap the block already lives in (or
+	 * AUTO), let sys_heap grow or shrink it in place, or move it within the
+	 * same heap, instead of alloc + memcpy + free. Lua table and string
+	 * growth comes through here constantly. On failure the block is left
+	 * untouched and we fall through to the cross-heap path below, which may
+	 * land it in the other heap. */
 	if (old_heap) {
+		bool same_region = (region == HALO_MEM_REGION_AUTO) ||
+				   (region == HALO_MEM_REGION_INTERNAL &&
+				    old_heap == &mem_ctx.internal_heap);
+#if defined(CONFIG_HALO_MEM_USE_EXTERNAL_SRAM)
+		same_region = same_region ||
+			      (region == HALO_MEM_REGION_EXTERNAL &&
+			       old_heap == &mem_ctx.external_heap);
+#endif
+		if (same_region) {
+			void *new_ptr = heap_realloc_locked(old_heap, ptr, size);
+
+			if (new_ptr) {
+				return new_ptr;
+			}
+		}
+
 		old_size = heap_usable_size_locked(old_heap, ptr);
 	}
 
