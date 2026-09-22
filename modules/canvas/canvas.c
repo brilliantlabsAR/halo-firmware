@@ -38,6 +38,67 @@ void canvas_clear(Canvas *canvas, Color color)
 }
 
 // Optimized line drawing with memcpy for horizontal lines
+/* Liang-Barsky clip of a segment to the logical screen. Returns false when
+ * none of it is visible. Coordinates arrive from Lua as raw integers, so
+ * without this a far off-screen endpoint makes Bresenham step through
+ * billions of pixels that canvas_set_pixel then rejects one by one, with the
+ * Lua thread stuck in C where a break signal cannot reach it. */
+static bool clip_line_to_screen(int *x0, int *y0, int *x1, int *y1)
+{
+	const double sx = (double)*x0;
+	const double sy = (double)*y0;
+	const double dx = (double)*x1 - sx;
+	const double dy = (double)*y1 - sy;
+	const double p[4] = { -dx, dx, -dy, dy };
+	const double q[4] = { sx, (double)(LOG_WIDTH - 1) - sx, sy, (double)(LOG_HEIGHT - 1) - sy };
+	double t0 = 0.0;
+	double t1 = 1.0;
+
+	for (int i = 0; i < 4; i++) {
+		if (p[i] == 0.0) {
+			if (q[i] < 0.0) {
+				return false; /* parallel to this edge and outside it */
+			}
+			continue;
+		}
+
+		const double t = q[i] / p[i];
+
+		if (p[i] < 0.0) {
+			if (t > t1) {
+				return false;
+			}
+			if (t > t0) {
+				t0 = t;
+			}
+		} else {
+			if (t < t0) {
+				return false;
+			}
+			if (t < t1) {
+				t1 = t;
+			}
+		}
+	}
+
+	/* The clipped endpoints lie inside [0, LOG_WIDTH-1] x [0, LOG_HEIGHT-1],
+	 * so they are non-negative and +0.5 truncation rounds them. A segment
+	 * that was already on screen keeps t0 = 0, t1 = 1 and is unchanged. */
+	*x0 = (int)(sx + t0 * dx + 0.5);
+	*y0 = (int)(sy + t0 * dy + 0.5);
+	*x1 = (int)(sx + t1 * dx + 0.5);
+	*y1 = (int)(sy + t1 * dy + 0.5);
+	return true;
+}
+
+/* canvas_set_pixel takes int; guard the cast for 64-bit intermediates. */
+static inline void plot_if_visible(Canvas *canvas, int64_t x, int64_t y, Color color)
+{
+	if (x >= 0 && x < LOG_WIDTH && y >= 0 && y < LOG_HEIGHT) {
+		canvas_set_pixel(canvas, (int)x, (int)y, color);
+	}
+}
+
 void canvas_draw_line(Canvas *canvas, int x0, int y0, int x1, int y1, Color color)
 {
 	// Extract color components once
@@ -111,7 +172,11 @@ void canvas_draw_line(Canvas *canvas, int x0, int y0, int x1, int y1, Color colo
 		return;
 	}
 
-	// Handle diagonal lines with Bresenham's algorithm
+	// Handle diagonal lines with Bresenham's algorithm, on the visible part only
+	if (!clip_line_to_screen(&x0, &y0, &x1, &y1)) {
+		return;
+	}
+
 	int dx = abs(x1 - x0);
 	int dy = abs(y1 - y0);
 	int sx = (x0 < x1) ? 1 : -1;
@@ -205,29 +270,37 @@ void canvas_draw_circle(Canvas *canvas, int cx, int cy, int radius, Color color,
 		return;
 	}
 
+	// Centre and radius arrive from Lua as raw integers: cx + radius and
+	// radius * radius both overflow int for large inputs, so work in 64 bits.
+	const int64_t r = radius;
+	const int64_t cx64 = cx;
+	const int64_t cy64 = cy;
+
 	// Clip circle to visible area
-	if (cx + radius < 0 || cx - radius >= LOG_WIDTH || cy + radius < 0 ||
-	    cy - radius >= LOG_HEIGHT) {
+	if (cx64 + r < 0 || cx64 - r >= LOG_WIDTH || cy64 + r < 0 || cy64 - r >= LOG_HEIGHT) {
 		return;
+	}
+
+	// Only the rows on screen are worth visiting: a huge radius must not turn
+	// into a loop over billions of rows that are skipped one by one.
+	int64_t ty_start = cy64 - r;
+	int64_t ty_end = cy64 + r;
+
+	if (ty_start < 0) {
+		ty_start = 0;
+	}
+	if (ty_end > LOG_HEIGHT - 1) {
+		ty_end = LOG_HEIGHT - 1;
 	}
 
 	if (filled) {
 		// Fill circle using horizontal spans for better performance
-		for (int ty = cy - radius; ty <= cy + radius; ty++) {
-			// Skip rows outside visible area
-			if (ty < 0 || ty >= LOG_HEIGHT) {
-				continue;
-			}
-
+		for (int64_t ty = ty_start; ty <= ty_end; ty++) {
 			// Calculate horizontal span for this row
-			int y_dist = abs(ty - cy);
-			if (y_dist > radius) {
-				continue;
-			}
-
-			int chord_length = (int)sqrt(radius * radius - y_dist * y_dist);
-			int start_x = cx - chord_length;
-			int end_x = cx + chord_length;
+			const int64_t y_dist = ty - cy64;
+			const int64_t chord_length = (int64_t)sqrt((double)(r * r - y_dist * y_dist));
+			int64_t start_x = cx64 - chord_length;
+			int64_t end_x = cx64 + chord_length;
 
 			// Clip horizontal span to visible area
 			if (start_x < 0) {
@@ -239,11 +312,16 @@ void canvas_draw_circle(Canvas *canvas, int cx, int cy, int radius, Color color,
 
 			// Draw horizontal span with optimized function
 			if (start_x <= end_x) {
-				canvas_draw_line(canvas, start_x, ty, end_x, ty, color);
+				canvas_draw_line(canvas, (int)start_x, (int)ty, (int)end_x, (int)ty,
+						 color);
 			}
 		}
-	} else {
-		// Outline circle using midpoint algorithm
+		return;
+	}
+
+	if (r <= 4 * (LOG_WIDTH + LOG_HEIGHT)) {
+		// Outline circle using midpoint algorithm: unchanged for every radius
+		// that can plausibly be meant for this screen
 		int x = 0;
 		int y = radius;
 		int d = 3 - 2 * radius;
@@ -269,6 +347,37 @@ void canvas_draw_circle(Canvas *canvas, int cx, int cy, int radius, Color color,
 			}
 			x++;
 		}
+		return;
+	}
+
+	// Very large outline: the midpoint walk costs about 0.7 * radius steps,
+	// nearly all of them off screen. Scan only the visible rows and columns
+	// and plot where the circle crosses each; the two passes together leave
+	// no gaps.
+	for (int64_t ty = ty_start; ty <= ty_end; ty++) {
+		const int64_t y_dist = ty - cy64;
+		const int64_t half = (int64_t)(sqrt((double)(r * r - y_dist * y_dist)) + 0.5);
+
+		plot_if_visible(canvas, cx64 - half, ty, color);
+		plot_if_visible(canvas, cx64 + half, ty, color);
+	}
+
+	int64_t tx_start = cx64 - r;
+	int64_t tx_end = cx64 + r;
+
+	if (tx_start < 0) {
+		tx_start = 0;
+	}
+	if (tx_end > LOG_WIDTH - 1) {
+		tx_end = LOG_WIDTH - 1;
+	}
+
+	for (int64_t tx = tx_start; tx <= tx_end; tx++) {
+		const int64_t x_dist = tx - cx64;
+		const int64_t half = (int64_t)(sqrt((double)(r * r - x_dist * x_dist)) + 0.5);
+
+		plot_if_visible(canvas, tx, cy64 - half, color);
+		plot_if_visible(canvas, tx, cy64 + half, color);
 	}
 }
 
@@ -277,6 +386,13 @@ void canvas_draw_polygon(Canvas *canvas, const int *points, int count, Color col
 {
 	// Degenerate cases
 	if (count < 2) {
+		return;
+	}
+
+	// Two points: just the segment. The triangle path below would read a
+	// third vertex the caller never supplied.
+	if (count == 2) {
+		canvas_draw_line(canvas, points[0], points[1], points[2], points[3], color);
 		return;
 	}
 
