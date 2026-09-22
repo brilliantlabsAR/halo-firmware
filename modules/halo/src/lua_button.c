@@ -299,6 +299,9 @@ static int lua_button_single(lua_State *L)
 	}
 
 	/* Store new callback in registry */
+	/* luaL_ref takes the stack top: drop any extra arguments so the
+	 * function in slot 1 is what gets registered. */
+	lua_settop(L, 1);
 	button_callback_state.single_click_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	LOG_DBG("Button single click callback registered");
@@ -336,6 +339,9 @@ static int lua_button_double(lua_State *L)
 	}
 
 	/* Store new callback in registry */
+	/* luaL_ref takes the stack top: drop any extra arguments so the
+	 * function in slot 1 is what gets registered. */
+	lua_settop(L, 1);
 	button_callback_state.double_click_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	LOG_DBG("Button double click callback registered");
@@ -373,6 +379,9 @@ static int lua_button_long(lua_State *L)
 	}
 
 	/* Store new callback in registry */
+	/* luaL_ref takes the stack top: drop any extra arguments so the
+	 * function in slot 1 is what gets registered. */
+	lua_settop(L, 1);
 	button_callback_state.long_press_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	LOG_DBG("Button long press callback registered");
