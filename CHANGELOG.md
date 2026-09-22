@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-09-22
+
 ### Changed
 
 - `require()` no longer caches modules in `package.loaded`; it loads and runs
