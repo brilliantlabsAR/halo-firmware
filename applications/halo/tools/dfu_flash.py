@@ -260,13 +260,21 @@ async def main():
                              "(default 4)")
     args = parser.parse_args()
 
+    # Retries cover getting connected. Once bytes are going out we must not
+    # silently start a second ~600 KB upload from scratch, so a failure after
+    # that point is reported instead.
+    progress = {"uploading": False}
     for attempt in range(1, args.retries + 1):
         try:
-            return await run(args)
+            return await run(args, progress)
         except Exception as e:
             # Some bleak errors stringify to "", so always name the type --
             # an unexplained failure is useless when recovering a device.
             detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            if progress["uploading"]:
+                print(f"\nFailed after the upload started -- {detail}")
+                print("Not retrying automatically; re-run the command to upload again.")
+                return 1
             if attempt == args.retries:
                 print(f"Failed after {attempt} attempt(s) -- {detail}")
                 return 1
@@ -274,7 +282,7 @@ async def main():
             await asyncio.sleep(3)
 
 
-async def run(args):
+async def run(args, progress):
     device = await BleakScanner.find_device_by_name(args.name, timeout=15.0)
     if device is None:
         raise DfuError(f"no device advertising as {args.name!r}")
@@ -309,6 +317,7 @@ async def run(args):
 
         sha = hashlib.sha256(firmware).digest()
         total = len(firmware)
+        progress["uploading"] = True
         off = 0
         while off < total:
             chunk = firmware[off:off + args.chunk_size]
@@ -330,6 +339,17 @@ async def run(args):
             raise DfuError("no uploaded image found in slot 1")
         image_hash = candidate["hash"]
         print(f"Flashed image with MCUboot hash {image_hash.hex()}")
+
+        # Marking an image pending when it is byte-identical to the running,
+        # confirmed image is refused with rc=1: there is nothing to swap to.
+        # Observed in both app and DFU mode, so it is about the image rather
+        # than which server answers. Detect it rather than issue a request we
+        # know will fail.
+        active = next((i for i in images if i.get("active")), None)
+        if active is not None and active.get("hash") == image_hash:
+            print("Uploaded image is identical to the image already running and "
+                  "confirmed; nothing to mark and no reboot needed")
+            return 0
 
         await smp.request(OP_WRITE, GROUP_IMAGE, ID_IMAGE_STATE,
                           {"hash": image_hash, "confirm": args.dangerously_auto_confirm})
