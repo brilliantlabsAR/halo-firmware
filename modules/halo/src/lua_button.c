@@ -239,8 +239,19 @@ static void button_event_cb_long_press_level3(const struct device *dev, enum but
 
 	LOG_INF("15 second hold triggered - level 3");
 
+	/* Everything that can refuse must refuse BEFORE the filesystem is wiped.
+	 * halo_file_format() is irreversible, so a failure after it leaves a
+	 * blank-but-running device - which is how a failed ship mode used to
+	 * destroy /lfs and the bond table while staying powered up. */
 	if (halo_battery_is_charging()) {
 		LOG_WRN("Cannot enter ship mode while charging");
+		return;
+	}
+
+	const struct device *sm = DEVICE_DT_GET(DT_ALIAS(shutdown));
+
+	if (!device_is_ready(sm)) {
+		LOG_ERR("Ship mode device not ready - not formatting");
 		return;
 	}
 
@@ -252,13 +263,25 @@ static void button_event_cb_long_press_level3(const struct device *dev, enum but
 
 	/* Factory reset: wipe the entire filesystem */
 	LOG_WRN("Performing factory reset (formatting filesystem)...");
-	halo_file_format();
+	int ret = halo_file_format();
 
-	/* Get the shutdown device */
-	const struct device *sm = DEVICE_DT_GET(DT_ALIAS(shutdown));
-	if (!device_is_ready(sm)) {
-		LOG_ERR("Ship mode device not ready");
-		return;
+	/* The filesystem is gone either way now, so the noinit bond table is
+	 * already inconsistent with flash. Invalidate it here, before handing
+	 * off to the PMIC, so that EVERY exit from this point starts from an
+	 * empty table: ship mode honoured, a cold power cycle, a warm reset, or
+	 * the reboot below. Doing it after shutdown() left a gap - a hardware
+	 * power cycle outruns the code below (observed: the rail drops and comes
+	 * back ~0.6 s later, before the 500 ms wait elapses), and a warm reset
+	 * would have carried phantom bonds into a device whose settings are
+	 * empty (halo_ble_sec_init() returns early on a surviving magic). */
+	halo_ble_sec_invalidate();
+
+	if (ret < 0) {
+		/* Flash state is now unknown - reboot rather than ship a device
+		 * that may hold a half-erased filesystem. */
+		LOG_ERR("Factory reset failed: %d - rebooting", ret);
+		k_sleep(K_MSEC(100));
+		sys_reboot(SYS_REBOOT_COLD);
 	}
 
 	/* Give time for log messages to be sent */
@@ -266,6 +289,21 @@ static void button_event_cb_long_press_level3(const struct device *dev, enum but
 
 	/* Enter ship mode (shutdown) */
 	shutdown(sm);
+
+	/* Unreachable when the PMIC honours it. shutdown() only asserts a GPIO
+	 * and returns 0, so its return value cannot report refusal - reaching
+	 * this line at all IS the failure signal. The PMIC ignores ship mode
+	 * while external power is present, and halo_battery_is_charging() does
+	 * not necessarily catch that: despite the channel name it reports the
+	 * charger's state pin, not a current (SENSOR_CHAN_GAUGE_STDBY_CURRENT in
+	 * the vbat driver returns that GPIO), so power delivered outside the
+	 * charge path leaves it reading false. There is no VBUS sense line on
+	 * this board to test directly, so recovery is the backstop. */
+	k_sleep(K_MSEC(500));
+
+	LOG_ERR("Ship mode refused (external power?) - rebooting into factory state");
+	k_sleep(K_MSEC(100));
+	sys_reboot(SYS_REBOOT_COLD);
 }
 
 /**

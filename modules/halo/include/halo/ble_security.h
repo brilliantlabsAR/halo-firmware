@@ -94,6 +94,19 @@ int halo_ble_sec_bond_clear(void);
 int halo_ble_sec_pairing_window_open(void);
 
 /**
+ * @brief Invalidate the in-RAM bond table so the next boot reloads from flash
+ *
+ * The bond table lives in noinit RAM and deliberately survives a warm reboot
+ * (see halo_ble_sec_init()). After the filesystem has been formatted that
+ * cached table describes bonds that no longer exist on flash, so a reboot
+ * would carry phantom bonds into a device whose settings are empty. Call this
+ * before rebooting a freshly-formatted device to force a cold-path init.
+ *
+ * Not for general use: this drops keys for every bonded peer.
+ */
+void halo_ble_sec_invalidate(void);
+
+/**
  * @brief Check whether the pairing window is currently open
  *
  * @return true if open
