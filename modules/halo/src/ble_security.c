@@ -364,6 +364,40 @@ bool halo_ble_sec_pairing_window_is_open(void)
 	return window.open;
 }
 
+void halo_ble_sec_invalidate(void)
+{
+	/* Clearing the magic is what matters: halo_ble_sec_init() keys its
+	 * warm-reboot early return off it, so zeroing it forces the next boot
+	 * down the cold path and reloads the (now empty) bond table from
+	 * settings. The bond slots are cleared too so no key material outlives
+	 * the factory reset in RAM either. */
+	if (sec_ctx.initialized != BLE_SECURITY_INIT_MAGIC) {
+		/* Nothing initialized to invalidate - and sec_ctx.lock is noinit
+		 * garbage until halo_ble_sec_init() runs, so it must not be
+		 * taken here. The next boot already takes the cold path. */
+		return;
+	}
+
+	k_mutex_lock(&sec_ctx.lock, K_FOREVER);
+
+	sec_ctx.initialized = 0;
+	sec_ctx.paired = false;
+	sec_ctx.encrypted = false;
+	sec_ctx.active_slot = -1;
+	sec_ctx.pending_active = false;
+	sec_ctx.lru_counter = 0;
+	memset(&sec_ctx.pending, 0, sizeof(sec_ctx.pending));
+	memset(sec_ctx.bonds, 0, sizeof(sec_ctx.bonds));
+
+	/* sec_ctx.lock is deliberately left intact: it is held right now, and a
+	 * zeroed k_mutex cannot be unlocked. The IRK is derived from the EUI on
+	 * every init (warm or cold), so it needs no clearing here. */
+
+	k_mutex_unlock(&sec_ctx.lock);
+
+	LOG_WRN("Bond table invalidated - next boot reloads from flash");
+}
+
 /* Called once a new bond is committed */
 static void pairing_window_close(void)
 {
