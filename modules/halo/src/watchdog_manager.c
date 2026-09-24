@@ -270,5 +270,13 @@ int halo_watchdog_resume(void)
 
 bool halo_watchdog_has_fired(void)
 {
-	return watchdog_fired == HALO_WATCHDOG_FIRED_MAGIC;
+	bool fired = (watchdog_fired == HALO_WATCHDOG_FIRED_MAGIC);
+
+	/* One-shot. The flag lives in noinit RAM precisely so it survives the
+	 * reset the watchdog caused; it therefore also survives the reboot
+	 * main() issues in response, and left set it would be seen again on
+	 * that boot, and the next, until power is removed. */
+	watchdog_fired = 0;
+
+	return fired;
 }
