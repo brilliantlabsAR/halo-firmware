@@ -95,6 +95,12 @@ Two traps:
   bonds. Fix: re-pair (forget the device in macOS Bluetooth settings, or hold
   the device button ~5 s to clear its bonds), then retry. This needs the user;
   report it rather than retrying in a loop.
+- **Every SMP request timing out, while the Lua channel still works**, is a
+  stale macOS GATT cache rather than broken firmware — SMP writes go without a
+  response, so a stale handle fails silently and the MCUmgr server looks dead
+  (seen with the trivial OS group timing out and image-state silent for 150 s).
+  Cycle the host adapter: `blueutil -p 0 && blueutil -p 1`. Prefer that over the
+  Bluetooth settings pane if the user's keyboard and mouse are on the adapter.
 - First-time / bootloader / bricked-device flashing is wired (SE-UART, Alif
   tools): see the wired-flashing appendix in `alif/applications/halo/SETUP.md`.
 - To pull the device's persisted `/lfs` logs (post-flash diagnostics), use the

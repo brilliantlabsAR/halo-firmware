@@ -64,9 +64,15 @@ then misbehaves is kept. Test changes incrementally.
   your computer's stored bond no longer matches the device. Forget the
   device in your OS Bluetooth settings (or hold the Halo button ~5 s to open
   pairing), re-pair, and retry.
-- **macOS "Writing is not permitted"** during upload: toggle your Mac's
+- **macOS "Writing is not permitted"** during upload, **or every SMP request
+  timing out** while the device is otherwise healthy: toggle your Mac's
   Bluetooth off and on — it's a stale macOS GATT cache, not a device
-  problem.
+  problem. The second form is easy to misread as broken firmware: the
+  device answers Lua commands normally, but *all* MCUmgr requests go
+  unanswered, because SMP writes are sent without a response and a stale
+  handle fails silently. `blueutil -p 0 && blueutil -p 1` cycles the
+  adapter without needing the Bluetooth settings pane (useful if your
+  keyboard and mouse are on it).
 - **After flashing, give the device ~10 s** to reboot before reconnecting.
 
 ## Recovering a device that won't boot (BLE DFU mode)
