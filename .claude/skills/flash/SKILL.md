@@ -1,6 +1,6 @@
 ---
 name: flash
-description: Flash Halo firmware over BLE OTA (SMP/MCUmgr) and verify the device boots. Use after building to get zephyr.signed.bin onto a device. Wireless app-image updates only — not first-time or bootloader flashing.
+description: Flash Halo firmware over BLE OTA (SMP/MCUmgr) and verify the device boots. Use after building to get zephyr.signed.bin onto a device. Covers normal OTA (ota_flash.py) and recovering a device that won't boot, from MCUboot's BLE DFU mode (dfu_flash.py). Wireless app-image updates only — not first-time or bootloader flashing.
 ---
 
 # Flash Halo firmware over BLE OTA
@@ -44,6 +44,41 @@ boot — so a good image sticks and a bad one auto-reverts. Don't use
 is not absolute: a half-alive image can self-confirm and still misbehave, which
 is exactly why real devices are flashed last.
 
+## Recovering a non-booting device (BLE DFU mode)
+
+MCUboot enters **BLE DFU recovery mode** by itself when it finds no bootable
+image, and stays there advertising an SMP server until flashed. A 10 s button
+hold through a power-cycle forces the same mode (LED at full brightness).
+
+**`ota_flash.py` cannot flash a device in DFU mode** — `brilliant_ble.connect()`
+requires the app's Frame GATT service, which the bootloader does not expose, so
+it fails before the upload starts. Use `dfu_flash.py`, which talks SMP directly
+and depends only on `bleak`:
+
+```
+uv run alif/applications/halo/tools/dfu_flash.py --name "Halo EC"          # slot state only
+uv run alif/applications/halo/tools/dfu_flash.py build/halo/zephyr/zephyr.signed.bin \
+    --name "Halo EC" --yes
+```
+
+Flags mirror `ota_flash.py`. The firmware argument is optional (omit it to read
+slot state), and `--retries` defaults to 4 because connects to these devices
+drop with `reason=0x98` often. It reports which mode it reached — "app is
+running" vs "BOOTLOADER DFU MODE" — and works in both, so prefer it whenever the
+device's state is unknown.
+
+Two traps:
+
+- **Entering DFU by button formats `/lfs`**: `main.lua`, user files and BLE bonds
+  are erased (`boot_ble_dfu_enter()` calls `halo_file_format()` only for the
+  button path). Back `/lfs` up first if it matters. The automatic no-image path
+  does not format and has no inactivity timeout; the button path exits after
+  2 minutes idle and cold-reboots.
+- **Do not detect DFU mode from the advertisement.** The bootloader links the
+  same `halo_ble_init()` as the app, so it advertises the same Frame and battery
+  UUIDs. Tell them apart by the GATT service table (DFU = one service, SMP only)
+  or by console silence (the bootloader is built `CONFIG_LOG=n`).
+
 ## Connection gotchas
 
 - After the flash the device reboots; give it ~10 s before verifying.
@@ -60,6 +95,12 @@ is exactly why real devices are flashed last.
   bonds. Fix: re-pair (forget the device in macOS Bluetooth settings, or hold
   the device button ~5 s to clear its bonds), then retry. This needs the user;
   report it rather than retrying in a loop.
+- **Every SMP request timing out, while the Lua channel still works**, is a
+  stale macOS GATT cache rather than broken firmware — SMP writes go without a
+  response, so a stale handle fails silently and the MCUmgr server looks dead
+  (seen with the trivial OS group timing out and image-state silent for 150 s).
+  Cycle the host adapter: `blueutil -p 0 && blueutil -p 1`. Prefer that over the
+  Bluetooth settings pane if the user's keyboard and mouse are on the adapter.
 - First-time / bootloader / bricked-device flashing is wired (SE-UART, Alif
   tools): see the wired-flashing appendix in `alif/applications/halo/SETUP.md`.
 - To pull the device's persisted `/lfs` logs (post-flash diagnostics), use the
