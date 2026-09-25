@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Tests frame.bluetooth.receive_callback(): data sent to the device is handed to
@@ -10,6 +10,7 @@ a Lua callback, which echoes it back with frame.bluetooth.send().
 import asyncio
 import sys
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 import argparse
 
 
@@ -89,8 +90,7 @@ async def main():
         except Exception as e:
             print(f"could not clear receive callback: {e}")
         # Leave the device running its application again.
-        await bluetooth.send_reset_signal()
-        await bluetooth.disconnect()
+        await safe_teardown(bluetooth)
 
     return 1 if failures else 0
 

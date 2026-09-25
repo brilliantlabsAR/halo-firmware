@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """Structured visual check of palette indexing across the bitmap paths.
 
@@ -32,6 +32,7 @@ Non-interactive except for eyes: exit code is always 0; judge on-screen.
 import asyncio
 import argparse
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 
 HOLD = 16.0  # seconds per screen
 
@@ -188,8 +189,7 @@ async def main():
     await b.send_lua("frame.display.set_font(0, 8, 1)")
     await b.send_lua("frame.display.clear(0x000000)")
     await b.send_lua("frame.display.power_save(true)")
-    await b.send_reset_signal()
-    await b.disconnect()
+    await safe_teardown(b)
 
 
 asyncio.run(main())

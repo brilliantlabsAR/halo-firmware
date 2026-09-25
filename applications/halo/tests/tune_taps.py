@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Interactive tap-detector tuning console for Halo (BMA580).
@@ -32,6 +32,7 @@ import asyncio
 import sys
 import time
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 
 NUMERIC_KEYS = {
     "threshold",
@@ -128,8 +129,7 @@ async def main() -> None:
         )
         print(f"  -> {out}")
 
-    await b.send_reset_signal()
-    await b.disconnect()
+    await safe_teardown(b)
 
 
 try:

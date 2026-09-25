@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Tests the Frame specific Lua libraries over Bluetooth.
@@ -8,6 +8,7 @@ Tests the Frame specific Lua libraries over Bluetooth.
 
 import asyncio
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 import argparse
 
 
@@ -50,8 +51,7 @@ async def main():
             await b.send_lua("print(frame.battery_charging())")
             await asyncio.sleep(10)
     finally:
-        await b.send_reset_signal()
-        await b.disconnect()
+        await safe_teardown(b)
 
 
 asyncio.run(main())

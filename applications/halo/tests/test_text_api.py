@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """Exercise the Halo text API: placement, fonts, sizes/scales and colours.
 
