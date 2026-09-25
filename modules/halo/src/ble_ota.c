@@ -363,6 +363,37 @@ static struct mgmt_callback ota_dfu_callback = {
 };
 #endif /* CONFIG_MCUMGR_GRP_IMG_STATUS_HOOKS */
 
+#if defined(CONFIG_MCUMGR_GRP_OS_RESET_HOOK)
+/* mcumgr "os reset" is the last step of the standard DFU sequence and reboots
+ * from inside Zephyr's os_mgmt, bypassing the halo_ble_conn_prepare_reboot()
+ * that every other reboot path runs first. Without it the new image
+ * warm-starts, alif_ble_enable() returns -EALREADY, gapm_configure() is
+ * skipped and the device comes up without advertising. Run it from the reset
+ * hook so a generic mcumgr client gets the same treatment as frame.reboot(). */
+static enum mgmt_cb_return ota_os_reset_cb(uint32_t event, enum mgmt_cb_return prev_status,
+					   int32_t *rc, uint16_t *group, bool *abort_more,
+					   void *data, size_t data_size)
+{
+	ARG_UNUSED(prev_status);
+	ARG_UNUSED(rc);
+	ARG_UNUSED(group);
+	ARG_UNUSED(abort_more);
+	ARG_UNUSED(data);
+	ARG_UNUSED(data_size);
+
+	if (event == MGMT_EVT_OP_OS_MGMT_RESET) {
+		halo_ble_conn_prepare_reboot();
+	}
+
+	return MGMT_CB_OK;
+}
+
+static struct mgmt_callback ota_os_reset_callback = {
+	.callback = ota_os_reset_cb,
+	.event_id = MGMT_EVT_OP_OS_MGMT_RESET,
+};
+#endif /* CONFIG_MCUMGR_GRP_OS_RESET_HOOK */
+
 int halo_ble_ota_init(bool reset)
 {
 	if (ota_ctx.initialized == BLE_OTA_INIT_MAGIC) {
@@ -384,6 +415,9 @@ int halo_ble_ota_init(bool reset)
 
 #if defined(CONFIG_MCUMGR_GRP_IMG_STATUS_HOOKS)
 	mgmt_callback_register(&ota_dfu_callback);
+#endif
+#if defined(CONFIG_MCUMGR_GRP_OS_RESET_HOOK)
+	mgmt_callback_register(&ota_os_reset_callback);
 #endif
 
 	if (reset) {
