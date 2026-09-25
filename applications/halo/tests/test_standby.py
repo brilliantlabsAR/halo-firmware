@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4", "aioconsole"]
+# dependencies = ["brilliant-ble>=3.3.0,<4", "aioconsole"]
 # ///
 """
 Tests frame.standby()'s resume-in-place wake semantics.

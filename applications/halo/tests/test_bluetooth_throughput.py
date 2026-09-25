@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Measures device -> host BLE throughput.
@@ -27,6 +27,7 @@ import sys
 import time
 
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 
 SENTINEL = b"\x00"
 BATCH = 100
@@ -115,8 +116,7 @@ async def main():
         print("\nFAILED: no throughput windows completed - no data was received")
 
     # Leave the device running its application again.
-    await b.send_reset_signal()
-    await b.disconnect()
+    await safe_teardown(b)
     return 0 if tp.samples else 1
 
 

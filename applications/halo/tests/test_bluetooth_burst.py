@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Regression test for frame.bluetooth.receive_callback delivery under load.
@@ -38,6 +38,7 @@ import argparse
 import asyncio
 
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 
 FAILURES = []
 
@@ -212,11 +213,14 @@ async def main():
         expect("re-registered callback", *await report(b), 8, 60)
 
     finally:
-        try:
-            await b.send_lua("frame.bluetooth.receive_callback(nil)")
-            await b.send_reset_signal()
-        finally:
-            await b.disconnect()
+        # Unregister only while the link is still up; on a dropped link these
+        # calls raise from inside finally and replace the real failure.
+        if b.is_connected():
+            try:
+                await b.send_lua("frame.bluetooth.receive_callback(nil)")
+            except Exception as e:
+                print(f"could not clear receive callback: {e}")
+        await safe_teardown(b)
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) FAILED:")

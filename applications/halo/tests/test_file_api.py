@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Tests the Halo file Lua library over Bluetooth.
@@ -8,6 +8,7 @@ Tests the Halo file Lua library over Bluetooth.
 
 import asyncio, sys
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 import argparse
 
 
@@ -123,8 +124,7 @@ class TestBluetooth(BrilliantBle):
         print("\033[0m")
         print(f"Done! Passed {passed_tests} of {total_tests} tests")
         # Restart the Lua VM so the device resumes running main.lua.
-        await self.send_reset_signal()
-        await self.disconnect()
+        await safe_teardown(self)
         return self._failed_tests
 
     async def lua_equals(self, send: str, expect):

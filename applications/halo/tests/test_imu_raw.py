@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4"]
+# dependencies = ["brilliant-ble>=3.3.0,<4"]
 # ///
 """
 Polls frame.imu.raw() and prints the accelerometer and compass readings.
@@ -26,6 +26,7 @@ reports roll ~ -89. That is expected, not a fault.
 
 import asyncio
 from brilliant_ble import BrilliantBle
+from halo_device_file import safe_teardown
 import argparse
 
 
@@ -77,13 +78,15 @@ async def main():
             await asyncio.sleep(0.1)
     finally:
         # Disarm the tap trigger. Leaving it armed keeps LPGPIO0 asserting and
-        # changes the behaviour of anything run afterwards.
-        try:
-            await b.send_lua("frame.imu.tap_callback(nil)")
-        except Exception as e:
-            print(f"could not clear tap callback: {e}")
-        await b.send_reset_signal()
-        await b.disconnect()
+        # changes the behaviour of anything run afterwards. Pointless if the
+        # link is already gone, and attempting it then only raises noise that
+        # would bury the real failure.
+        if b.is_connected():
+            try:
+                await b.send_lua("frame.imu.tap_callback(nil)")
+            except Exception as e:
+                print(f"could not clear tap callback: {e}")
+        await safe_teardown(b)
 
 
 asyncio.run(main())

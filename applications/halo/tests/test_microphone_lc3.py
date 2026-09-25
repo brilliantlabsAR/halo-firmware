@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10,<3.14"
-# dependencies = ["brilliant-ble>=3.1.1,<4", "numpy", "lc3py"]
+# dependencies = ["brilliant-ble>=3.3.0,<4", "numpy", "lc3py"]
 # ///
 """
 Record LC3-encoded audio from the Halo/Frame microphone over BLE, decode it,

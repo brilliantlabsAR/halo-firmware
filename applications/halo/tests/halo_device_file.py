@@ -83,6 +83,37 @@ async def read_device_file(ble, path):
     return data
 
 
+async def safe_teardown(ble, reset=True, verbose=True):
+    """Best-effort teardown that survives a link which has already dropped.
+
+    Teardown lives in a finally block, and an exception raised there *replaces*
+    the exception already on its way out. So a test whose link dropped mid-run
+    reports whatever the teardown hit rather than the drop that caused it, and
+    the operator sees a confusing crash instead of "disconnected".
+
+    brilliant-ble >= 3.3.0 raises NotConnectedError from the send helpers once
+    the link is down, which is clear on its own but still replaces the original
+    exception when it comes from a finally block. (Before 3.3.0 it was worse:
+    the disconnect handler called __init__(), so the failure surfaced as
+    "'NoneType' object has no attribute 'mtu_size'" from inside _transmit.)
+
+    Skipping teardown when the link is already gone avoids both: there is
+    nothing to reset on a device we cannot reach, and the real cause survives.
+    """
+    if not ble.is_connected():
+        if verbose:
+            print("link already down - skipping reset/disconnect")
+        return
+    try:
+        if reset:
+            await ble.send_reset_signal()
+        await ble.disconnect()
+    except Exception as e:
+        # The link can drop between the check above and these calls.
+        if verbose:
+            print(f"teardown on a dropping link: {type(e).__name__}: {e}")
+
+
 @asynccontextmanager
 async def preserve_main_lua(ble, verbose=True):
     """Save the device's main.lua and restore it on the way out.
