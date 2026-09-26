@@ -99,56 +99,79 @@ jobs:
               echo \"Building Debug version \$VERSION...\"
               west build -b halo applications/halo/ -p --sysbuild
               
+              # Plain cp (no existence guards): with set -e a missing image
+              # fails the run instead of silently shipping a partial release.
               mkdir -p release_artifacts
-              if [ -f build/halo/zephyr/zephyr.signed.bin ]; then
-                cp build/halo/zephyr/zephyr.signed.bin release_artifacts/halo-firmware-\${VERSION}-debug.signed.bin
-              fi
-              if [ -f build/mcuboot/zephyr/zephyr.bin ]; then
-                cp build/mcuboot/zephyr/zephyr.bin release_artifacts/halo-bootloader-\${VERSION}-debug.bin
-              fi
-              
+              cp build/halo/zephyr/zephyr.signed.bin release_artifacts/halo-firmware-\${VERSION}-debug.signed.bin
+              cp build/mcuboot/zephyr/zephyr.bin mcuboot-debug.bin
+
               echo \"Building Release version \$VERSION...\"
               RELEASE=1 west build -b halo applications/halo/ -p --sysbuild
-              
-              if [ -f build/halo/zephyr/zephyr.signed.bin ]; then
-                cp build/halo/zephyr/zephyr.signed.bin release_artifacts/halo-firmware-\${VERSION}-release.signed.bin
+
+              cp build/halo/zephyr/zephyr.signed.bin release_artifacts/halo-firmware-\${VERSION}-release.signed.bin
+              # RELEASE only selects the app's Kconfig fragments; MCUboot is
+              # configured identically in both builds, so one bootloader is
+              # published. Fail loudly if that ever stops being true rather
+              # than publish a debug/release pair nobody has reasoned about.
+              if ! cmp -s build/mcuboot/zephyr/zephyr.bin mcuboot-debug.bin; then
+                echo 'error: MCUboot differs between debug and release builds' >&2
+                exit 1
               fi
-              if [ -f build/mcuboot/zephyr/zephyr.bin ]; then
-                cp build/mcuboot/zephyr/zephyr.bin release_artifacts/halo-bootloader-\${VERSION}-release.bin
-              fi
-              
+              cp build/mcuboot/zephyr/zephyr.bin release_artifacts/halo-bootloader-\${VERSION}.bin
+
+              # Factory test firmware (tests/halo): a standalone Zephyr image
+              # with no MCUboot and no imgtool signature, linked at
+              # 0x80000000. The Alif SE tools write it via the ATOC as the boot
+              # image for PCBA test, in the space MCUboot later occupies. It is
+              # larger than the 128K mcuboot partition and runs on into slot0;
+              # that is fine because production flashing rewrites both
+              # afterwards. It stays well clear of the storage partition.
+              echo \"Building factory test firmware \$VERSION...\"
+              west build -b halo tests/halo -d build-factory-test -p
+              cp build-factory-test/zephyr/zephyr.bin release_artifacts/halo-factory-test-\${VERSION}.bin
+              cp build-factory-test/zephyr/zephyr.elf release_artifacts/halo-factory-test-\${VERSION}.elf
+              cp build-factory-test/zephyr/zephyr.map release_artifacts/halo-factory-test-\${VERSION}.map
+
+              # github.sha is the dispatch ref, not necessarily the built branch
+              COMMIT=\$(git rev-parse HEAD)
+
               echo 'Halo Firmware Build Information' > release_artifacts/VERSION.txt
               echo '================================' >> release_artifacts/VERSION.txt
               echo \"Version: \${VERSION}\" >> release_artifacts/VERSION.txt
               echo \"Branch: ${{ inputs.branch }}\" >> release_artifacts/VERSION.txt
-              echo \"Commit: ${{ github.sha }}\" >> release_artifacts/VERSION.txt
+              echo \"Commit: \${COMMIT}\" >> release_artifacts/VERSION.txt
               echo \"Build Date: \$(date -u +\\\"%Y-%m-%d %H:%M:%S UTC\\\")\" >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
               echo 'Files:' >> release_artifacts/VERSION.txt
               echo \"- halo-firmware-\${VERSION}-release.signed.bin (Production Application)\" >> release_artifacts/VERSION.txt
-              echo \"- halo-bootloader-\${VERSION}-release.bin (Production Bootloader)\" >> release_artifacts/VERSION.txt
               echo \"- halo-firmware-\${VERSION}-debug.signed.bin (Debug Application)\" >> release_artifacts/VERSION.txt
-              echo \"- halo-bootloader-\${VERSION}-debug.bin (Debug Bootloader)\" >> release_artifacts/VERSION.txt
+              echo \"- halo-bootloader-\${VERSION}.bin (MCUboot)\" >> release_artifacts/VERSION.txt
+              echo \"- halo-factory-test-\${VERSION}.bin (Factory test firmware, raw image at 0x80000000)\" >> release_artifacts/VERSION.txt
+              echo \"- halo-factory-test-\${VERSION}.elf/.map (Factory test symbols)\" >> release_artifacts/VERSION.txt
+              echo '- SHA256SUMS' >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
               echo 'Flash Instructions (over-the-air, no cable needed):' >> release_artifacts/VERSION.txt
               echo \"  uv run alif/applications/halo/tools/ota_flash.py halo-firmware-\${VERSION}-release.signed.bin\" >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
               echo 'See alif/applications/halo/FLASHING.md for details (test-boot' >> release_artifacts/VERSION.txt
-              echo 'semantics, recovery). The bootloader .bin files are not OTA-' >> release_artifacts/VERSION.txt
-              echo 'flashable; they are only used for wired factory flashing.' >> release_artifacts/VERSION.txt
-              
+              echo 'semantics, recovery). The bootloader and factory test .bin' >> release_artifacts/VERSION.txt
+              echo 'files are not OTA-flashable; they are only used for wired' >> release_artifacts/VERSION.txt
+              echo 'factory flashing.' >> release_artifacts/VERSION.txt
+
+              (cd release_artifacts && sha256sum -- * > SHA256SUMS)
+
               # Copy artifacts out of the container to the host
               cp -r release_artifacts /host_code/
               
               # Expose version to GitHub Actions Environment via host file
               echo \"version=\$VERSION\" > /host_code/build_version.txt
+              echo \"commit=\$COMMIT\" >> /host_code/build_version.txt
             "
 
       - name: Verify outputs and set environment variables
         id: version
         run: |
-          VERSION=$(cat latest-code/build_version.txt | cut -d'=' -f2)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          grep -E '^(version|commit)=' latest-code/build_version.txt >> $GITHUB_OUTPUT
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
@@ -171,22 +194,24 @@ jobs:
             **Build Information:**
             - Version: `${{ steps.version.outputs.version }}`
             - Branch: `${{ inputs.branch }}`
-            - Commit: `${{ github.sha }}`
+            - Commit: `${{ steps.version.outputs.commit }}`
 
             **Files:**
             - `halo-firmware-${{ steps.version.outputs.version }}-release.signed.bin` - Production firmware (signed)
-            - `halo-bootloader-${{ steps.version.outputs.version }}-release.bin` - Production bootloader
             - `halo-firmware-${{ steps.version.outputs.version }}-debug.signed.bin` - Debug firmware (signed)
-            - `halo-bootloader-${{ steps.version.outputs.version }}-debug.bin` - Debug bootloader
+            - `halo-bootloader-${{ steps.version.outputs.version }}.bin` - MCUboot bootloader
+            - `halo-factory-test-${{ steps.version.outputs.version }}.bin` - Factory test firmware (raw image at 0x80000000, no MCUboot)
+            - `halo-factory-test-${{ steps.version.outputs.version }}.{elf,map}` - Factory test symbols
             - `VERSION.txt` - Build information and flash instructions
+            - `SHA256SUMS` - SHA-256 of every asset above
             
             **Flashing (over the air — this is how Halo owners install firmware):**
             ```
             uv run alif/applications/halo/tools/ota_flash.py halo-firmware-${{ steps.version.outputs.version }}-release.signed.bin
             ```
             See `alif/applications/halo/FLASHING.md` for details. The bootloader
-            `.bin` files are for wired factory flashing only — they cannot be
-            flashed over the air.
+            and factory test `.bin` files are for wired factory flashing only —
+            they cannot be flashed over the air.
             
             ---
             
@@ -202,7 +227,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ steps.version.outputs.commit }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Build Artifacts:" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

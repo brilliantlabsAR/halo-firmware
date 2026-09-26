@@ -103,7 +103,13 @@ jobs:
               if [ -f build/mcuboot/zephyr/zephyr.bin ]; then
                 cp build/mcuboot/zephyr/zephyr.bin build_artifacts/halo-bootloader-\${VERSION}-release.bin
               fi
-              
+
+              # Releases publish the factory test firmware too; build it here
+              # so a break shows up on the PR, not when cutting a release.
+              echo \"Building factory test firmware \$VERSION...\"
+              west build -b halo tests/halo -d build-factory-test -p
+              cp build-factory-test/zephyr/zephyr.bin build_artifacts/halo-factory-test-\${VERSION}.bin
+
               # Copy artifacts out of the container to the host
               cp -r build_artifacts /host_code/
               

@@ -36,14 +36,20 @@ gh workflow run build-and-release.yml -f branch=main -f create_release=true
 gh run watch <run-id>   # ~15–25 min: two pristine sysbuild builds in Docker
 ```
 
-The workflow builds **debug and release** variants pristine, uploads a
-`halo-firmware-<ver>` artifact, and publishes pre-release `vX.Y.Z-<run#>` with:
-`halo-firmware-X.Y.Z-{release,debug}.signed.bin` (OTA payloads),
-`halo-bootloader-X.Y.Z-{release,debug}.bin` (wired factory flashing only),
-and `VERSION.txt`. Known quirk: `VERSION.txt`'s `Commit:` field records the
-**dispatch ref's** SHA (main at dispatch time), not the commit actually built
-from the `branch` input — trust the `Version:` line and the input branch, not
-that field.
+The workflow builds the app **debug and release** variants pristine, plus the
+factory test firmware (`tests/halo`), uploads a `halo-firmware-<ver>`
+artifact, and publishes pre-release `vX.Y.Z-<run#>` with:
+
+- `halo-firmware-X.Y.Z-{release,debug}.signed.bin` — OTA payloads
+- `halo-bootloader-X.Y.Z.bin` — MCUboot (one file: RELEASE doesn't touch
+  MCUboot's config, and the workflow fails if the two builds ever differ)
+- `halo-factory-test-X.Y.Z.{bin,elf,map}` — factory test firmware: a raw
+  Zephyr image at 0x80000000, no MCUboot, not signed; written by the Alif SE
+  tools for PCBA test
+- `VERSION.txt` (its `Commit:` is the commit actually built) and `SHA256SUMS`
+
+The bootloader and factory test images are wired-only (SE-UART), never OTA.
+Production flashing (halo-prod-flash) pins these bytes by SHA-256.
 
 ## 3. Hardware verification — dev kit first, always
 
@@ -79,17 +85,30 @@ have landed, tag the merge commit of the bump PR instead.)
 
 ## 5. Final GitHub release
 
-Rename the two OTA payloads to the short convention — these are the only two
-assets (bootloader bins stay on the pre-release):
+Rename the two OTA payloads to the short convention, carry the factory
+images over under their CI names, and regenerate `SHA256SUMS` for the final
+file names (the bytes, and so the hashes, match the pre-release's):
 
 - `halo-firmware-X.Y.Z-release.signed.bin` → `X.Y.Z.bin`
 - `halo-firmware-X.Y.Z-debug.signed.bin` → `X.Y.Z-debug.bin`
+- `halo-bootloader-X.Y.Z.bin` (unchanged name)
+- `halo-factory-test-X.Y.Z.bin` (unchanged name; its `.elf`/`.map` stay on
+  the pre-release)
+
+```
+gh release download vX.Y.Z-<run#> -D <dir> -p '*.signed.bin' -p 'halo-bootloader-*' -p 'halo-factory-test-*.bin' -p SHA256SUMS
+(cd <dir> && shasum -a 256 -c SHA256SUMS --ignore-missing)   # verify before renaming
+mv <dir>/halo-firmware-X.Y.Z-release.signed.bin <dir>/X.Y.Z.bin
+mv <dir>/halo-firmware-X.Y.Z-debug.signed.bin <dir>/X.Y.Z-debug.bin
+(cd <dir> && shasum -a 256 X.Y.Z.bin X.Y.Z-debug.bin halo-bootloader-X.Y.Z.bin halo-factory-test-X.Y.Z.bin > SHA256SUMS)
+```
 
 Body = hand-written summary + generated PR list. Write the body to a file
 (never inline heredocs with backticks):
 
 ```
 gh release create X.Y.Z <dir>/X.Y.Z.bin <dir>/X.Y.Z-debug.bin \
+  <dir>/halo-bootloader-X.Y.Z.bin <dir>/halo-factory-test-X.Y.Z.bin <dir>/SHA256SUMS \
   --title "Release X.Y.Z" --notes-file <file> --generate-notes --latest
 ```
 
