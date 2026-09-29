@@ -152,7 +152,7 @@ jobs:
               echo \"Version: \${VERSION}\" >> release_artifacts/VERSION.txt
               echo \"Branch: ${{ inputs.branch }}\" >> release_artifacts/VERSION.txt
               echo \"Commit: \${COMMIT}\" >> release_artifacts/VERSION.txt
-              echo \"Build Date: \$(date -u +\\\"%Y-%m-%d %H:%M:%S UTC\\\")\" >> release_artifacts/VERSION.txt
+              echo \"Build Date: \$(date -u '+%Y-%m-%d %H:%M:%S UTC')\" >> release_artifacts/VERSION.txt
               echo \"Build Image: \${CI_IMAGE}\" >> release_artifacts/VERSION.txt
               echo \"Toolchain: \${TOOLCHAIN}\" >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
