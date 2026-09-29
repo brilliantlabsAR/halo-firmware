@@ -11,6 +11,23 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Changed
+
+- Releases now also carry the MCUboot bootloader
+  (`halo-bootloader-X.Y.Z.bin`), the factory test firmware
+  (`halo-factory-test-X.Y.Z.bin`, a raw image for wired flashing) and a
+  `SHA256SUMS` file. Debug and release builds share one bootloader, so the
+  `-debug`/`-release` bootloader pair is replaced by a single file.
+  `VERSION.txt` and the pre-release notes now record the commit actually
+  built instead of the workflow's dispatch ref, plus the digest of the CI
+  build image and the compiler version, so a release can be rebuilt
+  byte-for-byte.
+
+### Fixed
+
+- The factory test firmware (`tests/halo`) builds again against the
+  current board definition. PR CI now builds it too.
+
 ## [0.8.12] - 2026-09-22
 
 ### Changed

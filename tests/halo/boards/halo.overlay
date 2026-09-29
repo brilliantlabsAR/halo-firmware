@@ -48,7 +48,6 @@
 &pag7982{
 	status = "okay";
 	frame-rate = <1>;
-	boot-on;
 };
 
 &lpcam {
@@ -56,5 +55,10 @@
 };
 
 &i2s0 {
+	status = "okay";
+};
+
+/* The display (vga020) takes its rails from this PMIC; the board leaves it disabled. */
+&tps65132 {
 	status = "okay";
 };
