@@ -11,6 +11,12 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- `VERSION.txt` on releases records the build date again. The date format's
+  quotes were escaped wrongly inside the CI container script, so `date`
+  failed and the field was left empty.
+
 ## [0.8.13] - 2026-09-29
 
 ### Added
