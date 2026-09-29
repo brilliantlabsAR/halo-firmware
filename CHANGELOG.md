@@ -11,6 +11,14 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-09-29
+
+### Added
+
+- `tools/dfu_flash.py` flashes an app image to a device sitting in the
+  bootloader's BLE DFU mode, for recovering a unit whose app won't boot.
+  `FLASHING.md` documents the recovery flow (#39).
+
 ### Changed
 
 - Releases now also carry the MCUboot bootloader
@@ -21,12 +29,24 @@ release pages and tags are not publicly reachable.
   `VERSION.txt` and the pre-release notes now record the commit actually
   built instead of the workflow's dispatch ref, plus the digest of the CI
   build image and the compiler version, so a release can be rebuilt
-  byte-for-byte.
+  byte-for-byte (#41).
+- `libmpix` is pinned in `west.yml` by commit SHA rather than by its
+  `v1.2.0` tag, like every other project (#42). Builds are unchanged.
 
 ### Fixed
 
+- Ship mode (the level-3 long press) now checks that the shutdown device is
+  ready before formatting the filesystem, checks the format's result,
+  invalidates the in-RAM BLE bond table straight after the wipe, and reboots
+  if the PMIC shutdown returns (#38). Before, a failure after the format left
+  the device running with `/lfs` erased and a stale bond table.
 - The factory test firmware (`tests/halo`) builds again against the
-  current board definition. PR CI now builds it too.
+  current board definition. PR CI now builds it too (#41).
+
+### Documentation
+
+- `FLASHING.md` notes that a host's stale GATT cache can make working
+  firmware look dead (#39).
 
 ## [0.8.12] - 2026-09-22
 
