@@ -9,9 +9,25 @@ The whole process, in order. Versions are `MAJOR.MINOR.PATCH` with **no `v`
 prefix** on the final tag/release (e.g. `0.8.8`). The `vX.Y.Z-<run>` tags are
 CI **pre-releases** only — a separate namespace, left in place afterwards.
 
+## 0. Find the halo-firmware remote
+
+Remote names differ between checkouts. Some have `origin` pointing at the
+older frame-2-firmware repo and halo-firmware under another name. Resolve the
+remote from its URL, and pass `-R` to every `gh` command. Without `-R`, `gh`
+picks a repo from the remotes and can target the wrong one.
+
+```
+REMOTE=$(git -C alif remote -v | awk '$2 ~ /github\.com[:\/]brilliantlabsAR\/halo-firmware(\.git)?$/ && $3 == "(push)" {print $1; exit}')
+echo "${REMOTE:?no remote for brilliantlabsAR/halo-firmware}"
+git -C alif fetch "$REMOTE"
+```
+
+`$REMOTE` below means that remote. `gh` commands use
+`-R brilliantlabsAR/halo-firmware`.
+
 ## 1. Version bump PR (with changelog)
 
-On a fresh branch off `origin/main` (kebab-case, e.g. `chore-version-bump-0-8-9`):
+On a fresh branch off `$REMOTE/main` (kebab-case, e.g. `chore-version-bump-0-8-9`):
 
 - `applications/halo/VERSION`: bump `PATCHLEVEL` (or MINOR). `EXTRAVERSION`
   must stay **empty** — if the working tree shows `EXTRAVERSION = debug`,
@@ -22,7 +38,7 @@ On a fresh branch off `origin/main` (kebab-case, e.g. `chore-version-bump-0-8-9`
   empty. Version headings are plain text, not links — releases up to 0.8.8
   live in the private archive, so there are no reference links to maintain.
   List every PR merged since the last tag:
-  `git log --oneline <last-tag>..origin/main`.
+  `git log --oneline <last-tag>..$REMOTE/main`.
 - Commit as `Version Bump X.Y.Z`, open the PR, merge it as a **merge commit**
   (repo convention — never squash, or built SHAs stop being ancestors of main).
 
@@ -32,8 +48,8 @@ the code does; no device-fault narratives, no private device names.
 ## 2. CI build + pre-release
 
 ```
-gh workflow run build-and-release.yml -f branch=main -f create_release=true
-gh run watch <run-id>   # ~15–25 min: two pristine sysbuild builds in Docker
+gh workflow run build-and-release.yml -R brilliantlabsAR/halo-firmware -f branch=main -f create_release=true
+gh run watch <run-id> -R brilliantlabsAR/halo-firmware   # ~15–25 min: two pristine sysbuild builds in Docker
 ```
 
 The workflow builds the app **debug and release** variants pristine, plus the
@@ -60,7 +76,7 @@ Download the pre-release assets and OTA-flash the **release** image to the
 dev kit with the `flash` skill (never a production unit first):
 
 ```
-gh release download vX.Y.Z-<run#> -p '*release.signed.bin' -D <dir>
+gh release download vX.Y.Z-<run#> -R brilliantlabsAR/halo-firmware -p '*release.signed.bin' -D <dir>
 ```
 
 Then run `tools/verify.py --name "<device>"` — it must print `fw X.Y.Z` and
@@ -80,10 +96,10 @@ survive OTA).
 Lightweight tag named exactly `X.Y.Z` on the **bump commit's merge on main**:
 
 ```
-git -C alif fetch origin && git -C alif tag X.Y.Z origin/main && git -C alif push origin X.Y.Z
+git -C alif fetch "$REMOTE" && git -C alif tag X.Y.Z "$REMOTE/main" && git -C alif push "$REMOTE" X.Y.Z
 ```
 
-(Confirm `origin/main` HEAD is the bump PR's merge commit first; if later PRs
+(Confirm `$REMOTE/main` HEAD is the bump PR's merge commit first; if later PRs
 have landed, tag the merge commit of the bump PR instead.)
 
 ## 5. Final GitHub release
@@ -99,7 +115,7 @@ file names (the bytes, and so the hashes, match the pre-release's):
   the pre-release)
 
 ```
-gh release download vX.Y.Z-<run#> -D <dir> -p '*.signed.bin' -p 'halo-bootloader-*' -p 'halo-factory-test-*.bin' -p SHA256SUMS
+gh release download vX.Y.Z-<run#> -R brilliantlabsAR/halo-firmware -D <dir> -p '*.signed.bin' -p 'halo-bootloader-*' -p 'halo-factory-test-*.bin' -p SHA256SUMS
 (cd <dir> && shasum -a 256 -c SHA256SUMS --ignore-missing)   # verify before renaming
 mv <dir>/halo-firmware-X.Y.Z-release.signed.bin <dir>/X.Y.Z.bin
 mv <dir>/halo-firmware-X.Y.Z-debug.signed.bin <dir>/X.Y.Z-debug.bin
@@ -110,7 +126,7 @@ Body = hand-written summary + generated PR list. Write the body to a file
 (never inline heredocs with backticks):
 
 ```
-gh release create X.Y.Z <dir>/X.Y.Z.bin <dir>/X.Y.Z-debug.bin \
+gh release create X.Y.Z -R brilliantlabsAR/halo-firmware <dir>/X.Y.Z.bin <dir>/X.Y.Z-debug.bin \
   <dir>/halo-bootloader-X.Y.Z.bin <dir>/halo-factory-test-X.Y.Z.bin <dir>/SHA256SUMS \
   --title "Release X.Y.Z" --notes-file <file> --generate-notes --latest
 ```
