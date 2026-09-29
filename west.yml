@@ -114,7 +114,8 @@ manifest:
     - name: libmpix
       path: modules/lib/libmpix
       url: https://github.com/libmpix/libmpix
-      revision: v1.2.0
+      # v1.2.0, pinned by SHA like every other project: tags can be moved.
+      revision: b5c2f102633aa905989e78ae83eba4c7cde599e7
 
   self:
     path: alif
