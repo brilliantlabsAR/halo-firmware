@@ -46,7 +46,10 @@ artifact, and publishes pre-release `vX.Y.Z-<run#>` with:
 - `halo-factory-test-X.Y.Z.{bin,elf,map}` — factory test firmware: a raw
   Zephyr image at 0x80000000, no MCUboot, not signed; written by the Alif SE
   tools for PCBA test
-- `VERSION.txt` (its `Commit:` is the commit actually built) and `SHA256SUMS`
+- `VERSION.txt` and `SHA256SUMS`. `VERSION.txt` records the commit actually built,
+  the CI image digest (`Build Image:`) and the compiler version (`Toolchain:`).
+  A release is reproducible byte-for-byte by building that commit in that
+  image digest. `:latest` moves whenever `west.yml` or `Dockerfile.ci` changes.
 
 The bootloader and factory test images are wired-only (SE-UART), never OTA.
 Production flashing (halo-prod-flash) pins these bytes by SHA-256.

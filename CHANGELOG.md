@@ -19,7 +19,9 @@ release pages and tags are not publicly reachable.
   `SHA256SUMS` file. Debug and release builds share one bootloader, so the
   `-debug`/`-release` bootloader pair is replaced by a single file.
   `VERSION.txt` and the pre-release notes now record the commit actually
-  built instead of the workflow's dispatch ref.
+  built instead of the workflow's dispatch ref, plus the digest of the CI
+  build image and the compiler version, so a release can be rebuilt
+  byte-for-byte.
 
 ### Fixed
 

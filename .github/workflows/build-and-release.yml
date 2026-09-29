@@ -46,11 +46,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # :latest is rebuilt whenever west.yml or Dockerfile.ci changes, so
+      # resolve it to a digest, build with exactly that image and record it:
+      # rerunning that digest is what reproduces a release byte-for-byte.
+      - name: Resolve CI image digest
+        id: image
+        run: |
+          docker pull ghcr.io/brilliantlabsar/halo-firmware-ci:latest
+          echo "ref=$(docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/brilliantlabsar/halo-firmware-ci:latest)" >> $GITHUB_OUTPUT
+
       - name: Build firmware inside Docker container
         run: |
           docker run --rm -v ${{ github.workspace }}/latest-code:/host_code \
             -e GH_TOKEN=${{ secrets.PRIVATE_REPO_TOKEN }} \
-            ghcr.io/brilliantlabsar/halo-firmware-ci:latest \
+            -e CI_IMAGE=${{ steps.image.outputs.ref }} \
+            ${{ steps.image.outputs.ref }} \
             /bin/bash -c "
               set -e  # Ensure script fails if west build fails
 
@@ -134,6 +144,8 @@ jobs:
 
               # github.sha is the dispatch ref, not necessarily the built branch
               COMMIT=\$(git rev-parse HEAD)
+              CC=\$(sed -n 's/^CMAKE_C_COMPILER:[A-Z]*=//p' build-factory-test/CMakeCache.txt)
+              TOOLCHAIN=\$(\"\$CC\" --version | head -n 1)
 
               echo 'Halo Firmware Build Information' > release_artifacts/VERSION.txt
               echo '================================' >> release_artifacts/VERSION.txt
@@ -141,6 +153,8 @@ jobs:
               echo \"Branch: ${{ inputs.branch }}\" >> release_artifacts/VERSION.txt
               echo \"Commit: \${COMMIT}\" >> release_artifacts/VERSION.txt
               echo \"Build Date: \$(date -u +\\\"%Y-%m-%d %H:%M:%S UTC\\\")\" >> release_artifacts/VERSION.txt
+              echo \"Build Image: \${CI_IMAGE}\" >> release_artifacts/VERSION.txt
+              echo \"Toolchain: \${TOOLCHAIN}\" >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
               echo 'Files:' >> release_artifacts/VERSION.txt
               echo \"- halo-firmware-\${VERSION}-release.signed.bin (Production Application)\" >> release_artifacts/VERSION.txt
@@ -195,6 +209,7 @@ jobs:
             - Version: `${{ steps.version.outputs.version }}`
             - Branch: `${{ inputs.branch }}`
             - Commit: `${{ steps.version.outputs.commit }}`
+            - Build image: `${{ steps.image.outputs.ref }}`
 
             **Files:**
             - `halo-firmware-${{ steps.version.outputs.version }}-release.signed.bin` - Production firmware (signed)
