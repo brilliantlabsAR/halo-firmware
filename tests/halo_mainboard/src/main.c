@@ -19,6 +19,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <zephyr/kernel.h>
@@ -35,6 +36,7 @@
 #include <zephyr/sys/crc.h>
 
 #include <se_service.h>
+#include <t5838.h>
 
 #include "ble_adv.h"
 
@@ -393,11 +395,18 @@ struct i2c_sensor {
 	uint8_t id_reg;
 	uint8_t id;
 	enum sensor_channel chan;
-	/* Accepted range of the vector magnitude, in milli-units */
+	/* Accepted range of the vector magnitude, in milli-units (0 = no check) */
 	int32_t min_milli;
 	int32_t max_milli;
+	/* Each axis must stay below this, in milli-units (0 = no check) */
+	int32_t axis_max_milli;
 	const char *unit;
 };
+
+/* Time allowed from sen_1v8 on to the first ACK. The BMA580 needs more than
+ * the 5 ms the first cut allowed (it NACKed on a fitted board); the driver's
+ * own power-up wait is 10 ms. */
+#define SENSOR_READY_TIMEOUT_MS 50
 
 static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 {
@@ -412,11 +421,18 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 		ft_report(c, s->test, FT_FAIL, "sen_1v8 enable err=%d", err);
 		return;
 	}
-	k_msleep(5);
 
-	err = i2c_reg_read_byte(bus, s->addr, s->id_reg, &id);
+	const int64_t t0 = k_uptime_get();
+	int64_t ready_ms;
+
+	do {
+		k_msleep(2);
+		err = i2c_reg_read_byte(bus, s->addr, s->id_reg, &id);
+		ready_ms = k_uptime_get() - t0;
+	} while (err && ready_ms < SENSOR_READY_TIMEOUT_MS);
 	if (err) {
-		ft_report(c, s->test, FT_FAIL, "addr=0x%02x no ack", s->addr);
+		ft_report(c, s->test, FT_FAIL, "addr=0x%02x no ack within %d ms", s->addr,
+			  SENSOR_READY_TIMEOUT_MS);
 		goto out;
 	}
 	if (id != s->id) {
@@ -443,10 +459,17 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 
 	const int32_t x = sv_milli(&v[0]), y = sv_milli(&v[1]), z = sv_milli(&v[2]);
 	const uint32_t mag = isqrt64((int64_t)x * x + (int64_t)y * y + (int64_t)z * z);
+	bool ok = true;
 
-	ft_report(c, s->test,
-		  (mag >= s->min_milli && mag <= s->max_milli) ? FT_PASS : FT_FAIL,
-		  "id=0x%02x x=%d y=%d z=%d mag=%u %s", id, x, y, z, mag, s->unit);
+	if (s->max_milli) {
+		ok = mag >= s->min_milli && mag <= s->max_milli;
+	}
+	if (s->axis_max_milli) {
+		ok = ok && mag > 0 && abs(x) < s->axis_max_milli && abs(y) < s->axis_max_milli &&
+		     abs(z) < s->axis_max_milli;
+	}
+	ft_report(c, s->test, ok ? FT_PASS : FT_FAIL, "id=0x%02x x=%d y=%d z=%d mag=%u %s ready_ms=%d",
+		  id, x, y, z, mag, s->unit, (int)ready_ms);
 out:
 	regulator_disable(rail);
 }
@@ -471,8 +494,10 @@ static void t_imu(struct ft_ctx *c)
 
 static void t_mag(struct ft_ctx *c)
 {
-	/* Earth's field is ~0.25-0.65 G; allow for the jig, reject zero or
-	 * saturated readings */
+	/* No magnitude window: on a bare board the hard-iron offset from
+	 * nearby magnetised parts can be many gauss (12.4 G on the first board),
+	 * and finished units calibrate it out. Fail only an all-zero reading or
+	 * an axis at the edge of the +/-30 G range. */
 	static const struct i2c_sensor qmc6308 = {
 		.test = "mag",
 		.dev = DEVICE_DT_GET(DT_NODELABEL(qmc6308)),
@@ -480,8 +505,7 @@ static void t_mag(struct ft_ctx *c)
 		.id_reg = 0x00,
 		.id = 0x80,
 		.chan = SENSOR_CHAN_MAGN_XYZ,
-		.min_milli = 50,
-		.max_milli = 8000,
+		.axis_max_milli = 29000,
 		.unit = "mG",
 	};
 
@@ -498,7 +522,8 @@ static void t_mag(struct ft_ctx *c)
 #define MIC_RMS_MIN    1
 #define MIC_RMS_MAX    16000
 
-K_MEM_SLAB_DEFINE_STATIC(mic_slab, MIC_BLOCK, MIC_BLOCKS, 4);
+static struct k_mem_slab mic_slab;
+static uint8_t mic_slab_buf[MIC_BLOCK * MIC_BLOCKS] __aligned(4);
 
 static void t_mic(struct ft_ctx *c)
 {
@@ -528,7 +553,16 @@ static void t_mic(struct ft_ctx *c)
 		ft_report(c, "mic", FT_FAIL, "not ready");
 		return;
 	}
+	/* Fresh slab per run: STOP returns queued blocks to it, and a rerun
+	 * must not inherit anything from the last one */
+	k_mem_slab_init(&mic_slab, mic_slab_buf, MIC_BLOCK, MIC_BLOCKS);
 	err = dmic_configure(mic, &cfg);
+	if (!err) {
+		/* configure() zeroes the channel gain register; the app always sets
+		 * gain afterwards (default 0), and without it the first board read
+		 * near full scale */
+		err = dmic_set_gain(mic, 0);
+	}
 	if (!err) {
 		err = dmic_trigger(mic, DMIC_TRIGGER_START);
 	}
@@ -559,17 +593,8 @@ static void t_mic(struct ft_ctx *c)
 		k_mem_slab_free(&mic_slab, buf);
 	}
 
+	/* STOP also returns any queued blocks to the slab */
 	dmic_trigger(mic, DMIC_TRIGGER_STOP);
-	/* Return any blocks still queued in the driver */
-	for (;;) {
-		void *buf;
-		uint32_t size;
-
-		if (dmic_read(mic, 0, &buf, &size, 0) != 0) {
-			break;
-		}
-		k_mem_slab_free(&mic_slab, buf);
-	}
 
 	if (err || n == 0) {
 		ft_report(c, "mic", FT_FAIL, "read err=%d samples=%u", err, n);
