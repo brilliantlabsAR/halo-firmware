@@ -17,6 +17,7 @@
  * FT DONE so the station can scan for it (see README.md).
  */
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +57,7 @@ struct ft_ctx {
 static void ft_report(struct ft_ctx *c, const char *test, enum ft_result r, const char *fmt, ...)
 {
 	static const char *const words[] = {"PASS", "FAIL", "SKIP"};
-	char detail[160];
+	char detail[256];
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -448,6 +449,7 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 	const struct device *bus = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 	const struct device *rail = DEVICE_DT_GET(DT_NODELABEL(sen_1v8));
 	struct sensor_value v[3];
+	bool resumed = false;
 	uint8_t id = 0;
 	int err;
 
@@ -482,6 +484,8 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 		ft_report(c, s->test, FT_FAIL, "id=0x%02x resume err=%d", id, err);
 		goto out;
 	}
+	/* Stays resumed through the stuck check; suspended once, at out: */
+	resumed = true;
 	const int64_t s0 = k_uptime_get();
 
 	do {
@@ -495,7 +499,6 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 		}
 		k_msleep(2);
 	} while (k_uptime_get() - s0 < SENSOR_SAMPLE_TIMEOUT_MS);
-	pm_device_action_run(s->dev, PM_DEVICE_ACTION_SUSPEND);
 	if (err) {
 		ft_report(c, s->test, FT_FAIL, "id=0x%02x sample err=%d", id, err);
 		goto out;
@@ -507,6 +510,30 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 	    z == s->no_data_milli) {
 		ft_report(c, s->test, FT_FAIL, "id=0x%02x no data within %d ms ready_ms=%d", id,
 			  SENSOR_SAMPLE_TIMEOUT_MS, (int)ready_ms);
+		goto out;
+	}
+
+	/* A live sensor jitters by a few counts between conversions; three
+	 * bit-identical samples mean stuck output. Both parts run at 200 Hz. */
+	bool stuck = true;
+
+	for (int i = 0; i < 2 && stuck && !err; i++) {
+		struct sensor_value w[3];
+
+		k_msleep(6);
+		err = sensor_sample_fetch(s->dev);
+		if (!err) {
+			err = sensor_channel_get(s->dev, s->chan, w);
+		}
+		stuck = !err && memcmp(v, w, sizeof(w)) == 0;
+	}
+	if (err) {
+		ft_report(c, s->test, FT_FAIL, "id=0x%02x repeat sample err=%d", id, err);
+		goto out;
+	}
+	if (stuck) {
+		ft_report(c, s->test, FT_FAIL, "id=0x%02x stuck x=%d y=%d z=%d (3 identical samples)",
+			  id, x, y, z);
 		goto out;
 	}
 
@@ -523,6 +550,9 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 	ft_report(c, s->test, ok ? FT_PASS : FT_FAIL, "id=0x%02x x=%d y=%d z=%d mag=%u %s ready_ms=%d",
 		  id, x, y, z, mag, s->unit, (int)ready_ms);
 out:
+	if (resumed) {
+		pm_device_action_run(s->dev, PM_DEVICE_ACTION_SUSPEND);
+	}
 	regulator_disable(rail);
 }
 
@@ -568,22 +598,106 @@ static void t_mag(struct ft_ctx *c)
 
 /* ---- Microphone ------------------------------------------------------------- */
 
+/*
+ * Two mics share the PDM bus, one per clock edge: channel 2 (the app's mono
+ * channel) and channel 3. Only one of them is on the main board; the other is
+ * on the secondary board, which is not fitted at this stage, and nothing in
+ * the DTS or app says which is which. So both channels are captured and
+ * reported, and neither fails the test until hardware runs show which one
+ * responds (`main=` then names it).
+ *
+ * Per channel:
+ *   rms   AC rms of the raw samples
+ *   lp    AC rms after a 4-tap moving average (~1.8 kHz corner)
+ *   tone  share of the AC power, per mille, in 900-1150 Hz (Goertzel over
+ *         every bin in the band). White noise gives ~30; a loud 1 kHz tone
+ *         at the mic gives most of it. The band tolerates the PDM sample
+ *         rate differing from nominal by a few percent.
+ *   min, max
+ */
 #define MIC_RATE       16000
-#define MIC_BLOCK      (MIC_RATE / 10 * 2) /* 100 ms of 16-bit mono */
+#define MIC_CHANNELS   2
+#define MIC_BLOCK      (MIC_RATE / 10 * 2 * MIC_CHANNELS) /* 100 ms, 16-bit */
 #define MIC_BLOCKS     4
 #define MIC_SETTLE     2 /* blocks discarded while the PDM filter settles */
 #define MIC_MEASURE    3
-/* From board 10-58-AB at gain 0: quiet rms 99-144, speech 123-206. The
- * test catches a dead, stuck or floating mic, not a weak one. */
+#define MIC_FRAMES     (MIC_RATE / 10 * MIC_MEASURE) /* samples per channel */
+#define MIC_BAND_LO_HZ 900
+#define MIC_BAND_HI_HZ 1150
+#define MIC_BIN_LO     (MIC_BAND_LO_HZ * MIC_FRAMES / MIC_RATE)
+#define MIC_BIN_HI     (MIC_BAND_HI_HZ * MIC_FRAMES / MIC_RATE)
+#define MIC_BINS       (MIC_BIN_HI - MIC_BIN_LO + 1)
+#define MIC_LP_TAPS    4
+/* Limits for when the main-board channel is known: from board 10-58-AB at
+ * gain 0, quiet rms ~100-290 */
 #define MIC_RMS_MIN    20
 #define MIC_RMS_MAX    4000
-/* lp_rms: rms after a 4-sample moving average (~1.8 kHz corner), which
- * keeps speech but drops most of the PDM modulator's shaped high-frequency
- * noise. Reported for data only, to see whether it separates better. */
-#define MIC_LP_TAPS    4
 
 static struct k_mem_slab mic_slab;
 static uint8_t mic_slab_buf[MIC_BLOCK * MIC_BLOCKS] __aligned(4);
+
+struct mic_stats {
+	int64_t sum;
+	uint64_t sumsq;
+	uint64_t lp_sumsq;
+	uint32_t lp_n;
+	int32_t box;
+	int16_t hist[MIC_LP_TAPS];
+	int16_t lo;
+	int16_t hi;
+	float s1[MIC_BINS];
+	float s2[MIC_BINS];
+};
+
+static struct mic_stats mic_st[MIC_CHANNELS];
+static float mic_coeff[MIC_BINS];
+
+static void mic_accumulate(struct mic_stats *m, int16_t x, uint32_t i)
+{
+	m->sum += x;
+	m->sumsq += (int32_t)x * x;
+	m->lo = MIN(m->lo, x);
+	m->hi = MAX(m->hi, x);
+
+	m->box += x - m->hist[i % MIC_LP_TAPS];
+	m->hist[i % MIC_LP_TAPS] = x;
+	if (i + 1 >= MIC_LP_TAPS) {
+		const int32_t lp = m->box / MIC_LP_TAPS;
+
+		m->lp_sumsq += (int64_t)lp * lp;
+		m->lp_n++;
+	}
+
+	for (int k = 0; k < MIC_BINS; k++) {
+		const float s0 = (float)x + mic_coeff[k] * m->s1[k] - m->s2[k];
+
+		m->s2[k] = m->s1[k];
+		m->s1[k] = s0;
+	}
+}
+
+static void mic_summary(const struct mic_stats *m, uint32_t n, uint32_t *rms, uint32_t *lp,
+			uint32_t *tone)
+{
+	const int64_t dc = m->sum / n;
+	const uint64_t dc2 = (uint64_t)(dc * dc);
+	const uint64_t ms = m->sumsq / n;
+	const uint64_t lp_ms = m->lp_n ? m->lp_sumsq / m->lp_n : 0;
+	const float var = (float)(ms > dc2 ? ms - dc2 : 0);
+	float p_band = 0.0f;
+
+	/* Parseval: a component in bin k contributes 2*|X(k)|^2 / n^2 of power */
+	for (int k = 0; k < MIC_BINS; k++) {
+		const float x2 = m->s1[k] * m->s1[k] + m->s2[k] * m->s2[k] -
+				 mic_coeff[k] * m->s1[k] * m->s2[k];
+
+		p_band += 2.0f * x2 / ((float)n * (float)n);
+	}
+
+	*rms = isqrt64((uint64_t)var);
+	*lp = isqrt64(lp_ms > dc2 ? lp_ms - dc2 : 0);
+	*tone = var > 0.0f ? (uint32_t)MIN(1000.0f, 1000.0f * p_band / var) : 0;
+}
 
 static void t_mic(struct ft_ctx *c)
 {
@@ -597,19 +711,24 @@ static void t_mic(struct ft_ctx *c)
 	struct dmic_cfg cfg = {
 		.channel = {
 			.req_num_streams = 1,
-			.req_num_chan = 1,
-			/* Mono as the app configures it (audio_stream.c) */
-			.req_chan_map_lo = BIT(2),
+			.req_num_chan = MIC_CHANNELS,
+			/* Samples arrive as [ch2, ch3] pairs (t5838_alif_pdm.c) */
+			.req_chan_map_lo = BIT(2) | BIT(3),
 		},
 		.streams = &stream,
 	};
-	int64_t sum = 0;
-	uint64_t sumsq = 0;
-	uint64_t lp_sumsq = 0;
-	uint32_t lp_n = 0;
-	int16_t lo = INT16_MAX, hi = INT16_MIN;
-	uint32_t n = 0;
+	uint32_t n = 0; /* samples per channel */
 	int err;
+
+	memset(mic_st, 0, sizeof(mic_st));
+	for (int ch = 0; ch < MIC_CHANNELS; ch++) {
+		mic_st[ch].lo = INT16_MAX;
+		mic_st[ch].hi = INT16_MIN;
+	}
+	for (int k = 0; k < MIC_BINS; k++) {
+		mic_coeff[k] = 2.0f * cosf(2.0f * 3.14159265f * (float)(MIC_BIN_LO + k) /
+					   (float)MIC_FRAMES);
+	}
 
 	if (!device_is_ready(mic)) {
 		ft_report(c, "mic", FT_FAIL, "not ready");
@@ -620,9 +739,8 @@ static void t_mic(struct ft_ctx *c)
 	k_mem_slab_init(&mic_slab, mic_slab_buf, MIC_BLOCK, MIC_BLOCKS);
 	err = dmic_configure(mic, &cfg);
 	if (!err) {
-		/* configure() zeroes the channel gain register; the app always sets
-		 * gain afterwards (default 0), and without it the first board read
-		 * near full scale */
+		/* configure() zeroes the channel gain registers; the app always
+		 * sets gain afterwards (default 0) */
 		err = dmic_set_gain(mic, 0);
 	}
 	if (!err) {
@@ -642,27 +760,16 @@ static void t_mic(struct ft_ctx *c)
 			break;
 		}
 		if (b >= MIC_SETTLE) {
-			const int16_t *s = buf;
+			const int16_t *smp = buf;
+			const uint32_t frames = size / (2 * MIC_CHANNELS);
 
-			int32_t box = 0;
-
-			for (uint32_t i = 0; i < size / 2; i++) {
-				sum += s[i];
-				sumsq += (int32_t)s[i] * s[i];
-				lo = MIN(lo, s[i]);
-				hi = MAX(hi, s[i]);
-				box += s[i];
-				if (i >= MIC_LP_TAPS) {
-					box -= s[i - MIC_LP_TAPS];
-				}
-				if (i + 1 >= MIC_LP_TAPS) {
-					const int32_t lp = box / MIC_LP_TAPS;
-
-					lp_sumsq += (int64_t)lp * lp;
-					lp_n++;
+			for (uint32_t i = 0; i < frames && n + i < MIC_FRAMES; i++) {
+				for (int ch = 0; ch < MIC_CHANNELS; ch++) {
+					mic_accumulate(&mic_st[ch], smp[i * MIC_CHANNELS + ch],
+						       n + i);
 				}
 			}
-			n += size / 2;
+			n = MIN(n + frames, MIC_FRAMES);
 		}
 		k_mem_slab_free(&mic_slab, buf);
 	}
@@ -675,18 +782,23 @@ static void t_mic(struct ft_ctx *c)
 		return;
 	}
 
-	/* AC RMS: a missing mic reads a constant (0 or rail), a floating data
-	 * line reads near full-scale noise; a real mic in a quiet room sits in
-	 * between. Limits are provisional until measured on good boards. */
-	const int32_t dc = (int32_t)(sum / n);
-	const uint64_t dc2 = (uint64_t)((int64_t)dc * dc);
-	const uint32_t rms = isqrt64(sumsq / n - dc2);
-	const uint64_t lp_ms = lp_n ? lp_sumsq / lp_n : 0;
-	const uint32_t lp_rms = isqrt64(lp_ms > dc2 ? lp_ms - dc2 : 0);
-	const bool ok = rms >= MIC_RMS_MIN && rms <= MIC_RMS_MAX && lo != hi;
+	uint32_t rms[MIC_CHANNELS], lp[MIC_CHANNELS], tone[MIC_CHANNELS];
+	bool alive[MIC_CHANNELS];
 
-	ft_report(c, "mic", ok ? FT_PASS : FT_FAIL,
-		  "rms=%u lp_rms=%u dc=%d min=%d max=%d samples=%u", rms, lp_rms, dc, lo, hi, n);
+	for (int ch = 0; ch < MIC_CHANNELS; ch++) {
+		mic_summary(&mic_st[ch], n, &rms[ch], &lp[ch], &tone[ch]);
+		alive[ch] = rms[ch] >= MIC_RMS_MIN && rms[ch] <= MIC_RMS_MAX &&
+			    mic_st[ch].lo != mic_st[ch].hi;
+	}
+
+	/* Which channel is the main-board mic is not known yet: report both,
+	 * fail on neither (only a capture error fails). */
+	ft_report(c, "mic", FT_PASS,
+		  "ch2_rms=%u ch2_lp=%u ch2_tone=%u ch2_min=%d ch2_max=%d ch2_alive=%d "
+		  "ch3_rms=%u ch3_lp=%u ch3_tone=%u ch3_min=%d ch3_max=%d ch3_alive=%d "
+		  "main=unknown",
+		  rms[0], lp[0], tone[0], mic_st[0].lo, mic_st[0].hi, alive[0], rms[1], lp[1],
+		  tone[1], mic_st[1].lo, mic_st[1].hi, alive[1]);
 }
 
 /* ---- Display/camera flex parts on I2C1 ---------------------------------------- */
