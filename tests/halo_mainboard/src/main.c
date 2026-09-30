@@ -428,8 +428,15 @@ struct i2c_sensor {
 	int32_t max_milli;
 	/* Each axis must stay below this, in milli-units (0 = no check) */
 	int32_t axis_max_milli;
+	/* Milli-unit value every axis reads before the first conversion (the
+	 * chip's 0x8000 "no data" code), or 0 if the part has none */
+	int32_t no_data_milli;
 	const char *unit;
 };
+
+/* After resume the first conversion takes up to one ODR period plus the
+ * mode switch; poll for it rather than read the reset value */
+#define SENSOR_SAMPLE_TIMEOUT_MS 100
 
 /* Time allowed from sen_1v8 on to the first ACK. The BMA580 needs more than
  * the 5 ms the first cut allowed (it NACKed on a fitted board); the driver's
@@ -475,10 +482,19 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 		ft_report(c, s->test, FT_FAIL, "id=0x%02x resume err=%d", id, err);
 		goto out;
 	}
-	err = sensor_sample_fetch(s->dev);
-	if (!err) {
-		err = sensor_channel_get(s->dev, s->chan, v);
-	}
+	const int64_t s0 = k_uptime_get();
+
+	do {
+		err = sensor_sample_fetch(s->dev);
+		if (!err) {
+			err = sensor_channel_get(s->dev, s->chan, v);
+		}
+		if (err || !s->no_data_milli || sv_milli(&v[0]) != s->no_data_milli ||
+		    sv_milli(&v[1]) != s->no_data_milli || sv_milli(&v[2]) != s->no_data_milli) {
+			break;
+		}
+		k_msleep(2);
+	} while (k_uptime_get() - s0 < SENSOR_SAMPLE_TIMEOUT_MS);
 	pm_device_action_run(s->dev, PM_DEVICE_ACTION_SUSPEND);
 	if (err) {
 		ft_report(c, s->test, FT_FAIL, "id=0x%02x sample err=%d", id, err);
@@ -486,6 +502,14 @@ static void t_i2c_sensor(struct ft_ctx *c, const struct i2c_sensor *s)
 	}
 
 	const int32_t x = sv_milli(&v[0]), y = sv_milli(&v[1]), z = sv_milli(&v[2]);
+
+	if (s->no_data_milli && x == s->no_data_milli && y == s->no_data_milli &&
+	    z == s->no_data_milli) {
+		ft_report(c, s->test, FT_FAIL, "id=0x%02x no data within %d ms ready_ms=%d", id,
+			  SENSOR_SAMPLE_TIMEOUT_MS, (int)ready_ms);
+		goto out;
+	}
+
 	const uint32_t mag = isqrt64((int64_t)x * x + (int64_t)y * y + (int64_t)z * z);
 	bool ok = true;
 
@@ -504,7 +528,8 @@ out:
 
 static void t_imu(struct ft_ctx *c)
 {
-	/* At rest the accelerometer sees 1 g in whatever orientation */
+	/* At rest the accelerometer sees 1 g in whatever orientation. This
+	 * driver reports g (not m/s^2), at the +/-2 g range from the DTS. */
 	static const struct i2c_sensor bma580 = {
 		.test = "imu",
 		.dev = DEVICE_DT_GET(DT_NODELABEL(bma580)),
@@ -512,9 +537,10 @@ static void t_imu(struct ft_ctx *c)
 		.id_reg = 0x00,
 		.id = 0xC4,
 		.chan = SENSOR_CHAN_ACCEL_XYZ,
-		.min_milli = 6800,
-		.max_milli = 12800,
-		.unit = "mm/s2",
+		.min_milli = 700,
+		.max_milli = 1300,
+		.no_data_milli = -2000,
+		.unit = "mg",
 	};
 
 	t_i2c_sensor(c, &bma580);
@@ -547,8 +573,14 @@ static void t_mag(struct ft_ctx *c)
 #define MIC_BLOCKS     4
 #define MIC_SETTLE     2 /* blocks discarded while the PDM filter settles */
 #define MIC_MEASURE    3
-#define MIC_RMS_MIN    1
-#define MIC_RMS_MAX    16000
+/* From board 10-58-AB at gain 0: quiet rms 99-144, speech 123-206. The
+ * test catches a dead, stuck or floating mic, not a weak one. */
+#define MIC_RMS_MIN    20
+#define MIC_RMS_MAX    4000
+/* lp_rms: rms after a 4-sample moving average (~1.8 kHz corner), which
+ * keeps speech but drops most of the PDM modulator's shaped high-frequency
+ * noise. Reported for data only, to see whether it separates better. */
+#define MIC_LP_TAPS    4
 
 static struct k_mem_slab mic_slab;
 static uint8_t mic_slab_buf[MIC_BLOCK * MIC_BLOCKS] __aligned(4);
@@ -573,6 +605,8 @@ static void t_mic(struct ft_ctx *c)
 	};
 	int64_t sum = 0;
 	uint64_t sumsq = 0;
+	uint64_t lp_sumsq = 0;
+	uint32_t lp_n = 0;
 	int16_t lo = INT16_MAX, hi = INT16_MIN;
 	uint32_t n = 0;
 	int err;
@@ -610,11 +644,23 @@ static void t_mic(struct ft_ctx *c)
 		if (b >= MIC_SETTLE) {
 			const int16_t *s = buf;
 
+			int32_t box = 0;
+
 			for (uint32_t i = 0; i < size / 2; i++) {
 				sum += s[i];
 				sumsq += (int32_t)s[i] * s[i];
 				lo = MIN(lo, s[i]);
 				hi = MAX(hi, s[i]);
+				box += s[i];
+				if (i >= MIC_LP_TAPS) {
+					box -= s[i - MIC_LP_TAPS];
+				}
+				if (i + 1 >= MIC_LP_TAPS) {
+					const int32_t lp = box / MIC_LP_TAPS;
+
+					lp_sumsq += (int64_t)lp * lp;
+					lp_n++;
+				}
 			}
 			n += size / 2;
 		}
@@ -633,11 +679,14 @@ static void t_mic(struct ft_ctx *c)
 	 * line reads near full-scale noise; a real mic in a quiet room sits in
 	 * between. Limits are provisional until measured on good boards. */
 	const int32_t dc = (int32_t)(sum / n);
-	const uint64_t var = sumsq / n - (uint64_t)((int64_t)dc * dc);
-	const uint32_t rms = isqrt64(var);
+	const uint64_t dc2 = (uint64_t)((int64_t)dc * dc);
+	const uint32_t rms = isqrt64(sumsq / n - dc2);
+	const uint64_t lp_ms = lp_n ? lp_sumsq / lp_n : 0;
+	const uint32_t lp_rms = isqrt64(lp_ms > dc2 ? lp_ms - dc2 : 0);
+	const bool ok = rms >= MIC_RMS_MIN && rms <= MIC_RMS_MAX && lo != hi;
 
-	ft_report(c, "mic", (rms >= MIC_RMS_MIN && rms <= MIC_RMS_MAX) ? FT_PASS : FT_FAIL,
-		  "rms=%u dc=%d min=%d max=%d samples=%u", rms, dc, lo, hi, n);
+	ft_report(c, "mic", ok ? FT_PASS : FT_FAIL,
+		  "rms=%u lp_rms=%u dc=%d min=%d max=%d samples=%u", rms, lp_rms, dc, lo, hi, n);
 }
 
 /* ---- Display/camera flex parts on I2C1 ---------------------------------------- */

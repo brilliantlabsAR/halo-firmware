@@ -46,9 +46,9 @@ FT DONE <passed>/<total> skip=<skipped>
 | `mram_image` | CRC-32 (IEEE, as zlib) over the image as it sits in MRAM; `len` equals the `.bin` size | never. **The station must compare `crc32` with the CRC-32 of the `.bin` it wrote** |
 | `mram_write` | writes, reads back and erases 1 KB at the start of slot1 (free at this stage) | an I/O error or a mismatch |
 | `vbat` | battery ADC voltage, state of charge, charger state pin | voltage outside 3000–4500 mV |
-| `imu` | powers `sen_1v8`, polls the BMA580 chip ID (0xC4 at I2C0 0x18) until it answers, takes one sample; `ready_ms` is the power-up to first-ACK time | no ACK within 50 ms, wrong ID, sample error, or \|a\| outside 6.8–12.8 m/s² |
+| `imu` | powers `sen_1v8`, polls the BMA580 chip ID (0xC4 at I2C0 0x18) until it answers, then waits for the first real sample (the chip reads 0x8000, i.e. −2 g on every axis, until then); units are mg; `ready_ms` is the power-up to first-ACK time | no ACK within 50 ms, wrong ID, sample error, no data within 100 ms, or \|a\| outside 700–1300 mg |
 | `mag` | the same for the QMC6308 (0x80 at I2C0 0x2c) | no ACK within 50 ms, wrong ID, sample error, an all-zero reading, or an axis at 29 G or more (the ±30 G range edge). No magnitude window: a bare board's hard-iron offset can be many gauss |
-| `mic` | 300 ms of PDM audio at gain 0 (the app's default) after 200 ms settle; AC RMS in raw counts | read error, or RMS outside 1–16000 (provisional). A missing mic reads a constant; a floating data line reads near full scale |
+| `mic` | 300 ms of PDM audio at gain 0 (the app's default) after 200 ms settle; AC RMS in raw counts, plus `lp_rms` after a 4-tap moving average (for data only) | read error, min == max (stuck), or RMS outside 20–4000. First board: quiet 99–144, speech 123–206, so it catches a dead, stuck or floating mic but not a weak one |
 | `i2c1` | ACK from the display/camera flex parts: TPS65132 0x3e, PAG7982 0x40, VGA020 0x54 | never. SKIP when none answers, which is expected on a bare board |
 
 The limits marked provisional need measuring on known-good boards before the
