@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-10-01
+
 ### Added
 
 - `tests/halo_mainboard`, a factory test for bare Halo main PCBs at the
@@ -21,13 +23,13 @@ release pages and tags are not publicly reachable.
   advertising, RAM, MRAM, battery sense, the accelerometer, the
   magnetometer, the microphone, and the display/camera connector parts.
   Releases publish it as `halo-mainboard-test-X.Y.Z.bin`, and PR CI
-  builds it.
+  builds it (#45).
 
 ### Fixed
 
 - `VERSION.txt` on releases records the build date again. The date format's
   quotes were escaped wrongly inside the CI container script, so `date`
-  failed and the field was left empty.
+  failed and the field was left empty (#44).
 
 ## [0.8.13] - 2026-09-29
 
