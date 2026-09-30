@@ -28,6 +28,17 @@ LOG_MODULE_REGISTER(mbt_ble, LOG_LEVEL_WRN);
 static K_SEM_DEFINE(step_sem, 0, 1);
 static volatile uint16_t step_status;
 static char adv_name[32];
+static volatile bool adv_running;
+
+/* The stack runs in its own thread; any API call made from another thread
+ * must hold its mutex (alif_ble.h). Callbacks already run under it. */
+#define BLE_CALL(expr)                                                                             \
+	({                                                                                         \
+		alif_ble_mutex_lock(K_FOREVER);                                                    \
+		uint16_t _err = (expr);                                                            \
+		alif_ble_mutex_unlock();                                                           \
+		_err;                                                                              \
+	})
 
 static void step_done(uint16_t status)
 {
@@ -141,12 +152,15 @@ static void on_gapm_done(uint32_t metainfo, uint16_t status)
 
 static void on_adv_stopped(uint32_t metainfo, uint8_t actv_idx, uint16_t reason)
 {
+	adv_running = false;
 }
 
 static void on_adv_proc_cmp(uint32_t metainfo, uint8_t proc_id, uint8_t actv_idx, uint16_t status)
 {
 	if (proc_id == GAPM_ACTV_CREATE_LE_ADV) {
 		adv_idx = actv_idx;
+	} else if (proc_id == GAPM_ACTV_START && status == GAP_ERR_NO_ERROR) {
+		adv_running = true;
 	}
 	step_done(status);
 }
@@ -175,7 +189,7 @@ static int set_adv_data(void)
 	p[1] = GAP_AD_TYPE_COMPLETE_NAME;
 	memcpy(p + 2, adv_name, name_len);
 
-	uint16_t err = gapm_le_set_adv_data(adv_idx, buf);
+	uint16_t err = BLE_CALL(gapm_le_set_adv_data(adv_idx, buf));
 
 	co_buf_release(buf);
 	return err ? -EIO : 0;
@@ -189,7 +203,7 @@ static int set_scan_rsp_data(void)
 		return -ENOMEM;
 	}
 
-	uint16_t err = gapm_le_set_scan_response_data(adv_idx, buf);
+	uint16_t err = BLE_CALL(gapm_le_set_scan_response_data(adv_idx, buf));
 
 	co_buf_release(buf);
 	return err ? -EIO : 0;
@@ -241,7 +255,7 @@ int mbt_ble_adv_start(const char *name, const uint8_t addr[6], k_timeout_t step_
 		return ret;
 	}
 
-	if (gapm_configure(0, &cfg, &gapm_cbs, on_gapm_done) != GAP_ERR_NO_ERROR) {
+	if (BLE_CALL(gapm_configure(0, &cfg, &gapm_cbs, on_gapm_done)) != GAP_ERR_NO_ERROR) {
 		return -EIO;
 	}
 	ret = step_wait(step_timeout, "configure");
@@ -249,7 +263,7 @@ int mbt_ble_adv_start(const char *name, const uint8_t addr[6], k_timeout_t step_
 		return ret;
 	}
 
-	if (gapm_le_create_adv_legacy(0, GAPM_STATIC_ADDR, &create, &adv_cbs) != 0) {
+	if (BLE_CALL(gapm_le_create_adv_legacy(0, GAPM_STATIC_ADDR, &create, &adv_cbs)) != 0) {
 		return -EIO;
 	}
 	ret = step_wait(step_timeout, "create adv");
@@ -273,8 +287,43 @@ int mbt_ble_adv_start(const char *name, const uint8_t addr[6], k_timeout_t step_
 		return ret;
 	}
 
-	if (gapm_le_start_adv(adv_idx, &start) != 0) {
+	if (BLE_CALL(gapm_le_start_adv(adv_idx, &start)) != 0) {
 		return -EIO;
 	}
 	return step_wait(step_timeout, "start adv");
+}
+
+bool mbt_ble_adv_running(void)
+{
+	return adv_running;
+}
+
+static K_SEM_DEFINE(version_sem, 0, 1);
+static gapm_version_t version;
+static volatile uint16_t version_status;
+
+static void on_version(uint32_t metainfo, uint16_t status, const gapm_version_t *p_version)
+{
+	version_status = status;
+	if (status == GAP_ERR_NO_ERROR && p_version) {
+		version = *p_version;
+	}
+	k_sem_give(&version_sem);
+}
+
+int mbt_ble_ping(k_timeout_t timeout, uint8_t *hci_ver, uint16_t *hci_subver)
+{
+	k_sem_reset(&version_sem);
+	if (BLE_CALL(gapm_get_version(0, on_version)) != GAP_ERR_NO_ERROR) {
+		return -EIO;
+	}
+	if (k_sem_take(&version_sem, timeout) != 0) {
+		return -ETIMEDOUT;
+	}
+	if (version_status != GAP_ERR_NO_ERROR) {
+		return -EIO;
+	}
+	*hci_ver = version.hci_ver;
+	*hci_subver = version.hci_subver;
+	return 0;
 }

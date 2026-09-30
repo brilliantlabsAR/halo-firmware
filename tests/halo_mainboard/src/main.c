@@ -151,6 +151,29 @@ static void t_eui(struct ft_ctx *c)
 		  eui_ext[1], eui_ext[2], eui_ext[0], eui_ext[1], eui_ext[2]);
 }
 
+/*
+ * While advertising, print a heartbeat every 5 s so a station or phone scan
+ * can be matched against a stack that is demonstrably still running: each
+ * beat round-trips to the controller. Not an FT line, so parsers skip it.
+ */
+#define BLE_HEARTBEAT_S 5
+
+static void ble_heartbeat(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(ble_heartbeat_work, ble_heartbeat);
+
+static void ble_heartbeat(struct k_work *work)
+{
+	uint8_t hci_ver = 0;
+	uint16_t hci_subver = 0;
+	int err = mbt_ble_ping(K_SECONDS(1), &hci_ver, &hci_subver);
+
+	shell_print(shell_backend_uart_get_ptr(),
+		    "BLE adv alive uptime=%us adv=%s ctrl=%s hci=%u.%u", (uint32_t)(k_uptime_get() / 1000),
+		    mbt_ble_adv_running() ? "on" : "off", err ? "no-reply" : "ok", hci_ver,
+		    hci_subver);
+	k_work_reschedule(&ble_heartbeat_work, K_SECONDS(BLE_HEARTBEAT_S));
+}
+
 static char ble_name[16];
 static uint8_t ble_addr[6];
 static int ble_status = -EAGAIN;
@@ -171,14 +194,19 @@ static void t_ble(struct ft_ctx *c)
 		ble_addr[2] = HALO_STATIC_ADDR_PREFIX & 0xFF;
 		memcpy(&ble_addr[3], eui_ext, 3);
 		ble_status = mbt_ble_adv_start(ble_name, ble_addr, K_SECONDS(3));
+		if (ble_status == 0) {
+			k_work_reschedule(&ble_heartbeat_work, K_SECONDS(BLE_HEARTBEAT_S));
+		}
 	}
 
 	if (ble_status) {
 		ft_report(c, "ble_adv", FT_FAIL, "err=%d", ble_status);
 		return;
 	}
-	ft_report(c, "ble_adv", FT_PASS, "name=\"%s\" addr=%02X:%02X:%02X:%02X:%02X:%02X", ble_name,
-		  ble_addr[0], ble_addr[1], ble_addr[2], ble_addr[3], ble_addr[4], ble_addr[5]);
+	ft_report(c, "ble_adv", mbt_ble_adv_running() ? FT_PASS : FT_FAIL,
+		  "name=\"%s\" addr=%02X:%02X:%02X:%02X:%02X:%02X adv=%s", ble_name, ble_addr[0],
+		  ble_addr[1], ble_addr[2], ble_addr[3], ble_addr[4], ble_addr[5],
+		  mbt_ble_adv_running() ? "on" : "off");
 }
 
 /* ---- Memories -------------------------------------------------------------- */

@@ -41,7 +41,7 @@ FT DONE <passed>/<total> skip=<skipped>
 | `se` | Secure Enclave answers: part number and SE firmware revision | a service call fails |
 | `eui` | the per-unit EUI-48 extension from OTP, and the BLE address the app will use | the call fails or the extension is 000000 (the app would then fall back to a shared address) |
 | `clocks` | CPU cycles (HFXO-derived) counted across 0.5 s of LFXO-driven RTC ticks | the LF clock is not running, or the ratio is off by 500 ppm or more (provisional) |
-| `ble_adv` | the BLE stack comes up and advertises `name="Halo XXYYZZ"` from the unit's static address, where XXYYZZ is the EUI extension | any stack step fails or times out (3 s) |
+| `ble_adv` | the BLE stack comes up and advertises `name="Halo XXYYZZ"` from the unit's static address, where XXYYZZ is the EUI extension; `adv=on` once started | any stack step fails or times out (3 s), or advertising is not running |
 | `ram` | 256 KB of SRAM with address, inverted-address, 0x55 and 0xAA patterns | any word reads back wrong |
 | `mram_image` | CRC-32 (IEEE, as zlib) over the image as it sits in MRAM; `len` equals the `.bin` size | never. **The station must compare `crc32` with the CRC-32 of the `.bin` it wrote** |
 | `mram_write` | writes, reads back and erases 1 KB at the start of slot1 (free at this stage) | an I/O error or a mismatch |
@@ -61,3 +61,15 @@ interval, 0 dBm, complete local name only. The station scans for the exact
 name from the `ble_adv` line (or the address, where its BLE stack exposes
 addresses) and applies its own RSSI threshold. The advertiser keeps running
 after `FT DONE`, so the scan can happen after the DUT has finished.
+
+The `ble_adv` line ends in `adv=on` once the stack has confirmed advertising
+started. From then on the DUT prints a heartbeat every 5 s:
+
+```
+BLE adv alive uptime=<s>s adv=on|off ctrl=ok|no-reply hci=<ver>.<subver>
+```
+
+Each beat round-trips to the BLE controller (an HCI version read), so
+`ctrl=ok` shows the whole stack is still up while the station or a phone
+scans. `adv=off` means the stack reported the advertising set stopped. The
+heartbeat is not an FT line.
