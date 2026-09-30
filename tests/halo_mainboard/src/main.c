@@ -57,7 +57,7 @@ struct ft_ctx {
 static void ft_report(struct ft_ctx *c, const char *test, enum ft_result r, const char *fmt, ...)
 {
 	static const char *const words[] = {"PASS", "FAIL", "SKIP"};
-	char detail[256];
+	char detail[320];
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -601,10 +601,12 @@ static void t_mag(struct ft_ctx *c)
 /*
  * Two mics share the PDM bus, one per clock edge: channel 2 (the app's mono
  * channel) and channel 3. Only one of them is on the main board; the other is
- * on the secondary board, which is not fitted at this stage, and nothing in
- * the DTS or app says which is which. So both channels are captured and
- * reported, and neither fails the test until hardware runs show which one
- * responds (`main=` then names it).
+ * on the secondary board, not fitted at this stage. A PDM mic drives DATA on
+ * its own edge and floats it on the other, so with the second mic absent the
+ * line holds the last bit and the other edge reads the same stream: on board
+ * #5 ch2 and ch3 matched sample for sample (`pair=identical`). Either channel
+ * therefore carries the main-board mic here, and PASS is gated on ch2, the
+ * one the app records. On an assembled unit `pair` should read `distinct`.
  *
  * Per channel:
  *   rms   AC rms of the raw samples
@@ -614,6 +616,12 @@ static void t_mag(struct ft_ctx *c)
  *         at the mic gives most of it. The band tolerates the PDM sample
  *         rate differing from nominal by a few percent.
  *   min, max
+ *   zero  count of exact-zero samples. The driver's DMA can read an empty
+ *         FIFO (see pdm_dma_start_block), which delivers zeros; board #5
+ *         read min=0 in every quiet run.
+ *
+ * rate_hz is the delivered sample rate per channel, measured over the
+ * captured blocks; a DMA over-read shows up as a rate above 16000.
  */
 #define MIC_RATE       16000
 #define MIC_CHANNELS   2
@@ -645,6 +653,7 @@ struct mic_stats {
 	int16_t hist[MIC_LP_TAPS];
 	int16_t lo;
 	int16_t hi;
+	uint32_t zeros;
 	float s1[MIC_BINS];
 	float s2[MIC_BINS];
 };
@@ -658,6 +667,7 @@ static void mic_accumulate(struct mic_stats *m, int16_t x, uint32_t i)
 	m->sumsq += (int32_t)x * x;
 	m->lo = MIN(m->lo, x);
 	m->hi = MAX(m->hi, x);
+	m->zeros += (x == 0);
 
 	m->box += x - m->hist[i % MIC_LP_TAPS];
 	m->hist[i % MIC_LP_TAPS] = x;
@@ -718,6 +728,9 @@ static void t_mic(struct ft_ctx *c)
 		.streams = &stream,
 	};
 	uint32_t n = 0; /* samples per channel */
+	uint32_t n_timed = 0;
+	uint32_t pair_diff = 0; /* frames where ch2 != ch3 */
+	int64_t t_first = 0, t_last = 0;
 	int err;
 
 	memset(mic_st, 0, sizeof(mic_st));
@@ -759,15 +772,25 @@ static void t_mic(struct ft_ctx *c)
 		if (err) {
 			break;
 		}
+		const uint32_t frames = size / (2 * MIC_CHANNELS);
+
+		/* Rate: frames delivered between the first and last block's
+		 * arrival, so it excludes the first block's own fill time */
+		if (b == MIC_SETTLE - 1) {
+			t_first = k_uptime_get();
+		} else if (b >= MIC_SETTLE) {
+			t_last = k_uptime_get();
+			n_timed += frames;
+		}
 		if (b >= MIC_SETTLE) {
 			const int16_t *smp = buf;
-			const uint32_t frames = size / (2 * MIC_CHANNELS);
 
 			for (uint32_t i = 0; i < frames && n + i < MIC_FRAMES; i++) {
 				for (int ch = 0; ch < MIC_CHANNELS; ch++) {
 					mic_accumulate(&mic_st[ch], smp[i * MIC_CHANNELS + ch],
 						       n + i);
 				}
+				pair_diff += smp[i * MIC_CHANNELS] != smp[i * MIC_CHANNELS + 1];
 			}
 			n = MIN(n + frames, MIC_FRAMES);
 		}
@@ -791,14 +814,16 @@ static void t_mic(struct ft_ctx *c)
 			    mic_st[ch].lo != mic_st[ch].hi;
 	}
 
-	/* Which channel is the main-board mic is not known yet: report both,
-	 * fail on neither (only a capture error fails). */
-	ft_report(c, "mic", FT_PASS,
-		  "ch2_rms=%u ch2_lp=%u ch2_tone=%u ch2_min=%d ch2_max=%d ch2_alive=%d "
-		  "ch3_rms=%u ch3_lp=%u ch3_tone=%u ch3_min=%d ch3_max=%d ch3_alive=%d "
-		  "main=unknown",
-		  rms[0], lp[0], tone[0], mic_st[0].lo, mic_st[0].hi, alive[0], rms[1], lp[1],
-		  tone[1], mic_st[1].lo, mic_st[1].hi, alive[1]);
+	const int64_t dt = t_last - t_first;
+	const uint32_t rate = dt > 0 ? (uint32_t)(n_timed * 1000 / dt) : 0;
+
+	ft_report(c, "mic", alive[0] ? FT_PASS : FT_FAIL,
+		  "ch2_rms=%u ch2_lp=%u ch2_tone=%u ch2_min=%d ch2_max=%d ch2_zero=%u ch2_alive=%d "
+		  "ch3_rms=%u ch3_lp=%u ch3_tone=%u ch3_min=%d ch3_max=%d ch3_zero=%u ch3_alive=%d "
+		  "pair=%s main=ch2 rate_hz=%u samples=%u",
+		  rms[0], lp[0], tone[0], mic_st[0].lo, mic_st[0].hi, mic_st[0].zeros, alive[0],
+		  rms[1], lp[1], tone[1], mic_st[1].lo, mic_st[1].hi, mic_st[1].zeros, alive[1],
+		  pair_diff ? "distinct" : "identical", rate, n);
 }
 
 /* ---- Display/camera flex parts on I2C1 ---------------------------------------- */
