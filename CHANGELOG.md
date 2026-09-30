@@ -11,6 +11,18 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `tests/halo_mainboard`, a factory test for bare Halo main PCBs at the
+  flashing station. It is written raw at 0x80000000 over SE-UART (about
+  117 KB), runs at boot, and reports machine-parseable results on the
+  console as `FT <test> PASS|FAIL|SKIP <detail>` lines ending with
+  `FT DONE`. It covers the Secure Enclave and EUI, the crystals, BLE
+  advertising, RAM, MRAM, battery sense, the accelerometer, the
+  magnetometer, the microphone, and the display/camera connector parts.
+  Releases publish it as `halo-mainboard-test-X.Y.Z.bin`, and PR CI
+  builds it.
+
 ### Fixed
 
 - `VERSION.txt` on releases records the build date again. The date format's

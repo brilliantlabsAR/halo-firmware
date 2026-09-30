@@ -142,6 +142,16 @@ jobs:
               cp build-factory-test/zephyr/zephyr.elf release_artifacts/halo-factory-test-\${VERSION}.elf
               cp build-factory-test/zephyr/zephyr.map release_artifacts/halo-factory-test-\${VERSION}.map
 
+              # Main-board factory test (tests/halo_mainboard): the lean,
+              # auto-running station test for bare main PCBs. Same raw form
+              # as the factory test (0x80000000, no MCUboot, unsigned); it
+              # reports FT lines on the console (see its README).
+              echo \"Building main-board test \$VERSION...\"
+              west build -b halo tests/halo_mainboard -d build-mainboard-test -p
+              cp build-mainboard-test/zephyr/zephyr.bin release_artifacts/halo-mainboard-test-\${VERSION}.bin
+              cp build-mainboard-test/zephyr/zephyr.elf release_artifacts/halo-mainboard-test-\${VERSION}.elf
+              cp build-mainboard-test/zephyr/zephyr.map release_artifacts/halo-mainboard-test-\${VERSION}.map
+
               # github.sha is the dispatch ref, not necessarily the built branch
               COMMIT=\$(git rev-parse HEAD)
               CC=\$(sed -n 's/^CMAKE_C_COMPILER:[A-Z]*=//p' build-factory-test/CMakeCache.txt)
@@ -162,6 +172,8 @@ jobs:
               echo \"- halo-bootloader-\${VERSION}.bin (MCUboot)\" >> release_artifacts/VERSION.txt
               echo \"- halo-factory-test-\${VERSION}.bin (Factory test firmware, raw image at 0x80000000)\" >> release_artifacts/VERSION.txt
               echo \"- halo-factory-test-\${VERSION}.elf/.map (Factory test symbols)\" >> release_artifacts/VERSION.txt
+              echo \"- halo-mainboard-test-\${VERSION}.bin (Main-board station test, raw image at 0x80000000)\" >> release_artifacts/VERSION.txt
+              echo \"- halo-mainboard-test-\${VERSION}.elf/.map (Main-board test symbols)\" >> release_artifacts/VERSION.txt
               echo '- SHA256SUMS' >> release_artifacts/VERSION.txt
               echo '' >> release_artifacts/VERSION.txt
               echo 'Flash Instructions (over-the-air, no cable needed):' >> release_artifacts/VERSION.txt
@@ -217,6 +229,8 @@ jobs:
             - `halo-bootloader-${{ steps.version.outputs.version }}.bin` - MCUboot bootloader
             - `halo-factory-test-${{ steps.version.outputs.version }}.bin` - Factory test firmware (raw image at 0x80000000, no MCUboot)
             - `halo-factory-test-${{ steps.version.outputs.version }}.{elf,map}` - Factory test symbols
+            - `halo-mainboard-test-${{ steps.version.outputs.version }}.bin` - Main-board station test (raw image at 0x80000000, no MCUboot)
+            - `halo-mainboard-test-${{ steps.version.outputs.version }}.{elf,map}` - Main-board test symbols
             - `VERSION.txt` - Build information and flash instructions
             - `SHA256SUMS` - SHA-256 of every asset above
             
@@ -225,7 +239,7 @@ jobs:
             uv run alif/applications/halo/tools/ota_flash.py halo-firmware-${{ steps.version.outputs.version }}-release.signed.bin
             ```
             See `alif/applications/halo/FLASHING.md` for details. The bootloader
-            and factory test `.bin` files are for wired factory flashing only —
+            and factory/main-board test `.bin` files are for wired factory flashing only —
             they cannot be flashed over the air.
             
             ---

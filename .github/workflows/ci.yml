@@ -110,6 +110,10 @@ jobs:
               west build -b halo tests/halo -d build-factory-test -p
               cp build-factory-test/zephyr/zephyr.bin build_artifacts/halo-factory-test-\${VERSION}.bin
 
+              echo \"Building main-board test \$VERSION...\"
+              west build -b halo tests/halo_mainboard -d build-mainboard-test -p
+              cp build-mainboard-test/zephyr/zephyr.bin build_artifacts/halo-mainboard-test-\${VERSION}.bin
+
               # Copy artifacts out of the container to the host
               cp -r build_artifacts /host_code/
               
