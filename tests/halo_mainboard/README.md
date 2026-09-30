@@ -54,6 +54,23 @@ FT DONE <passed>/<total> skip=<skipped>
 The limits marked provisional need measuring on known-good boards before the
 station relies on them.
 
+### Mic baselines (cut 7, board F4-18-AB, 2026-10-01)
+
+| condition | ch2 rms | ch2 tone | notes |
+|---|---|---|---|
+| quiet | 152–168 | 0–1 | raw PCM sits ~+850 DC, never crosses zero |
+| speech | 176–737 | 0–30 | |
+| 1 kHz tone at the board | 901–1232 | 949–973 | |
+
+- `rate_hz` = 16000 and `zero` = 0 when quiet; `pair` = identical (second
+  mic not fitted).
+- The DC offset is expected: the board DTS sets `iir-bypass`, which bypasses
+  the PDM's DC-blocking filter. `rms` is mean-removed, so it is unaffected.
+- Every small-signal sample is a multiple of 22. That is the gain, not a
+  fault: gain 0 writes `((0+1)*22)<<4` to the channel gain register.
+- Alive window 20–4000 has wide margin. A station with a 1 kHz source can
+  additionally require `ch2_tone >= 500` (quiet 0–1, speech ≤ 30, tone ≥ 949).
+
 ## Station BLE check
 
 After `FT ble_adv PASS`, the DUT advertises indefinitely: connectable, 100 ms
