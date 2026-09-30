@@ -616,20 +616,28 @@ static void t_mag(struct ft_ctx *c)
  *         at the mic gives most of it. The band tolerates the PDM sample
  *         rate differing from nominal by a few percent.
  *   min, max
- *   zero  count of exact-zero samples. The driver's DMA can read an empty
- *         FIFO (see pdm_dma_start_block), which delivers zeros; board #5
- *         read min=0 in every quiet run.
+ *   zero  count of exact-zero samples; a real mic stream has few
  *
  * rate_hz is the delivered sample rate per channel, measured over the
- * captured blocks; a DMA over-read shows up as a rate above 16000.
+ * captured blocks; it should read ~16000.
+ *
+ * Blocks are 20 ms, as the app uses. The driver's DMA fills at most
+ * PDM_DMA_MAX_SETS (512) frames per block but still delivers the configured
+ * block size, so a larger block comes back mostly stale: cuts 4-6 used 100 ms
+ * (1600 frames) and read ~68% zeros at an apparent 50 kHz.
  */
 #define MIC_RATE       16000
 #define MIC_CHANNELS   2
-#define MIC_BLOCK      (MIC_RATE / 10 * 2 * MIC_CHANNELS) /* 100 ms, 16-bit */
-#define MIC_BLOCKS     4
-#define MIC_SETTLE     2 /* blocks discarded while the PDM filter settles */
-#define MIC_MEASURE    3
-#define MIC_FRAMES     (MIC_RATE / 10 * MIC_MEASURE) /* samples per channel */
+#define MIC_BLOCK_MS   20
+#define MIC_BLOCK_FRAMES (MIC_RATE * MIC_BLOCK_MS / 1000)
+#define MIC_BLOCK      (MIC_BLOCK_FRAMES * 2 * MIC_CHANNELS) /* 16-bit samples */
+#define MIC_BLOCKS     8
+#define MIC_SETTLE     10 /* blocks (200 ms) discarded while the PDM settles */
+#define MIC_MEASURE    15 /* blocks (300 ms) measured */
+#define MIC_FRAMES     (MIC_BLOCK_FRAMES * MIC_MEASURE) /* samples per channel */
+
+/* t5838_alif_pdm.c: PDM_DMA_MAX_SETS */
+BUILD_ASSERT(MIC_BLOCK_FRAMES <= 512, "PDM DMA fills at most 512 frames per block");
 #define MIC_BAND_LO_HZ 900
 #define MIC_BAND_HI_HZ 1150
 #define MIC_BIN_LO     (MIC_BAND_LO_HZ * MIC_FRAMES / MIC_RATE)
@@ -768,7 +776,7 @@ static void t_mic(struct ft_ctx *c)
 		void *buf;
 		uint32_t size;
 
-		err = dmic_read(mic, 0, &buf, &size, 300);
+		err = dmic_read(mic, 0, &buf, &size, 100);
 		if (err) {
 			break;
 		}
