@@ -1,0 +1,32 @@
+/*
+ * Main-board test: display, camera and speaker are not fitted at this stage,
+ * so their drivers are left out entirely (no boot-time init, no size).
+ */
+
+&vga020 {
+	status = "disabled";
+};
+
+&mipi_dsi {
+	status = "disabled";
+};
+
+&cdc200 {
+	status = "disabled";
+};
+
+&pag7982 {
+	status = "disabled";
+};
+
+&lpcam {
+	status = "disabled";
+};
+
+&max98357a {
+	status = "disabled";
+};
+
+&i2s0 {
+	status = "disabled";
+};
