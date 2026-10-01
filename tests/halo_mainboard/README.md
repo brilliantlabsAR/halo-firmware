@@ -71,6 +71,27 @@ station relies on them.
 - Alive window 20–4000 has wide margin. A station with a 1 kHz source can
   additionally require `ch2_tone >= 500` (quiet 0–1, speech ≤ 30, tone ≥ 949).
 
+## Clock stream
+
+`factory clockstream [seconds]` streams one line per LF second (0 or no argument
+means until reset). `factory clockstream stop` stops it, and `factory run` /
+`factory <test>` stop it too. The boot run does not start it:
+
+```
+FT clk seq=<n> cyc=<u64> lf=<u64> lf_src=lfxo cpu_hz=160000000 gap=<cycles>
+```
+
+- `cyc` is the DWT cycle counter. The core clock is PLL clk1 locked to the
+  38.4 MHz HFXO, so its rate carries the HFXO's ppm. `lf` is the LPRTC
+  (32.768 kHz LFXO). Both are extended to 64 bits in software.
+- Lines are taken on an RTC tick edge, so `lf` is exact and `cyc` lands within
+  `gap` cycles after it. Fit both against host time to get each crystal's
+  absolute error.
+- While streaming, the core never sleeps (CYCCNT stops in WFI), so do not
+  judge current draw from a streaming board.
+- `FT clk` lines match `^FT ` but carry no PASS/FAIL. A station that parses
+  test output should stop at `FT DONE`.
+
 ## Station BLE check
 
 After `FT ble_adv PASS`, the DUT advertises indefinitely: connectable, 100 ms
