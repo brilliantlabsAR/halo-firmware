@@ -23,15 +23,15 @@
   "miscellaneous": [
     {
       "id": "LFXO_CAP_CTRL",
-      "value": 40
+      "value": 45
     },
     {
       "id": "LFXO_GM_CTRL",
-      "value": 8
+      "value": 15
     },
     {
       "id": "HFXO_CAP_CTRL",
-      "value": 15
+      "value": 5
     },
     {
       "id": "HFXO_PFET_GM_CTRL",
