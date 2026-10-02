@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include <zephyr/kernel.h>
+#include <cmsis_core.h>
 #include <zephyr/device.h>
 #include <zephyr/audio/dmic.h>
 #include <zephyr/drivers/counter.h>
@@ -379,6 +380,137 @@ static void t_clocks(struct ft_ctx *c)
 	ft_report(c, "clocks", (ppm < CLOCK_PPM_LIMIT && ppm > -CLOCK_PPM_LIMIT) ? FT_PASS : FT_FAIL,
 		  "ppm=%d lf_hz=%u cpu_hz=%u ticks=%u cycles=%u", ppm, f, cpu_hz, ticks,
 		  (uint32_t)cycles);
+}
+
+/* ---- Clock stream ------------------------------------------------------------ */
+
+/*
+ * `factory clockstream [seconds|stop]` prints one line per LF second for a host
+ * to fit both crystals' drift against its NTP-disciplined clock:
+ *
+ *   FT clk seq=<n> cyc=<u64> lf=<u64> lf_src=<src> cpu_hz=<nominal> gap=<cycles>
+ *
+ * cyc is the DWT cycle counter and lf the low-power RTC (the clocks test's LF
+ * source), both extended to 64 bits from their 32-bit registers. Each line is
+ * sampled on an RTC tick edge, so lf is exact and cyc lands within gap cycles
+ * after that edge (edges with a wider gap, e.g. an ISR between the two reads,
+ * are skipped unless no clean edge turns up within 100 ms).
+ *
+ * DWT CYCCNT stops while the core sleeps, so the stream spins at the lowest
+ * application priority: the idle thread (and so PM) never runs while it is
+ * active. The shell shares that priority, so the loop yields away from edges.
+ * Seconds 0 streams until reset.
+ */
+#define CLK_EDGE_MAX_CYC 800
+#define CLK_STACK_SIZE   1024
+/* LPRTC runs from S32K, which the SE run profile (aon_clk_src) sets to LFXO */
+#define CLK_LF_SRC       "lfxo"
+
+struct clk_sample {
+	uint64_t cyc;
+	uint64_t lf;
+	uint32_t cyc_raw;
+	uint32_t lf_raw;
+};
+
+static K_SEM_DEFINE(clk_go, 0, 1);
+static atomic_t clk_req_s;
+static atomic_t clk_gen;
+
+static inline void clk_read(const struct device *rtc, struct clk_sample *s)
+{
+	uint32_t lf, cyc;
+	unsigned int key = irq_lock();
+
+	counter_get_value(rtc, &lf);
+	cyc = DWT->CYCCNT;
+	irq_unlock(key);
+	s->cyc += (uint32_t)(cyc - s->cyc_raw);
+	s->lf += (uint32_t)(lf - s->lf_raw);
+	s->cyc_raw = cyc;
+	s->lf_raw = lf;
+}
+
+static void clk_stream(const struct device *rtc, uint32_t seconds, atomic_val_t gen)
+{
+	const struct shell *sh = shell_backend_uart_get_ptr();
+	const uint32_t cpu_hz = sys_clock_hw_cycles_per_sec();
+	const uint32_t f = counter_get_frequency(rtc);
+	struct clk_sample prev, cur = {0};
+	uint64_t target;
+	uint32_t seq = 0;
+
+	cur.cyc_raw = DWT->CYCCNT;
+	counter_get_value(rtc, &cur.lf_raw);
+	clk_read(rtc, &cur);
+	target = cur.lf + f;
+
+	while (atomic_get(&clk_gen) == gen && (seconds == 0 || seq < seconds)) {
+		prev = cur;
+		clk_read(rtc, &cur);
+		if (cur.lf - prev.lf > 20 * (uint64_t)f) {
+			/* Starved long enough for CYCCNT to have wrapped unseen */
+			shell_print(sh, "FT clk error=stalled lf_ticks=%llu", cur.lf - prev.lf);
+		}
+		if (cur.lf < target) {
+			/* Far from the next edge: let the shell and logger run */
+			if (target - cur.lf > 4) {
+				k_yield();
+			}
+			continue;
+		}
+		const uint32_t gap = (uint32_t)(cur.cyc - prev.cyc);
+
+		if (cur.lf == prev.lf || (gap > CLK_EDGE_MAX_CYC && cur.lf < target + f / 10)) {
+			continue;
+		}
+		shell_print(sh, "FT clk seq=%u cyc=%llu lf=%llu lf_src=%s cpu_hz=%u gap=%u", seq++,
+			    cur.cyc, cur.lf, CLK_LF_SRC, cpu_hz, gap);
+		while (target <= cur.lf) {
+			target += f;
+		}
+	}
+}
+
+static void clk_thread(void *a, void *b, void *c)
+{
+	const struct device *rtc = DEVICE_DT_GET(DT_NODELABEL(rtc0));
+
+	for (;;) {
+		k_sem_take(&clk_go, K_FOREVER);
+		const atomic_val_t gen = atomic_get(&clk_gen);
+		const uint32_t seconds = atomic_get(&clk_req_s);
+
+		if (seconds == UINT32_MAX) {
+			continue;
+		}
+		if (!device_is_ready(rtc)) {
+			shell_print(shell_backend_uart_get_ptr(), "FT clk error=rtc-not-ready");
+			continue;
+		}
+		if (DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) {
+			shell_print(shell_backend_uart_get_ptr(), "FT clk error=no-cyccnt");
+			continue;
+		}
+		counter_start(rtc);
+		DCB->DEMCR |= DCB_DEMCR_TRCENA_Msk;
+		DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+		clk_stream(rtc, seconds, gen);
+		if (atomic_get(&clk_gen) == gen) {
+			shell_print(shell_backend_uart_get_ptr(), "FT clk end");
+		}
+	}
+}
+
+K_THREAD_DEFINE(clk_tid, CLK_STACK_SIZE, clk_thread, NULL, NULL, NULL,
+		K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
+
+/* seconds: 0 = until reset, UINT32_MAX = stop. Supersedes a running stream. */
+static void clk_request(uint32_t seconds)
+{
+	atomic_set(&clk_req_s, seconds);
+	atomic_inc(&clk_gen);
+	k_sem_give(&clk_go);
 }
 
 /* ---- Power ------------------------------------------------------------------- */
@@ -887,6 +1019,8 @@ static void factory_run(const struct shell *sh, const struct ft_test *only)
 {
 	struct ft_ctx c = {.sh = sh};
 
+	/* Keep FT clk lines out of a test run */
+	clk_request(UINT32_MAX);
 	k_mutex_lock(&run_lock, K_FOREVER);
 	shell_print(sh, "FT BEGIN halo-mainboard-test %s %s", MBT_VERSION, MBT_GIT);
 	for (size_t i = 0; i < ARRAY_SIZE(tests); i++) {
@@ -900,6 +1034,14 @@ static void factory_run(const struct shell *sh, const struct ft_test *only)
 
 static int cmd_factory(const struct shell *sh, size_t argc, char **argv)
 {
+	if (argc >= 2 && strcmp(argv[1], "clockstream") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "stop") == 0) {
+			clk_request(UINT32_MAX);
+		} else {
+			clk_request(argc >= 3 ? strtoul(argv[2], NULL, 0) : 0);
+		}
+		return 0;
+	}
 	if (argc < 2 || strcmp(argv[1], "run") == 0) {
 		factory_run(sh, NULL);
 		return 0;
@@ -914,10 +1056,13 @@ static int cmd_factory(const struct shell *sh, size_t argc, char **argv)
 	for (size_t i = 0; i < ARRAY_SIZE(tests); i++) {
 		shell_print(sh, "  %s", tests[i].name);
 	}
+	shell_print(sh, "  clockstream [seconds|stop]");
 	return -EINVAL;
 }
 
-SHELL_CMD_ARG_REGISTER(factory, NULL, "factory run | factory <test>", cmd_factory, 1, 1);
+SHELL_CMD_ARG_REGISTER(factory, NULL,
+		       "factory run | factory <test> | factory clockstream [seconds|stop]", cmd_factory,
+		       1, 2);
 
 int main(void)
 {
