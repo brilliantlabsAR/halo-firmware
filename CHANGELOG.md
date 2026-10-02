@@ -11,6 +11,22 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.15] - 2026-10-02
+
+### Added
+
+- `tests/halo_mainboard` has a `factory clockstream [seconds|stop]` console
+  command. It prints one `FT clk` line per LF second with the 64-bit CPU
+  cycle and LPRTC counts, so a station can fit both against host time and
+  measure the HFXO and LFXO error on a board. It runs only on request: the
+  boot run is unchanged, and `factory run` / `factory <test>` stop it (#48).
+
+### Changed
+
+- The SE device config's crystal trims are calibrated: `HFXO_CAP_CTRL` 5,
+  `LFXO_CAP_CTRL` 45 and `LFXO_GM_CTRL` 15, matching the production
+  flashing station (#47).
+
 ## [0.8.14] - 2026-10-01
 
 ### Added
