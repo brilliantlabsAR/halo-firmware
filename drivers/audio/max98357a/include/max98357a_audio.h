@@ -81,7 +81,12 @@ void max98357a_audio_set_tx_tap(max98357a_audio_tx_tap_t tap);
  * out) from live-session data instead of theory: error-status completions
  * (a completion whose block may not have fully emitted), tap-FIFO order
  * mismatches (feed dropped), and send failures inside the completion
- * callback (emission hole).
+ * callback (emission hole). Audio thrown away by a stop (queued blocks
+ * freed after the drain wait times out) is counted too.
+ *
+ * The counters are monotonic from boot and never reset: several consumers
+ * (frame.microphone.diag, frame.speaker.stats) each keep their own baseline
+ * and report differences, so one consumer's reset cannot disturb another.
  */
 struct max98357a_audio_tx_diag {
 	uint32_t real_sends;      /**< audio blocks handed to I2S */
@@ -89,13 +94,12 @@ struct max98357a_audio_tx_diag {
 	uint32_t err_completions; /**< completions with status != OK */
 	uint32_t tap_drops;       /**< tap-FIFO order-mismatch drops */
 	uint32_t cb_send_fails;   /**< i2s_sync_send failures in the cb */
+	uint32_t stop_discards;   /**< queued blocks freed unplayed at stop */
+	uint32_t drain_timeouts;  /**< stops that gave up waiting for drain */
 };
 
 /** @brief Snapshot the TX diagnostic counters (racy; diagnostics only). */
 void max98357a_audio_tx_diag_get(struct max98357a_audio_tx_diag *out);
-
-/** @brief Zero the TX diagnostic counters. */
-void max98357a_audio_tx_diag_zero(void);
 
 /**
  * @brief Runtime overrides for the current-protection chain (bench tuning).

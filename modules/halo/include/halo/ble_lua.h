@@ -178,6 +178,28 @@ int32_t halo_ble_lua_video_write(const uint8_t *data, size_t len);
 int32_t halo_ble_lua_audio_read(uint8_t *data, size_t len, k_timeout_t timeout);
 
 /**
+ * @brief Audio RX (phone -> speaker) accounting
+ *
+ * Counters are monotonic from boot; ring_peak is the high-water mark since
+ * the last halo_ble_lua_audio_rx_peak_reset(). Racy snapshots, diagnostics
+ * only.
+ */
+struct halo_ble_lua_audio_rx_stats {
+	uint32_t writes;         /**< audio writes accepted into the ring */
+	uint32_t bytes;          /**< bytes accepted */
+	uint32_t rejected;       /**< writes rejected: ring full */
+	uint32_t rejected_bytes; /**< bytes in rejected writes */
+	uint32_t ring_level;     /**< bytes buffered now (snapshot only) */
+	uint32_t ring_peak;      /**< most bytes buffered since peak reset */
+};
+
+/** @brief Snapshot the audio RX counters and current ring level. */
+void halo_ble_lua_audio_rx_stats_get(struct halo_ble_lua_audio_rx_stats *out);
+
+/** @brief Restart the ring high-water mark from the current level. */
+void halo_ble_lua_audio_rx_peak_reset(void);
+
+/**
  * @brief Write audio data to the audio output channel
  * 
  * @param data Audio data to write

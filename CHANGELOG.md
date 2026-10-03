@@ -11,6 +11,14 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `frame.speaker.stats([reset])` reports what happened to speaker audio at
+  each stage: bytes received and rejected over BLE, frames decoded, concealed,
+  muted or discarded, and blocks the amplifier played or threw away. A reply
+  that loses audio shows where it was lost. `stats(true)` starts a new
+  counting window.
+
 ## [0.8.16] - 2026-10-03
 
 ### Changed

@@ -1100,6 +1100,7 @@ Audio playback module supporting PCM and LC3.
 | `speaker.play(data)` | `<data: string>` | `nil` | Play audio data |
 | `speaker.volume([val])` | `[val: number]` | `number` | Get or set volume (0–100) |
 | `speaker.stop()` | None | `nil` | Stop playback |
+| `speaker.stats([reset])` | `[reset: boolean]` | `table` | Playback accounting counters |
 
 #### `frame.speaker.start(cfg)`
 
@@ -1223,6 +1224,47 @@ Stops playback and cleans up resources.
   ```lua
   frame.speaker.stop()
   ```
+
+#### `frame.speaker.stats([reset])`
+
+Counts what happened to speaker audio at each stage, so audio that never played can be traced to where it was lost. All values are integers counted since boot or the last `stats(true)`, except `streaming`, `ring_bytes` and `ring_peak`. Counting is a few integer increments per frame, with no logging.
+
+- **Parameters:** `[reset: boolean]` — `true` returns the counts and starts a new window, so one call per reply gives that reply's counts. Default `false`.
+- **Returns:** `table`:
+
+  | Key | Meaning |
+  |-----|---------|
+  | `streaming` | `true` while a `frame.speaker.start()` stream is running |
+  | `starts` | Successful `frame.speaker.start()` calls |
+  | `restarts` | `start()` calls that stopped a running stream first. Audio inside the device at that moment can be lost (see `frames_dropped_stop`, `blocks_discarded`). |
+  | `ble_writes`, `ble_bytes` | Audio-characteristic writes and bytes accepted |
+  | `ble_rejected`, `ble_rejected_bytes` | Writes refused because the audio receive buffer (8 KB) was full. A write-without-response sender gets no error, so this audio is lost without trace on the phone. |
+  | `ring_bytes` | Bytes waiting in the receive buffer now. Nonzero while not streaming means stale audio that plays before the next stream's audio. |
+  | `ring_peak` | Most bytes buffered in this window (playback latency) |
+  | `frames_decoded` | LC3 frames decoded (per channel) |
+  | `frames_plc` | Frames with bitstream errors, concealed by PLC |
+  | `frames_muted` | Frames silenced by the bad-input guard |
+  | `mute_events` | Times the bad-input guard engaged (it releases after ~500 ms of clean frames) |
+  | `decode_errors` | Frames the LC3 decoder failed on |
+  | `bytes_misaligned` | Bytes discarded because a read held a partial LC3 frame. Writes must be whole frames. |
+  | `frames_dropped_stop` | LC3 frames received but discarded because the stream stopped or restarted |
+  | `frames_write_failed` | Decoded frames the speaker refused (stopped, in standby, or taken over by LE Audio) |
+  | `pcm_bytes`, `pcm_bytes_failed` | PCM bytes played / refused (PCM streams and `play()`) |
+  | `blocks_played` | Audio blocks sent to the amplifier. One block is one decoded LC3 frame from the stream, or up to 20 ms of PCM. |
+  | `silence_blocks` | Silence blocks the amplifier played because no audio was queued (only while the microphone AEC is on) |
+  | `blocks_discarded` | Queued blocks thrown away when a stop timed out waiting for them to play |
+  | `drain_timeouts` | Stops that gave up waiting for queued audio to play |
+  | `i2s_errors` | Amplifier transfer errors |
+
+- **Example:**
+  ```lua
+  -- after each reply: did everything the phone sent play?
+  local s = frame.speaker.stats(true)
+  print('spk ' .. s.ble_bytes .. ' ' .. s.ble_rejected_bytes .. ' ' ..
+        s.frames_decoded .. ' ' .. s.blocks_played .. ' ' .. s.frames_muted)
+  ```
+
+  Print only the fields you need: a single long `print()` can overflow the print buffer.
 
 ---
 
@@ -1456,7 +1498,7 @@ Voice-band mode: band-passes the mic output to a speech band (~300–3400 Hz). *
 AEC canceller diagnostics, separate from the `aec()` control surface. **Halo only.** For test/instrumentation use.
 
 - **Parameters:** `cmd: string` — one of:
-  - `"stats"` — returns a table of canceller internals plus PDM/speaker/clock probes (margin, resyncs, loss counters, etc.)
+  - `"stats"` — returns a table of canceller internals plus PDM/speaker/clock probes (margin, resyncs, loss counters, etc.). For speaker playback accounting, use `frame.speaker.stats()`.
   - `"zero"` — zeroes the clock-rate monitor and PDM/speaker counters
 - **Returns:** `table` for `"stats"`; `nil` for `"zero"`
 - **Errors:** throws `"unknown diag command '<cmd>'"` for any other string

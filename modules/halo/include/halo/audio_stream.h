@@ -66,6 +66,21 @@ int audio_lc3_decode_frame(audio_codec_ctx_t *ctx,
 			   const uint8_t *encoded_data, size_t encoded_len,
 			   int16_t *pcm_out, size_t pcm_len);
 
+/** Last frame had a bitstream error; PLC concealed it (unless muted). */
+#define AUDIO_LC3_FRAME_BAD          BIT(0)
+/** Last frame's output was silenced by the bad-input guard. */
+#define AUDIO_LC3_FRAME_MUTED        BIT(1)
+/** The bad-input guard engaged on the last frame. */
+#define AUDIO_LC3_FRAME_MUTE_ENGAGED BIT(2)
+
+/**
+ * @brief Status of the last frame passed to audio_lc3_decode_frame()
+ *
+ * @param ctx Decoder context
+ * @return AUDIO_LC3_FRAME_* flags (0 for a clean frame or a failed decode)
+ */
+uint8_t audio_lc3_decoder_frame_flags(const audio_codec_ctx_t *ctx);
+
 /**
  * @brief Destroy LC3 decoder
  *
