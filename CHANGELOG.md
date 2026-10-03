@@ -11,6 +11,47 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.16] - 2026-10-03
+
+### Changed
+
+- `halo_realloc` grows or shrinks a block in place when it lives in the
+  internal heap and the requested region is internal or `AUTO`, instead of
+  always allocating, copying and freeing. Lua table and buffer growth is
+  10–18 % faster. Blocks in external SRAM take the existing path, so `AUTO`
+  allocations still return to the internal heap first (#26).
+- `frame.camera.read()` returns `nil` until a captured frame is ready, and
+  `frame.camera.capture()` makes the previous frame unreadable straight away
+  (#34).
+- `frame.display.bitmap()` rejects `x_scale` / `y_scale` larger than the
+  display (#30).
+- The battery level filter keeps its state in fixed point. The reported
+  level now tracks the gauge to within about a point instead of sitting about
+  four points away, and the low/critical callbacks fire at 20 % and 10 % of
+  the gauge reading (#50, fixes #37).
+
+### Fixed
+
+- `file:read(n)` returns up to `n` bytes instead of at most 512, and
+  `file:read()` returns lines longer than 512 characters whole (#24).
+- `frame.time.utc()` and `frame.time.date()` stay correct past 2^32 ms
+  (49.7 days) of uptime after the last sync (#25).
+- `frame.file.remove_all()` and the remove-all control signal empty
+  directories with more than 32 entries (#28, fixes #27).
+- An ANCS response with a TLV length near 0xFFFF is no longer treated as
+  complete (#29).
+- `frame.display.line()`, `circle()` and `bitmap()` with very large
+  coordinates, radii or scale factors return promptly instead of looping in
+  C, and a two-point `polygon()` draws its segment (#30).
+- The callback setters in `frame.button`, `frame.imu`, `frame.bluetooth` and
+  `frame.compression` register the function argument when extra arguments are
+  passed (#31).
+- An mcumgr `os reset` forces a cold BLE start on the next boot, like the
+  other reboot paths (#33).
+- The Battery Level CCC write is confirmed before the initial notification is
+  sent (#35).
+- The watchdog-fired flag is cleared once `main()` has acted on it (#32).
+
 ## [0.8.15] - 2026-10-02
 
 ### Added
