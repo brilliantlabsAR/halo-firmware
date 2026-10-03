@@ -715,8 +715,8 @@ static int lua_speaker_start(lua_State *L)
 /**
  * @brief frame.speaker.stop()
  *
- * Stop speaker playback and clean up resources.
- * Thread is kept alive for future start() calls.
+ * Stop speaker playback, clean up resources and discard audio still
+ * buffered from BLE. Thread is kept alive for future start() calls.
  */
 static int lua_speaker_stop(lua_State *L)
 {
@@ -732,6 +732,12 @@ static int lua_speaker_stop(lua_State *L)
 
 	/* Then cleanup audio resources */
 	speaker_cleanup_audio_resources();
+
+	/* Audio still buffered for this stream would otherwise play ahead
+	 * of the next one. Only on stop: audio that arrives before a start()
+	 * belongs to the stream about to begin and is kept.
+	 */
+	halo_ble_lua_audio_flush();
 
 	LOG_DBG("Speaker stopped");
 
@@ -886,7 +892,7 @@ static int lua_speaker_stats(lua_State *L)
 
 	halo_ble_lua_audio_rx_stats_get(&rx);
 
-	lua_createtable(L, 0, 27);
+	lua_createtable(L, 0, 28);
 
 	lua_pushboolean(L, speaker_state.is_streaming);
 	lua_setfield(L, -2, "streaming");
@@ -898,6 +904,7 @@ static int lua_speaker_stats(lua_State *L)
 	STAT("ble_bytes", rx.bytes - rx_base.bytes);
 	STAT("ble_rejected", rx.rejected - rx_base.rejected);
 	STAT("ble_rejected_bytes", rx.rejected_bytes - rx_base.rejected_bytes);
+	STAT("ble_flushed_bytes", rx.flushed_bytes - rx_base.flushed_bytes);
 	STAT("ring_bytes", rx.ring_level);
 	STAT("ring_peak", rx.ring_peak);
 
@@ -984,6 +991,9 @@ static void lua_speaker_cleanup(void)
 
 	/* Finally stop thread */
 	speaker_stop_thread();
+
+	/* Don't leave this VM's audio to the next one's first stream */
+	halo_ble_lua_audio_flush();
 }
 
 
