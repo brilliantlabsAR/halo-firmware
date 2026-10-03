@@ -1142,6 +1142,9 @@ Initializes the speaker.
   a gap. Any other change stops the stream and starts a new one, which can
   lose the audio already inside the device. `budget` is fixed when a stream
   starts, so changing it restarts the stream.
+- **Streaming over AUDIO RX:** writes to the audio characteristic do not need
+  to line up with LC3 frames or PCM samples (MTU-sized chunks are fine); a
+  frame split across two writes is joined before decoding.
 - **Example:**
   ```lua
   -- Start speaker with PCM format
@@ -1256,7 +1259,7 @@ Counts what happened to speaker audio at each stage, so audio that never played 
   | `frames_muted` | Frames silenced by the bad-input guard |
   | `mute_events` | Times the bad-input guard engaged (it releases after ~500 ms of clean frames) |
   | `decode_errors` | Frames the LC3 decoder failed on |
-  | `bytes_misaligned` | Bytes discarded because a read held a partial LC3 frame. Writes must be whole frames. |
+  | `bytes_misaligned` | Bytes of an incomplete frame (LC3) or sample (PCM) still waiting for the rest of its bytes when the stream stopped or restarted. Writes can be split anywhere; only a stream that ends mid-frame leaves bytes here. |
   | `frames_dropped_stop` | LC3 frames received but discarded because the stream stopped or restarted |
   | `frames_write_failed` | Decoded frames the speaker refused (stopped, in standby, or taken over by LE Audio) |
   | `pcm_bytes`, `pcm_bytes_failed` | PCM bytes played / refused (PCM streams and `play()`) |

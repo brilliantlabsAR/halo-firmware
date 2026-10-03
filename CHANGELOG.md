@@ -30,6 +30,12 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- Speaker audio streamed in writes that are not whole LC3 frames (for
+  example MTU-sized chunks) plays correctly. The partial frame at the end of
+  each write used to be discarded, shifting every frame after it: the stream
+  decoded as noise and then muted. PCM writes with an odd byte count are
+  handled the same way.
+
 - `frame.speaker.start()` with an invalid argument raises its error without
   stopping a stream that is already playing. It used to stop the stream
   first, so a bad value (silently, under `pcall`) left the speaker off.

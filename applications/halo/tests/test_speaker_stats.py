@@ -10,7 +10,7 @@ can go missing and checks that the matching counter moves.
 
 Cases: clean LC3 stream (every frame decoded and played), the same config
 re-sent mid-stream (in-place update), a budget change mid-stream (restart),
-garbage LC3 (PLC then mute), a write that is not whole frames, a full BLE
+garbage LC3 (PLC then mute), writes that are not whole frames, a full BLE
 ring while the speaker is stopped, PCM via frame.speaker.play(), and a
 start() with a bad argument on a running stream.
 """
@@ -169,11 +169,34 @@ async def main(args):
     await b.send_lua("frame.speaker.stop() " + START)
     await stats(b)
     await b.send_audio(clip[:FB + 1], await_bt_response=False)
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.3)
+    await b.send_audio(clip[FB + 1:2 * FB], await_bt_response=False)
+    await asyncio.sleep(0.3)
     s = await stats(b)
-    check("misaligned tail counted", s["bytes_misaligned"] == 1,
-          f"bytes_misaligned {s['bytes_misaligned']} "
-          f"frames_decoded {s['frames_decoded']}")
+    check("split frame joined", s["frames_decoded"] == 2 and
+          s["bytes_misaligned"] == 0 and s["frames_plc"] == 0,
+          f"frames_decoded {s['frames_decoded']}/2 "
+          f"bytes_misaligned {s['bytes_misaligned']} plc {s['frames_plc']}")
+    await b.send_audio(clip[:FB + 1], await_bt_response=False)
+    await asyncio.sleep(0.3)
+    await b.send_lua("frame.speaker.stop() " + START)
+    await asyncio.sleep(0.2)
+    s = await stats(b)
+    check("tail at stop counted", s["bytes_misaligned"] == 1,
+          f"bytes_misaligned {s['bytes_misaligned']}")
+
+    print("4b. clip streamed in 244 B writes")
+    await stats(b)
+    for i in range(0, len(clip), 244):
+        await b.send_audio(clip[i:i + 244], await_bt_response=False)
+        await asyncio.sleep(244 / FB * 0.01 * 0.9)
+    await asyncio.sleep(0.6)
+    s = await stats(b)
+    check("every frame decoded cleanly", s["frames_decoded"] == n and
+          s["frames_plc"] == 0 and s["frames_muted"] == 0 and
+          s["bytes_misaligned"] == 0,
+          f"frames_decoded {s['frames_decoded']}/{n} plc {s['frames_plc']} "
+          f"muted {s['frames_muted']} misaligned {s['bytes_misaligned']}")
 
     print("5. ring fills while the speaker is stopped")
     await b.send_lua("frame.speaker.stop()")
