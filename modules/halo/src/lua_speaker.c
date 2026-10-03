@@ -59,6 +59,7 @@ static struct {
 	int channel_count;
 	int lc3_duration;
 	int lc3_bitrate;
+	int budget; /* per-stream override, 0 = configured default */
 
 	/* Buffers */
 	uint8_t *ble_buffer;
@@ -93,6 +94,7 @@ static struct {
 struct speaker_counters {
 	uint32_t starts;
 	uint32_t restarts;
+	uint32_t updates;
 	uint32_t frames_decoded;
 	uint32_t frames_plc;
 	uint32_t frames_muted;
@@ -388,9 +390,10 @@ static void speaker_stop_thread(void)
  * @brief frame.speaker.start(config)
  *
  * Start speaker playback with configuration.
- * Can be called multiple times to reconfigure (will stop and restart).
- * Arguments are validated first: a bad one raises an error and leaves any
- * running stream untouched.
+ * Can be called again on a running stream. If only volume and gain differ,
+ * they are applied in place and the stream keeps playing; any other change
+ * (format or budget) stops and restarts it. Arguments are validated first:
+ * a bad one raises an error and leaves any running stream untouched.
  *
  * @param config Table with fields:
  *   - encoder: "pcm" or "lc3" (default: "pcm")
@@ -535,7 +538,31 @@ static int lua_speaker_start(lua_State *L)
 		return luaL_error(L, "Budget must be 10-100");
 	}
 
-	/* If already running, stop first to reconfigure */
+	/* Same stream format and budget: update volume and gain in place
+	 * instead of a restart, which would throw away the audio in flight.
+	 * The budget is fixed at stream start (audio_speaker_init resets it
+	 * and the amp rebuilds its chain only while stopped), so a budget
+	 * change takes the restart path.
+	 */
+	if (speaker_state.is_streaming && speaker_state.speaker &&
+	    audio_speaker_check_owner(speaker_state.speaker, AUDIO_OWNER_LUA) &&
+	    speaker_state.use_lc3 == use_lc3 &&
+	    speaker_state.sample_rate == sample_rate &&
+	    speaker_state.channel_count == channels &&
+	    (!use_lc3 || (speaker_state.lc3_duration == lc3_duration &&
+			  speaker_state.lc3_bitrate == lc3_bitrate)) &&
+	    speaker_state.budget == budget) {
+		k_mutex_lock(&speaker_state.mutex, K_FOREVER);
+		audio_speaker_set_volume(speaker_state.speaker, volume);
+		audio_speaker_set_stream_gain(speaker_state.speaker, gain_db * 10);
+		k_mutex_unlock(&speaker_state.mutex);
+
+		spk_cnt.updates++;
+		LOG_DBG("Speaker updated: vol=%d gain=%d", volume, gain_db);
+		return 0;
+	}
+
+	/* Otherwise stop a running stream first to reconfigure */
 	if (speaker_state.is_streaming) {
 		spk_cnt.restarts++;
 
@@ -553,6 +580,7 @@ static int lua_speaker_start(lua_State *L)
 	speaker_state.channel_count = channels;
 	speaker_state.lc3_duration = lc3_duration;
 	speaker_state.lc3_bitrate = lc3_bitrate;
+	speaker_state.budget = budget;
 
 	/* Initialize speaker hardware with channel configuration */
 	speaker_state.speaker = audio_speaker_init(sample_rate, bit_depth, channels,
@@ -824,12 +852,13 @@ static int lua_speaker_stats(lua_State *L)
 
 	halo_ble_lua_audio_rx_stats_get(&rx);
 
-	lua_createtable(L, 0, 26);
+	lua_createtable(L, 0, 27);
 
 	lua_pushboolean(L, speaker_state.is_streaming);
 	lua_setfield(L, -2, "streaming");
 	STAT("starts", c.starts - spk_base.starts);
 	STAT("restarts", c.restarts - spk_base.restarts);
+	STAT("updates", c.updates - spk_base.updates);
 
 	STAT("ble_writes", rx.writes - rx_base.writes);
 	STAT("ble_bytes", rx.bytes - rx_base.bytes);
