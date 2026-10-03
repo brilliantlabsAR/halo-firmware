@@ -1251,7 +1251,7 @@ Counts what happened to speaker audio at each stage, so audio that never played 
   | `frames_write_failed` | Decoded frames the speaker refused (stopped, in standby, or taken over by LE Audio) |
   | `pcm_bytes`, `pcm_bytes_failed` | PCM bytes played / refused (PCM streams and `play()`) |
   | `blocks_played` | Audio blocks sent to the amplifier. One block is one decoded LC3 frame from the stream, or up to 20 ms of PCM. |
-  | `silence_blocks` | Silence blocks the amplifier played because no audio was queued (only while the microphone AEC is on) |
+  | `silence_blocks` | Silence blocks the amplifier played because a stream was open with no audio queued (between replies, or when audio arrives late). Keeps the echo canceller's reference continuous; in AEC builds (the default) this applies whether or not the mic is running. |
   | `blocks_discarded` | Queued blocks thrown away when a stop timed out waiting for them to play |
   | `drain_timeouts` | Stops that gave up waiting for queued audio to play |
   | `i2s_errors` | Amplifier transfer errors |
