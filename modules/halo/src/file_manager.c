@@ -205,8 +205,15 @@ int halo_settings_set(const char *key, const void *data, size_t size)
 	return settings_save_one(key, data, size);
 }
 
-/* Recursive delete with depth limit to avoid stack overflow */
-static int delete_directory_contents(const char *path, int depth)
+/* Recursive delete with depth limit to avoid stack overflow.
+ *
+ * Entries are collected into a fixed batch and the directory is closed before
+ * anything is unlinked, so only one directory handle is open at a time
+ * (littlefs has a small pool of them) and recursion is safe. A full batch
+ * means the directory may hold more, so it is rescanned until a pass comes
+ * back short or removes nothing, i.e. everything left is preserved or
+ * undeletable. That also bounds the loop. */
+static int delete_directory_contents(const char *path, int depth, bool preserve_settings)
 {
 	/* Safety checks */
 	if (path == NULL || path[0] == '\0') {
@@ -219,83 +226,89 @@ static int delete_directory_contents(const char *path, int depth)
 		return -1;
 	}
 
-	struct fs_dir_t dir;
-	fs_dir_t_init(&dir);
-
-	int ret = fs_opendir(&dir, path);
-	if (ret < 0) {
-		/* Directory might not exist or already deleted */
-		return (ret == -ENOENT) ? 0 : ret;
-	}
-
-	/* Collect entries first */
 	typedef struct {
 		char name[64];
 		uint8_t type;
 	} entry_t;
 
 	entry_t entries[32];
-	int entry_count = 0;
+	int entry_count;
+	int removed;
 
-	struct fs_dirent entry;
-	while (entry_count < 32) {
-		ret = fs_readdir(&dir, &entry);
+	do {
+		struct fs_dir_t dir;
+		fs_dir_t_init(&dir);
+
+		int ret = fs_opendir(&dir, path);
 		if (ret < 0) {
-			/* Error reading directory, stop but continue */
-			break;
+			/* Directory might not exist or already deleted */
+			return (ret == -ENOENT) ? 0 : ret;
 		}
 
-		if (entry.name[0] == '\0') {
-			/* End of directory */
-			break;
-		}
+		entry_count = 0;
+		removed = 0;
 
-		/* Skip special entries */
-		if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
-			continue;
-		}
-
-		/* Safety: ensure name is not too long */
-		if (strlen(entry.name) >= sizeof(entries[entry_count].name)) {
-			LOG_WRN("Entry name too long, skipping");
-			continue;
-		}
-
-		strncpy(entries[entry_count].name, entry.name, sizeof(entries[entry_count].name) - 1);
-		entries[entry_count].name[sizeof(entries[entry_count].name) - 1] = '\0';
-		entries[entry_count].type = entry.type;
-		entry_count++;
-	}
-
-	/* Always close directory, ignore errors */
-	fs_closedir(&dir);
-
-	/* Delete all entries with error tolerance */
-	char full_path[256];
-	for (int i = 0; i < entry_count; i++) {
-		/* Build path safely */
-		ret = snprintf(full_path, sizeof(full_path), "%s/%s", path, entries[i].name);
-		if (ret < 0 || ret >= sizeof(full_path)) {
-			LOG_WRN("Path too long, skipping: %s/%s", path, entries[i].name);
-			continue;
-		}
-
-		if (entries[i].type == FS_DIR_ENTRY_DIR) {
-			/* Recursively delete subdirectory - ignore errors */
-			delete_directory_contents(full_path, depth + 1);
-			/* Try to delete the directory - ignore errors */
-			ret = fs_unlink(full_path);
-			if (ret < 0 && ret != -ENOENT && ret != -ENOTEMPTY) {
-				/* Silent fail - might have subdirectories we couldn't process */
+		struct fs_dirent entry;
+		while (entry_count < ARRAY_SIZE(entries)) {
+			ret = fs_readdir(&dir, &entry);
+			if (ret < 0) {
+				/* Error reading directory, stop but continue */
+				break;
 			}
-		} else {
-			/* Delete file - ignore errors */
-			ret = fs_unlink(full_path);
-			if (ret < 0 && ret != -ENOENT) {
-				/* Silent fail - file might be in use */
+
+			if (entry.name[0] == '\0') {
+				/* End of directory */
+				break;
+			}
+
+			/* Skip special entries */
+			if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
+				continue;
+			}
+
+			/* Preserve settings file */
+			if (preserve_settings && strcmp(entry.name, "settings") == 0) {
+				continue;
+			}
+
+			/* Safety: ensure name is not too long */
+			if (strlen(entry.name) >= sizeof(entries[entry_count].name)) {
+				LOG_WRN("Entry name too long, skipping");
+				continue;
+			}
+
+			strncpy(entries[entry_count].name, entry.name,
+				sizeof(entries[entry_count].name) - 1);
+			entries[entry_count].name[sizeof(entries[entry_count].name) - 1] = '\0';
+			entries[entry_count].type = entry.type;
+			entry_count++;
+		}
+
+		/* Always close directory, ignore errors */
+		fs_closedir(&dir);
+
+		/* Delete all entries with error tolerance */
+		char full_path[256];
+		for (int i = 0; i < entry_count; i++) {
+			/* Build path safely */
+			ret = snprintf(full_path, sizeof(full_path), "%s/%s", path, entries[i].name);
+			if (ret < 0 || ret >= sizeof(full_path)) {
+				LOG_WRN("Path too long, skipping: %s/%s", path, entries[i].name);
+				continue;
+			}
+
+			if (entries[i].type == FS_DIR_ENTRY_DIR) {
+				/* Recursively delete subdirectory - ignore errors */
+				delete_directory_contents(full_path, depth + 1, false);
+			}
+
+			/* Ignore failures: a file might be in use, or a subdirectory
+			 * might still hold something we could not process */
+			if (fs_unlink(full_path) == 0) {
+				removed++;
 			}
 		}
-	}
+	} while (entry_count == ARRAY_SIZE(entries) && removed > 0);
 
 	return 0;
 }
@@ -310,87 +323,10 @@ int halo_file_remove_all(void)
 		return -EINVAL;
 	}
 
-	struct fs_dir_t dir;
-	fs_dir_t_init(&dir);
-
-	int ret = fs_opendir(&dir, mount_point);
+	int ret = delete_directory_contents(mount_point, 0, true);
 	if (ret < 0) {
 		LOG_ERR("Failed to open mount point: %d", ret);
 		return ret;
-	}
-
-	/* Collect root level entries */
-	typedef struct {
-		char name[64];
-		uint8_t type;
-	} entry_t;
-
-	entry_t entries[32];
-	int entry_count = 0;
-
-	struct fs_dirent entry;
-	while (entry_count < 32) {
-		ret = fs_readdir(&dir, &entry);
-		if (ret < 0) {
-			/* Error reading, stop but continue */
-			break;
-		}
-
-		if (entry.name[0] == '\0') {
-			/* End of directory */
-			break;
-		}
-
-		/* Skip special entries */
-		if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
-			continue;
-		}
-
-		/* Preserve settings file */
-		if (strcmp(entry.name, "settings") == 0) {
-			continue;
-		}
-
-		/* Safety: ensure name is not too long */
-		if (strlen(entry.name) >= sizeof(entries[entry_count].name)) {
-			LOG_WRN("Entry name too long, skipping");
-			continue;
-		}
-
-		strncpy(entries[entry_count].name, entry.name, sizeof(entries[entry_count].name) - 1);
-		entries[entry_count].name[sizeof(entries[entry_count].name) - 1] = '\0';
-		entries[entry_count].type = entry.type;
-		entry_count++;
-	}
-
-	/* Always close directory, ignore errors */
-	fs_closedir(&dir);
-
-	/* Delete all root level entries with error tolerance */
-	char full_path[256];
-	for (int i = 0; i < entry_count; i++) {
-		/* Build path safely */
-		ret = snprintf(full_path, sizeof(full_path), "%s/%s", mount_point, entries[i].name);
-		if (ret < 0 || ret >= sizeof(full_path)) {
-			LOG_WRN("Path too long, skipping: %s/%s", mount_point, entries[i].name);
-			continue;
-		}
-
-		if (entries[i].type == FS_DIR_ENTRY_DIR) {
-			/* Recursively delete directory contents - ignore errors */
-			delete_directory_contents(full_path, 0);
-			/* Try to delete the directory - ignore errors */
-			ret = fs_unlink(full_path);
-			if (ret < 0 && ret != -ENOENT && ret != -ENOTEMPTY) {
-				/* Silent fail - might have subdirectories we couldn't process */
-			}
-		} else {
-			/* Delete file - ignore errors */
-			ret = fs_unlink(full_path);
-			if (ret < 0 && ret != -ENOENT) {
-				/* Silent fail - file might be in use */
-			}
-		}
 	}
 
 	/* Reset the LOG_BACKEND_FS backend so it releases its handle to the
