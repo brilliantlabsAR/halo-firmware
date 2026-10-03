@@ -122,10 +122,8 @@ async def main(args):
           s["starts"] == 0,
           f"updates {s['updates']} starts {s['starts']} "
           f"restarts {s['restarts']}")
-    # frames_write_failed is the amp's -ENOSPC on a burst after idle (seen
-    # with or without the update); only losses from the update count here
-    check("nothing lost to the update", s["frames_decoded"] == n and
-          s["blocks_played"] + s["frames_write_failed"] == n and
+    check("nothing lost", s["frames_decoded"] == n and
+          s["blocks_played"] == n and s["frames_write_failed"] == 0 and
           s["frames_dropped_stop"] == 0 and s["blocks_discarded"] == 0,
           f"decoded {s['frames_decoded']} played {s['blocks_played']}/{n} "
           f"dropped_stop {s['frames_dropped_stop']} "
@@ -152,6 +150,8 @@ async def main(args):
           f"decoded-played {lost}, blocks_discarded {s['blocks_discarded']}, "
           f"write_failed {s['frames_write_failed']}, "
           f"drain_timeouts {s['drain_timeouts']}")
+    check("amp took every block", s["frames_write_failed"] == 0,
+          f"frames_write_failed {s['frames_write_failed']}")
 
     print("3. garbage LC3")
     rng = np.random.default_rng(1)

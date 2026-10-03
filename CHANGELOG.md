@@ -30,6 +30,12 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- Speaker audio no longer loses a few frames when it arrives faster than
+  real time after a quiet moment (the start of a reply, or a backlog
+  catching up). The amplifier driver's block queue was one slot smaller
+  than its block pool, so a burst while it was playing silence overflowed
+  the queue (`frames_write_failed` in `frame.speaker.stats()`).
+
 - A speaker stream running when the device enters standby pauses and picks
   up where it left off on wake. Audio that arrived during standby used to be
   fed to the stopped speaker and lost (`frames_write_failed` in
