@@ -2587,7 +2587,9 @@ int halo_ble_audio_init(bool reset)
 
 		static const char mic_input_desc[] = "Microphones";
 		arc_aic_gain_prop_t gain_prop = {
-			.gain_units = 10, /* units of 0.1 dB -> 1 dB per gain step */
+			/* nominal 1 dB per step; the real step is
+			 * 20*log10(1 + |g|) dB (see dmic_set_gain) */
+			.gain_units = 10,
 			.gain_min = -10,
 			.gain_max = 10,
 		};

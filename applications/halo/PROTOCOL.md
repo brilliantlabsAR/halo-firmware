@@ -1359,7 +1359,7 @@ Initializes the microphone.
   | `channels` | number | 1 | 1 (mono) or 2 (stereo) |
   | `duration` | number | 1000 | LC3 frame duration (µs/10, matching the Alif LC3 enum: 750 = 7.5 ms, 1000 = 10 ms) |
   | `bitrate` | number | 16000 | LC3 bitrate (multiple of 8000, ≤96000) |
-  | `gain` | number | 0 | Gain (-10 to 10) |
+  | `gain` | number | 0 | Gain step (-10 to 10; not dB, see `microphone.gain()`) |
   | `aec` | boolean | false | Echo cancellation for this session (Halo only; see `microphone.aec()`). Off = raw mic. Can also be toggled live. |
   | `voice` | boolean | false | Voice-band mode (Halo only; see `microphone.voice()`). Independent of `aec`; can also be toggled live. |
 
@@ -1442,6 +1442,15 @@ Reads audio data from the microphone ring buffer. Works for both PCM and LC3 mod
 #### `frame.microphone.gain([val])`
 
 Gets or sets microphone gain. Can be called without initialization to get current setting.
+
+Gain is a step from -10 to 10, not a value in dB. Step `g` scales the
+microphone signal by `1 + g` relative to step 0 when positive and by
+`1 / (1 - g)` when negative, so `+g` and `-g` are symmetric:
+±20·log10(1 + |g|) dB.
+
+| Step | ±1 | ±2 | ±3 | ±4 | ±5 | ±7 | ±10 |
+|---|---|---|---|---|---|---|---|
+| dB relative to step 0 | ±6.0 | ±9.5 | ±12.0 | ±14.0 | ±15.6 | ±18.1 | ±20.8 |
 
 - **Parameters:** `[val: number]` (-10 to 10)
 - **Returns:** `number` - Current gain level, or `nil` when setting gain
