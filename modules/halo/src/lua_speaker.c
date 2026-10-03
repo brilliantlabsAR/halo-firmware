@@ -66,6 +66,7 @@ static struct {
 	int16_t *pcm_buffer;     /* Interleaved output buffer for all channels */
 	int16_t *channel_buffer; /* Single channel buffer for decoding */
 	size_t pcm_frame_size;   /* Per-channel frame size */
+	size_t carry_len;        /* Partial frame kept at the head of ble_buffer */
 
 	/* Synchronization */
 	struct k_mutex mutex;
@@ -171,6 +172,22 @@ static void speaker_write(uint8_t *pcm, size_t len, bool lc3)
 	}
 }
 
+/* Bytes in one whole unit of the stream: an LC3 frame for every channel,
+ * or one PCM sample for every channel. Writes are split wherever the
+ * sender likes, so the pump only consumes whole units and carries the
+ * rest over to the next read.
+ */
+static size_t speaker_stream_unit(void)
+{
+	if (speaker_state.use_lc3) {
+		return audio_lc3_get_frame_size(speaker_state.sample_rate,
+						speaker_state.lc3_duration,
+						speaker_state.lc3_bitrate) *
+		       speaker_state.channel_count;
+	}
+	return sizeof(int16_t) * speaker_state.channel_count;
+}
+
 static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 {
 	ARG_UNUSED(arg1);
@@ -186,34 +203,42 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 		}
 
 		while (speaker_state.is_streaming && !speaker_state.thread_should_exit) {
-			/* Read audio data from BLE */
-			int32_t len =
-				halo_ble_lua_audio_read(speaker_state.ble_buffer,
-							LUA_SPEAKER_AUDIO_BUFFER_SIZE, K_MSEC(500));
+			/* Read audio data from BLE, after any partial frame
+			 * carried over from the previous read
+			 */
+			size_t carry = speaker_state.carry_len;
+			int32_t got = halo_ble_lua_audio_read(
+				speaker_state.ble_buffer + carry,
+				LUA_SPEAKER_AUDIO_BUFFER_SIZE - carry, K_MSEC(500));
 
-			if (len <= 0) {
+			if (got <= 0) {
 				k_sleep(K_MSEC(10));
 				continue;
 			}
 
 			k_mutex_lock(&speaker_state.mutex, K_FOREVER);
 
+			size_t unit = speaker_stream_unit();
+			int32_t len = carry + got;
+
 			/* Check state again after acquiring mutex */
 			if (!speaker_state.is_streaming || speaker_state.thread_should_exit) {
-				if (speaker_state.use_lc3) {
-					size_t fs = audio_lc3_get_frame_size(
-						speaker_state.sample_rate,
-						speaker_state.lc3_duration,
-						speaker_state.lc3_bitrate) *
-						speaker_state.channel_count;
-
-					if (fs > 0) {
-						spk_cnt.frames_dropped_stop += len / fs;
-					}
+				if (speaker_state.use_lc3 && unit > 0) {
+					spk_cnt.frames_dropped_stop += len / unit;
 				}
+				/* the partial frame left over is counted (as
+				 * bytes_misaligned) when the stream is torn down
+				 */
+				speaker_state.carry_len = unit > 0 ? len % unit : 0;
 				k_mutex_unlock(&speaker_state.mutex);
 				break;
 			}
+
+			/* Keep the tail that is not a whole unit for the next
+			 * read; it is completed by the sender's next write.
+			 */
+			size_t whole = unit > 0 ? (size_t)len - (size_t)len % unit
+						: (size_t)len;
 
 			if (speaker_state.use_lc3) {
 				/* LC3 decoding path - handle multiple channels */
@@ -225,15 +250,9 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 					/* Total frames = data / (frame_size * channels) */
 					size_t frame_size_total =
 						frame_size * speaker_state.channel_count;
-					size_t num_frames = len / frame_size_total;
+					size_t num_frames = whole / frame_size_total;
 					size_t samples_per_frame =
 						speaker_state.pcm_frame_size / sizeof(int16_t);
-
-					/* A read that is not whole frames leaves a
-					 * tail that is discarded here (and misaligns
-					 * the frames after it).
-					 */
-					spk_cnt.bytes_misaligned += len % frame_size_total;
 
 					for (size_t i = 0; i < num_frames; i++) {
 						/* Decode each channel separately */
@@ -287,7 +306,17 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 				}
 			} else {
 				/* PCM direct playback */
-				speaker_write(speaker_state.ble_buffer, len, false);
+				if (whole > 0) {
+					speaker_write(speaker_state.ble_buffer, whole,
+						      false);
+				}
+			}
+
+			speaker_state.carry_len = len - whole;
+			if (speaker_state.carry_len > 0) {
+				memmove(speaker_state.ble_buffer,
+					speaker_state.ble_buffer + whole,
+					speaker_state.carry_len);
 			}
 
 			k_mutex_unlock(&speaker_state.mutex);
@@ -325,6 +354,10 @@ static void speaker_cleanup_audio_resources(void)
 			speaker_state.lc3_decoder[ch] = NULL;
 		}
 	}
+
+	/* A partial frame still waiting for the rest of its bytes is lost */
+	spk_cnt.bytes_misaligned += speaker_state.carry_len;
+	speaker_state.carry_len = 0;
 
 	/* Free buffers (Lua-owned resources) */
 	if (speaker_state.ble_buffer) {
@@ -634,6 +667,7 @@ static int lua_speaker_start(lua_State *L)
 	}
 
 	/* Allocate BLE receive buffer */
+	speaker_state.carry_len = 0;
 	speaker_state.ble_buffer = halo_malloc(LUA_SPEAKER_AUDIO_BUFFER_SIZE, HALO_MEM_REGION_AUTO);
 	if (!speaker_state.ble_buffer) {
 		speaker_cleanup_audio_resources();
