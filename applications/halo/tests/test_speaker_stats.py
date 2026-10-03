@@ -11,8 +11,9 @@ can go missing and checks that the matching counter moves.
 Cases: clean LC3 stream (every frame decoded and played), the same config
 re-sent mid-stream (in-place update), a budget change mid-stream (restart),
 garbage LC3 (PLC then mute), writes that are not whole frames, a full BLE
-ring while the speaker is stopped, PCM via frame.speaker.play(), and a
-start() with a bad argument on a running stream.
+ring while the speaker is stopped and its flush at stop(), audio sent before
+start(), PCM via frame.speaker.play(), and a start() with a bad argument on
+a running stream.
 """
 import argparse
 import asyncio
@@ -210,12 +211,36 @@ async def main(args):
           f"accepted {s['ble_bytes']} + rejected {s['ble_rejected_bytes']} "
           f"= {s['ble_bytes'] + s['ble_rejected_bytes']}/{len(big)}, "
           f"ring_bytes {s['ring_bytes']} ring_peak {s['ring_peak']}")
-    check("stale audio visible", s["ring_bytes"] > 0 and not s["streaming"],
+    check("audio kept for the next start", s["ring_bytes"] > 0 and
+          not s["streaming"],
           f"ring_bytes {s['ring_bytes']} streaming {s['streaming']}")
-    # drain the stale backlog so it does not leak into the next run
+    # start on the 8 KB backlog, then stop with most of it unplayed
     await b.send_lua(START)
-    await asyncio.sleep(s["ring_bytes"] / 4000 + 1.0)
+    await asyncio.sleep(0.3)
     await b.send_lua("frame.speaker.stop()")
+    await asyncio.sleep(0.2)
+    s = await stats(b)
+    # the pump's read in flight at stop counts as frames_dropped_stop
+    used = (s["frames_decoded"] + s["frames_dropped_stop"]) * FB
+    check("stop flushes the backlog", s["ring_bytes"] == 0 and
+          s["ble_flushed_bytes"] > 0 and
+          used + s["ble_flushed_bytes"] == 8000,
+          f"ring_bytes {s['ring_bytes']} flushed {s['ble_flushed_bytes']} "
+          f"+ (decoded {s['frames_decoded']} + dropped_stop "
+          f"{s['frames_dropped_stop']})x{FB} = "
+          f"{used + s['ble_flushed_bytes']}/8000")
+
+    print("5b. audio written before start() plays from frame 0")
+    await stream(b, clip[:FB * 50], pace=0.1)
+    await asyncio.sleep(0.2)
+    await b.send_lua(START)
+    await asyncio.sleep(1.0)
+    await b.send_lua("frame.speaker.stop()")
+    s = await stats(b)
+    check("early audio kept", s["frames_decoded"] == 50 and
+          s["ble_flushed_bytes"] == 0 and s["frames_plc"] == 0,
+          f"frames_decoded {s['frames_decoded']}/50 "
+          f"flushed {s['ble_flushed_bytes']} plc {s['frames_plc']}")
 
     print("6. PCM via frame.speaker.play()")
     await stats(b)

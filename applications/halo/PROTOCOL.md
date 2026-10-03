@@ -1229,7 +1229,11 @@ Gets or sets playback volume.
 
 #### `frame.speaker.stop()`
 
-Stops playback and cleans up resources.
+Stops playback and cleans up resources. Audio still waiting in the receive
+buffer is discarded, so it cannot play ahead of the next stream (counted in
+`ble_flushed_bytes`). Audio written after `stop()` is kept for the next
+`start()`, so a phone may send a reply's first audio before its `start()` is
+handled.
 
 - **Returns:** `nil`
 - **Example:**
@@ -1252,7 +1256,8 @@ Counts what happened to speaker audio at each stage, so audio that never played 
   | `updates` | `start()` calls on a running stream that only changed `volume` / `gain`, applied in place without a restart |
   | `ble_writes`, `ble_bytes` | Audio-characteristic writes and bytes accepted |
   | `ble_rejected`, `ble_rejected_bytes` | Writes refused because the audio receive buffer (8 KB) was full. A write-without-response sender gets no error, so this audio is lost without trace on the phone. |
-  | `ring_bytes` | Bytes waiting in the receive buffer now. Nonzero while not streaming means stale audio that plays before the next stream's audio. |
+  | `ble_flushed_bytes` | Bytes still in the receive buffer when the stream was stopped (`stop()`, or the Lua VM resetting), discarded so they do not play ahead of the next stream |
+  | `ring_bytes` | Bytes waiting in the receive buffer now. Nonzero while not streaming means audio written since the last `stop()`; it plays as soon as the next stream starts. |
   | `ring_peak` | Most bytes buffered in this window (playback latency) |
   | `frames_decoded` | LC3 frames decoded (per channel) |
   | `frames_plc` | Frames with bitstream errors, concealed by PLC |

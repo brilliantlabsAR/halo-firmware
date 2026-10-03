@@ -840,6 +840,23 @@ void halo_ble_lua_audio_rx_stats_get(struct halo_ble_lua_audio_rx_stats *out)
 				  : 0;
 }
 
+void halo_ble_lua_audio_flush(void)
+{
+	if (lua_ctx.initialized != BLE_LUA_INIT_MAGIC) {
+		return;
+	}
+
+	/* Consumer-side discard (a get into NULL), not ring_buf_reset(): the
+	 * BLE host may be putting a write concurrently, and the ring is only
+	 * safe for one producer and one consumer. audio_rx_sem is left as
+	 * is: resetting it could swallow the wakeup of a write landing now,
+	 * and a stale count only costs the reader one empty read.
+	 */
+	audio_rx_stats.flushed_bytes +=
+		ring_buf_get(&lua_ctx.audio_rx_ring, NULL,
+			     ring_buf_size_get(&lua_ctx.audio_rx_ring));
+}
+
 void halo_ble_lua_audio_rx_peak_reset(void)
 {
 	audio_rx_stats.ring_peak = (lua_ctx.initialized == BLE_LUA_INIT_MAGIC)

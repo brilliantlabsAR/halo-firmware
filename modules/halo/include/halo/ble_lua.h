@@ -189,6 +189,7 @@ struct halo_ble_lua_audio_rx_stats {
 	uint32_t bytes;          /**< bytes accepted */
 	uint32_t rejected;       /**< writes rejected: ring full */
 	uint32_t rejected_bytes; /**< bytes in rejected writes */
+	uint32_t flushed_bytes;  /**< bytes discarded by audio_flush() */
 	uint32_t ring_level;     /**< bytes buffered now (snapshot only) */
 	uint32_t ring_peak;      /**< most bytes buffered since peak reset */
 };
@@ -198,6 +199,15 @@ void halo_ble_lua_audio_rx_stats_get(struct halo_ble_lua_audio_rx_stats *out);
 
 /** @brief Restart the ring high-water mark from the current level. */
 void halo_ble_lua_audio_rx_peak_reset(void);
+
+/**
+ * @brief Discard all audio buffered in the audio input channel
+ *
+ * Takes the consumer side of the ring, so call it only while nothing else
+ * is reading audio (e.g. after the speaker pump has stopped). Writes that
+ * arrive during or after the flush are kept.
+ */
+void halo_ble_lua_audio_flush(void);
 
 /**
  * @brief Write audio data to the audio output channel

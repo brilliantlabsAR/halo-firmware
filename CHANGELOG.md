@@ -30,6 +30,13 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- `frame.speaker.stop()` discards speaker audio still buffered from BLE, as
+  does a Lua VM reset. That audio used to play at the start of the next
+  stream, delaying it, and a backlog over about 2 s filled the buffer so
+  later writes were refused. Audio written after `stop()` is still kept for
+  the next `start()`. `frame.speaker.stats()` reports the discarded bytes
+  as `ble_flushed_bytes`.
+
 - Speaker audio streamed in writes that are not whole LC3 frames (for
   example MTU-sized chunks) plays correctly. The partial frame at the end of
   each write used to be discarded, shifting every frame after it: the stream
