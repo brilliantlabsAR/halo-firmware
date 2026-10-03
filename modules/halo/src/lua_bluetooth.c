@@ -234,6 +234,9 @@ static int lua_bluetooth_receive_callback(lua_State *L)
 	}
 
 	/* Store new callback in registry */
+	/* luaL_ref takes the stack top: drop any extra arguments so the
+	 * function in slot 1 is what gets registered. */
+	lua_settop(L, 1);
 	bt_callback_state.callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	LOG_DBG("Bluetooth receive_callback registered");
