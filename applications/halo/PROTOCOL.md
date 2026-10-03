@@ -1135,8 +1135,13 @@ Initializes the speaker.
   - Throws an error if memory allocation fails
   - Arguments are checked before anything changes: if a stream is already
     running and an argument is invalid, the error is raised and the stream
-    keeps playing. Calling `start()` with valid arguments on a running stream
-    stops it and starts a new one.
+    keeps playing.
+- **On a running stream:** if `encoder`, `sample_rate`, `channels`, `budget`
+  and (for LC3) `duration` and `bitrate` match the running stream, `start()`
+  applies the new `volume` and `gain` in place and playback continues without
+  a gap. Any other change stops the stream and starts a new one, which can
+  lose the audio already inside the device. `budget` is fixed when a stream
+  starts, so changing it restarts the stream.
 - **Example:**
   ```lua
   -- Start speaker with PCM format
@@ -1239,8 +1244,9 @@ Counts what happened to speaker audio at each stage, so audio that never played 
   | Key | Meaning |
   |-----|---------|
   | `streaming` | `true` while a `frame.speaker.start()` stream is running |
-  | `starts` | Successful `frame.speaker.start()` calls |
-  | `restarts` | `start()` calls that stopped a running stream first. Audio inside the device at that moment can be lost (see `frames_dropped_stop`, `blocks_discarded`). |
+  | `starts` | Streams started by `frame.speaker.start()` (restarts included) |
+  | `restarts` | `start()` calls that stopped a running stream first, because the format or `budget` changed. Audio inside the device at that moment can be lost (see `frames_dropped_stop`, `blocks_discarded`). |
+  | `updates` | `start()` calls on a running stream that only changed `volume` / `gain`, applied in place without a restart |
   | `ble_writes`, `ble_bytes` | Audio-characteristic writes and bytes accepted |
   | `ble_rejected`, `ble_rejected_bytes` | Writes refused because the audio receive buffer (8 KB) was full. A write-without-response sender gets no error, so this audio is lost without trace on the phone. |
   | `ring_bytes` | Bytes waiting in the receive buffer now. Nonzero while not streaming means stale audio that plays before the next stream's audio. |

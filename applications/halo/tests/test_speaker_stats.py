@@ -8,10 +8,11 @@ can go missing and checks that the matching counter moves.
 
   uv run test_speaker_stats.py --name "Halo EC"
 
-Cases: clean LC3 stream (every frame decoded and played), a restart mid-
-stream, garbage LC3 (PLC then mute), a write that is not whole frames, a
-full BLE ring while the speaker is stopped, PCM via frame.speaker.play(), and
-a start() with a bad argument on a running stream.
+Cases: clean LC3 stream (every frame decoded and played), the same config
+re-sent mid-stream (in-place update), a budget change mid-stream (restart),
+garbage LC3 (PLC then mute), a write that is not whole frames, a full BLE
+ring while the speaker is stopped, PCM via frame.speaker.play(), and a
+start() with a bad argument on a running stream.
 """
 import argparse
 import asyncio
@@ -108,12 +109,34 @@ async def main(args):
     check("one start", s["starts"] == 1 and s["restarts"] == 0,
           f"starts {s['starts']} restarts {s['restarts']}")
 
-    print("2. restart mid-stream (backlog in the ring)")
+    print("2a. same config re-sent mid-stream (backlog in the ring)")
     for i in range(0, len(clip), 400):
         await b.send_audio(clip[i:i + 400], await_bt_response=False)
         await asyncio.sleep(0.02)   # ~5x real time: builds a backlog
         if i == 400 * 10:
-            await b.send_lua(START)
+            await b.send_lua(START.replace("volume=30", "volume=25, gain=3"))
+    await asyncio.sleep(2.5)
+    s = await stats(b)
+    check("updated in place", s["updates"] == 1 and s["restarts"] == 0 and
+          s["starts"] == 0,
+          f"updates {s['updates']} starts {s['starts']} "
+          f"restarts {s['restarts']}")
+    # frames_write_failed is the amp's -ENOSPC on a burst after idle (seen
+    # with or without the update); only losses from the update count here
+    check("nothing lost to the update", s["frames_decoded"] == n and
+          s["blocks_played"] + s["frames_write_failed"] == n and
+          s["frames_dropped_stop"] == 0 and s["blocks_discarded"] == 0,
+          f"decoded {s['frames_decoded']} played {s['blocks_played']}/{n} "
+          f"dropped_stop {s['frames_dropped_stop']} "
+          f"discarded {s['blocks_discarded']} "
+          f"write_failed {s['frames_write_failed']}")
+
+    print("2b. budget change mid-stream restarts (backlog in the ring)")
+    for i in range(0, len(clip), 400):
+        await b.send_audio(clip[i:i + 400], await_bt_response=False)
+        await asyncio.sleep(0.02)
+        if i == 400 * 10:
+            await b.send_lua(START.replace("volume=30", "volume=30, budget=50"))
     await asyncio.sleep(2.5)
     s = await stats(b)
     accounted = s["frames_decoded"] + s["frames_dropped_stop"]
@@ -141,7 +164,9 @@ async def main(args):
           f"mute_events {s['mute_events']}")
 
     print("4. write that is not whole frames")
-    await b.send_lua(START)       # fresh decoder, unmuted
+    # stop first: a same-config start() is an in-place update, and this
+    # case needs a fresh, unmuted decoder
+    await b.send_lua("frame.speaker.stop() " + START)
     await stats(b)
     await b.send_audio(clip[:FB + 1], await_bt_response=False)
     await asyncio.sleep(0.5)

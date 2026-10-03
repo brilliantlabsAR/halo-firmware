@@ -19,6 +19,15 @@ release pages and tags are not publicly reachable.
   that loses audio shows where it was lost. `stats(true)` starts a new
   counting window.
 
+### Changed
+
+- `frame.speaker.start()` on a running stream with the same format and
+  `budget` updates `volume` and `gain` in place instead of restarting the
+  stream, so the audio already inside the device keeps playing. Apps that
+  resend their speaker settings before each reply no longer lose up to a few
+  hundred milliseconds of audio. A format or `budget` change still restarts.
+  `frame.speaker.stats()` counts these as `updates`.
+
 ### Fixed
 
 - `frame.speaker.start()` with an invalid argument raises its error without
