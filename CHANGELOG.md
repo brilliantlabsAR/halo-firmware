@@ -32,6 +32,14 @@ release pages and tags are not publicly reachable.
   negative gain made the microphone effectively silent. Gains 0 and above
   are unchanged. PROTOCOL.md and BLE_SERVICES.md now describe the real
   step sizes; a step is not 1 dB.
+- With echo cancellation on, the wearer is no longer cut out after every
+  pause in a long reply. The canceller's onset duck (about 34 dB for 0.4 s,
+  then easing out) re-armed whenever the speaker audio had been silent for
+  160 ms, so every word or sentence gap in a reply ducked the microphone
+  again. It now re-arms only after 1 s of speaker silence, which is a new
+  reply rather than a pause in one, and it no longer holds down a wearer
+  who is already talking once the canceller has adapted. Steady-state echo
+  removal is unchanged.
 
 ### Documentation
 
