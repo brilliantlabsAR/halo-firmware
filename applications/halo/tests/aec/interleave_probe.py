@@ -134,7 +134,7 @@ async def main():
             "frame.microphone.aec(true) frame.microphone.diag('zero') "
             f"frame.speaker.start{{sample_rate={SR}, channels=1, "
             f"volume={args.volume}}} "
-            "frame.microphone.start{encoder='lc3', sample_rate=16000, "
+            "frame.microphone.start{encoder='lc3', aec=true, sample_rate=16000, "
             "bitrate=32000, channels=1} "
             "burst='' local hi=string.rep('\\x00\\x18',16) "
             "local lo=string.rep('\\x00\\xe8',16) "

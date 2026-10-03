@@ -113,8 +113,8 @@ async def run_pass(b, aec_on, volume, seconds):
         "print('ok2')",
         await_print=True, timeout=10)
     await b.send_lua(
-        f"frame.microphone.start{{encoder='lc3', sample_rate={SR}, "
-        f"bitrate={BITRATE}, channels=1}} capt={{}} capn=0 "
+        f"frame.microphone.start{{encoder='lc3', aec={'true' if aec_on else 'false'}, sample_rate={SR}, "
+        f"bitrate={BITRATE}, channels=1}} frame.microphone.diag('zero') capt={{}} capn=0 "
         f"for i=1,{int(LEAD_S * 100)} do drainf() frame.sleep(0.01) end "
         "print('ok3')",
         await_print=True, timeout=30)
@@ -135,14 +135,35 @@ async def run_pass(b, aec_on, volume, seconds):
     print(f"  device captured {printed[-1]} LC3 bytes")
 
     if aec_on:
-        printed.clear()
+        # Dump the whole diagnostics table in small key groups: one REPL
+        # command and one print notification each (payload/MTU bounded,
+        # await_print sees only the first notification).
+        groups = (
+            "w_norm2 fd_wnorm2 p_ref p_err p_mic",
+            "resyncs norm_clamps ref_underruns ref_pads ref_skew_adj",
+            "feed_gaps feed_gap_ms emit_refines emit_refine_ms",
+            "cap_refines cap_refine_ms emit_late emit_late_ms",
+            "cap_late cap_late_ms cap_late_floor mic_lost",
+            "cap_slips cap_slip_ms emit_slips emit_slip_ms",
+            "margin_last margin_min margin_max",
+            "mic_frames mic_us mic_runs ref_frames ref_us ref_runs",
+            "sup_gmin sup_gmean sup_sy sup_se sup_onset",
+            "sup_gate_fast sup_gate_floor sup_gate_mid sup_gate_rel sup_pb_hold",
+            "pdm_popped pdm_dropped pdm_discarded pdm_overflows",
+            "pdm_isrs pdm_lost_est pdm_gap_max_us pdm_gap_over",
+            "spk_real_sends spk_silence_sends spk_err_completions",
+            "spk_tap_drops spk_cb_send_fails",
+        )
         await b.send_lua(
-            "local s=frame.microphone.diag('stats') "
-            "print(s.w_norm2..' '..s.p_ref..' '..s.p_err..' '..s.p_mic..' '"
-            "..s.resyncs..' '..s.norm_clamps..' '..s.ref_underruns..' '..s.ref_pads..' '..s.feed_gaps..' '..s.feed_gap_ms)",
-            await_print=True, timeout=10)
-        print(f"  aec stats (w_norm2 p_ref p_err p_mic resyncs clamps underruns pads gaps gap_ms): "
-              f"{printed[-1]}")
+            "dg=function(...) local s=frame.microphone.diag('stats') local o='' "
+            "for _,k in ipairs({...}) do o=o..k..'='..tostring(s[k])..' ' end print(o) end")
+        await asyncio.sleep(0.2)
+        print("  aec diag('stats'):")
+        for g in groups:
+            args = ",".join(f"'{k}'" for k in g.split())
+            printed.clear()
+            await b.send_lua(f"dg({args})", await_print=True, timeout=10)
+            print(f"    {printed[-1]}")
 
     # retrieve byte-exact (same proven loop as loopback_lfs.py)
     rx = bytearray()
