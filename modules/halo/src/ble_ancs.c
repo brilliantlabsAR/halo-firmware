@@ -790,7 +790,10 @@ static void ancs_finish_command(int status)
  * Called with ctx.lock held. Returns true when complete. */
 static bool response_is_complete(void)
 {
-	uint16_t off;
+	/* 32-bit on purpose: a hostile or corrupt TLV length near 0xFFFF would
+	 * wrap a uint16_t offset back below resp_len, pass the check in the
+	 * loop below and declare a truncated response complete. */
+	uint32_t off;
 	uint8_t tlv_count = 0;
 	uint8_t expected;
 
