@@ -105,6 +105,54 @@ builds: outside the duck the wearer is still held under the -12dB steady
 cap on most blocks because the envelope gate releases only
 intermittently on a speech-like reference (gate tuning, not the duck).
 
+Check 23 covers runtime tuning (`frame.microphone.aec_tune`, 2026-10-04),
+through the same C API the Lua binding calls (`audio_aec_tune_set/get/
+defaults`): the defaults equal the compile-time constants (mirrored in
+test_aec.c with the same `-D` hooks, so it holds under overrides too) and
+the key table covers the whole struct; out-of-range, NaN, hold > onset,
+`rearm_ms` 0 and `onset_gate_lift` 3, and NaN, +inf and -inf in every
+float key, are rejected with nothing applied; every float key accepts its
+min and its max (the ranges are inclusive; among them `fd_mu` 0.05 and
+`gate_fast_a`/`gate_mid_a` 0.001, which the Lua binding once rejected by
+comparing a float bound widened to double); and a live change takes effect
+from the next block (check 19's scenario re-arms 5 times at `rearm_ms` 160
+and 0 times after `'defaults'`). `rearm_ms` raised from 1000 to 5000
+after enable, or after a speaker close, must still duck the first reply
+(enable and the bypass preset the re-arm count to full, not to the
+hold-off of that moment). `onset_ms` 0 must turn off only the reply-onset
+duck: a new reply after a long gap is not ducked, and the fail-safe duck
+after a backlog flush (check 16c's walk-off) still ducks with its fixed
+shape: with a talker, the gate lift off and `steady_gcap` 1 (so the duck
+eases toward no ceiling whatever the gate does), the talker's out-in is ~-16dB
+over the held first half of that duck and rises ~9dB over the eased second
+half (it stayed flat when that duck borrowed the onset ease and `onset_ms`
+0 held it at full depth for the whole second).
+
+The device builds audio_aec.c with `-O3 -ffast-math`, under which GCC
+assumes no NaN and folds a plain `!(v >= min && v <= max)` so that NaN
+passes it; `audio_aec_tune_check()` therefore tests the float bit pattern.
+To run the suite the way the device compiles the file, add the flags to the
+FDAF build (all checks pass that way too):
+
+    gcc -O3 -ffast-math -Wall ... -DCONFIG_HALO_AUDIO_AEC_FDAF=1 ...
+
+Apple clang on arm64 does not reproduce the fold (its inverted compare
+happens to reject NaN), so on a Mac the NaN rejection is only proven on
+the device compiler: build audio_aec.c with arm-zephyr-eabi-gcc and the
+flags from `build/halo/compile_commands.json`, and check in the
+disassembly of `audio_aec_tune_check` that the exponent test (`0x7f800000`)
+comes before the float compares. A GCC host build with `-ffast-math`
+exercises it directly.
+
+`AEC_TUNE="key=value,..." ./test_aec_fd` applies a runtime set before
+the first block. `./tune_equiv.sh` builds the FDAF harness with a `-D`
+override and diffs its whole output against the default build run with
+the equivalent `AEC_TUNE` (check 23 excluded, since it reads the
+defaults): `rearm_ms=160` vs `-DAEC_SUP_ONSET_REARM_MS=160` (check 19
+fails identically, 6 re-arms), `gate_kappa=0.3` vs
+`-DAEC_SUP_GATE_KAPPA=0.3f`, a two-key gate set, and an explicit default.
+All must print SAME.
+
 Both filter cores build from the same file:
 
     cd applications/halo/tests/aec/host

@@ -7,6 +7,7 @@
  * mic processed in 20ms mono int16 blocks. Echo = ref * synthetic IR with
  * 300-sample bulk delay, ~-30dB, plus -70dBFS mic noise.
  */
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -424,12 +425,175 @@ static void check(const char *name, int ok, const char *detail)
 	failures += !ok;
 }
 
+/* AEC_TUNE="key=value,key=value": apply a runtime tune set (the same C
+ * API frame.microphone.aec_tune calls) before the first block. With it,
+ * the whole run must match a build with the equivalent -D override
+ * (tune_equiv.sh diffs the two).
+ */
+static void apply_env_tune(void)
+{
+	const char *env = getenv("AEC_TUNE");
+
+	if (env == NULL || *env == '\0') {
+		return;
+	}
+
+	struct audio_aec_tune t;
+	size_t nk;
+	const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
+	char spec[512];
+
+	audio_aec_tune_get(&t);
+	snprintf(spec, sizeof(spec), "%s", env);
+	for (char *kv = strtok(spec, ","); kv; kv = strtok(NULL, ",")) {
+		char *eq = strchr(kv, '=');
+		const struct audio_aec_tune_key *k = NULL;
+
+		if (eq == NULL) {
+			fprintf(stderr, "AEC_TUNE: bad item '%s'\n", kv);
+			exit(2);
+		}
+		*eq = '\0';
+		for (size_t i = 0; i < nk; i++) {
+			if (strcmp(keys[i].name, kv) == 0) {
+				k = &keys[i];
+			}
+		}
+		if (k == NULL) {
+			fprintf(stderr, "AEC_TUNE: unknown key '%s'\n", kv);
+			exit(2);
+		}
+		uint8_t *f = (uint8_t *)&t + k->offset;
+
+		if (k->type == AUDIO_AEC_TUNE_U32) {
+			uint32_t u = (uint32_t)strtoul(eq + 1, NULL, 10);
+
+			memcpy(f, &u, sizeof(u));
+		} else {
+			float v = strtof(eq + 1, NULL);
+
+			memcpy(f, &v, sizeof(v));
+		}
+	}
+	if (audio_aec_tune_set(&t) != 0) {
+		fprintf(stderr, "AEC_TUNE: rejected (%s)\n",
+			audio_aec_tune_check(&t));
+		exit(2);
+	}
+}
+
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+/* the compile-time defaults, mirrored with the same -D override hooks as
+ * audio_aec.c, for the defaults-equal-constants check (23)
+ */
+#ifndef AEC_SUP_BETA
+#define AEC_SUP_BETA 1.5f
+#endif
+#ifndef AEC_SUP_FLOOR
+#define AEC_SUP_FLOOR 0.1f
+#endif
+#ifndef AEC_SUP_ONSET_GCAP
+#define AEC_SUP_ONSET_GCAP 0.02f
+#endif
+#ifndef AEC_SUP_ONSET_BETA
+#define AEC_SUP_ONSET_BETA 4.0f
+#endif
+#ifndef AEC_SUP_ONSET_FLOOR
+#define AEC_SUP_ONSET_FLOOR 0.02f
+#endif
+#ifndef AEC_SUP_ONSET_HOPS
+#define AEC_SUP_ONSET_HOPS 45
+#endif
+#ifndef AEC_SUP_ONSET_HOLD_HOPS
+#define AEC_SUP_ONSET_HOLD_HOPS 20
+#endif
+#ifndef AEC_SUP_ONSET_REARM_MS
+#define AEC_SUP_ONSET_REARM_MS 1000
+#endif
+#ifndef AEC_SUP_RESYNC_HOPS
+#define AEC_SUP_RESYNC_HOPS 50
+#endif
+#ifndef AEC_SUP_ONSET_GATE_LIFT
+#define AEC_SUP_ONSET_GATE_LIFT 2
+#endif
+#ifndef AEC_SUP_STEADY_GCAP
+#define AEC_SUP_STEADY_GCAP 0.25f
+#endif
+#ifndef AEC_SUP_GATE_KAPPA
+#define AEC_SUP_GATE_KAPPA 0.15f
+#endif
+#ifndef AEC_SUP_GATE_FAST_A
+#define AEC_SUP_GATE_FAST_A 0.5f
+#endif
+#ifndef AEC_SUP_GATE_FLOOR_A
+#define AEC_SUP_GATE_FLOOR_A 0.01f
+#endif
+#ifndef AEC_SUP_GATE_RATIO
+#define AEC_SUP_GATE_RATIO 2.0f
+#endif
+#ifndef AEC_SUP_GATE_ABSFLOOR
+#define AEC_SUP_GATE_ABSFLOOR 0.5f
+#endif
+#ifndef AEC_SUP_GATE_HANG
+#define AEC_SUP_GATE_HANG 50
+#endif
+#ifndef AEC_SUP_GATE_MID_A
+#define AEC_SUP_GATE_MID_A 0.08f
+#endif
+#ifndef AEC_SUP_GATE_EDGE_ABS
+#define AEC_SUP_GATE_EDGE_ABS 0.6f
+#endif
+#ifndef AEC_SUP_GATE_EDGE_RATIO
+#define AEC_SUP_GATE_EDGE_RATIO 1.4f
+#endif
+#ifndef AEC_SUP_GATE_PREF_MIN
+#define AEC_SUP_GATE_PREF_MIN 0.05f
+#endif
+#ifndef AEC_SUP_PLAYBACK_HOLD_MS
+#define AEC_SUP_PLAYBACK_HOLD_MS 400
+#endif
+#ifndef AEC_FD_MU
+#define AEC_FD_MU 0.25f
+#endif
+
+/* check 19's scenario, shortened: warm speech reply with the wearer over
+ * it; returns the number of onset-duck re-arms
+ */
+static int pause_rearms(int *crushed, int *nexc)
+{
+	unsigned prev_on = 0;
+	int rearms = 0;
+
+	*crushed = 0;
+	*nexc = 0;
+	audio_aec_enable(true);
+	for (int b = 0; b < 300; b++) step(4);
+	near2_amp = 0.6f;
+	for (int b = 0; b < 500; b++) {
+		struct blkstat s = step(4);
+		struct audio_aec_stats st;
+		size_t nt;
+
+		audio_aec_snapshot(&st, &nt);
+		if (st.sup_onset > prev_on) rearms++;
+		prev_on = st.sup_onset;
+		if (b >= 3 && s.near_rms > -40.0f) {
+			(*nexc)++;
+			*crushed += (s.out_rms - s.in_rms) < -15.0f;
+		}
+	}
+	near2_amp = 0.0f;
+	return rearms;
+}
+#endif
+
 int main(int argc, char **argv)
 {
-	char buf[128];
+	char buf[192];
 
 	verbose = argc > 1;
 	make_ir();
+	apply_env_tune();
 
 	/* --- 1. baseline convergence: 8s active, ERLE over the last 2s --- */
 	audio_aec_enable(true);
@@ -1522,6 +1686,249 @@ int main(int argc, char **argv)
 			 nexc ? exc[nexc / 2] : -1000.0f);
 		check("wearer talking into a new reply is not cut",
 		      nexc > 15 && armed && crushed * 10 < nexc, buf);
+	}
+
+	/* --- 23. runtime tuning (frame.microphone.aec_tune's C API) ------ */
+	{
+		struct audio_aec_tune d, cur, bad, saved;
+		const struct audio_aec_tune exp = {
+			.sup_beta = AEC_SUP_BETA,
+			.sup_floor = AEC_SUP_FLOOR,
+			.onset_gcap = AEC_SUP_ONSET_GCAP,
+			.onset_beta = AEC_SUP_ONSET_BETA,
+			.onset_floor = AEC_SUP_ONSET_FLOOR,
+			.onset_ms = AEC_SUP_ONSET_HOPS * 20,
+			.onset_hold_ms = AEC_SUP_ONSET_HOLD_HOPS * 20,
+			.rearm_ms = AEC_SUP_ONSET_REARM_MS,
+			.onset_gate_lift = AEC_SUP_ONSET_GATE_LIFT,
+			.steady_gcap = AEC_SUP_STEADY_GCAP,
+			.gate_kappa = AEC_SUP_GATE_KAPPA,
+			.gate_fast_a = AEC_SUP_GATE_FAST_A,
+			.gate_floor_a = AEC_SUP_GATE_FLOOR_A,
+			.gate_ratio = AEC_SUP_GATE_RATIO,
+			.gate_absfloor = AEC_SUP_GATE_ABSFLOOR,
+			.gate_hang_ms = AEC_SUP_GATE_HANG * 20,
+			.gate_mid_a = AEC_SUP_GATE_MID_A,
+			.gate_edge_abs = AEC_SUP_GATE_EDGE_ABS,
+			.gate_edge_ratio = AEC_SUP_GATE_EDGE_RATIO,
+			.gate_pref_min = AEC_SUP_GATE_PREF_MIN,
+			.playback_hold_ms = AEC_SUP_PLAYBACK_HOLD_MS,
+			.fd_mu = AEC_FD_MU,
+		};
+		size_t nk;
+		const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
+
+		audio_aec_tune_get(&saved);
+		audio_aec_tune_defaults(&d);
+		/* (a) defaults == the compile-time constants, field by field
+		 * through the key table (also proves the table covers the
+		 * whole struct), and each default is inside its range */
+		int same = memcmp(&d, &exp, sizeof(d)) == 0 &&
+			   nk * 4 == sizeof(struct audio_aec_tune) &&
+			   audio_aec_tune_check(&d) == NULL;
+		for (size_t i = 0; i < nk; i++) {
+			same &= keys[i].offset == 4 * i;
+		}
+		snprintf(buf, sizeof(buf), "%zu keys, defaults %s",
+			 nk, same ? "match" : "DIFFER");
+		check("aec_tune defaults == compile-time constants", same, buf);
+
+		/* validation: out of range, NaN, hold > onset, below-one-block
+		 * rearm; each rejected with nothing applied */
+		int rej = 0, ntry = 0;
+		audio_aec_tune_set(&d);
+		bad = d; bad.gate_kappa = -0.1f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.gate_fast_a = NAN;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.onset_hold_ms = bad.onset_ms + 20;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.rearm_ms = 0;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.onset_gate_lift = 3;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		/* NaN and +-inf in every float key. audio_aec.c builds with
+		 * -ffast-math on the device, where GCC folds a plain range
+		 * test so that NaN passes it: the check must not rely on it */
+		for (size_t i = 0; i < nk; i++) {
+			const float nf[3] = {NAN, INFINITY, -INFINITY};
+
+			if (keys[i].type != AUDIO_AEC_TUNE_FLOAT) {
+				continue;
+			}
+			for (int j = 0; j < 3; j++) {
+				volatile float v = nf[j];
+				float vv = v;
+
+				bad = d;
+				memcpy((uint8_t *)&bad + keys[i].offset, &vv,
+				       sizeof(vv));
+				ntry++;
+				rej += audio_aec_tune_set(&bad) == -EINVAL;
+			}
+		}
+		audio_aec_tune_get(&cur);
+		int unchanged = memcmp(&cur, &d, sizeof(d)) == 0;
+		snprintf(buf, sizeof(buf), "%d/%d rejected, values %s", rej,
+			 ntry, unchanged ? "unchanged" : "CHANGED");
+		check("aec_tune rejects bad sets, applies nothing",
+		      rej == ntry && unchanged, buf);
+
+		/* the documented ranges are inclusive: every float key takes
+		 * its min and its max, among them fd_mu 0.05, gate_fast_a and
+		 * gate_mid_a 0.001 (the Lua binding compares as float too) */
+		int acc = 0, nacc = 0;
+		for (size_t i = 0; i < nk; i++) {
+			if (keys[i].type != AUDIO_AEC_TUNE_FLOAT) {
+				continue;
+			}
+			for (int j = 0; j < 2; j++) {
+				float v = j ? keys[i].max : keys[i].min;
+
+				cur = d;
+				memcpy((uint8_t *)&cur + keys[i].offset, &v,
+				       sizeof(v));
+				nacc++;
+				acc += audio_aec_tune_set(&cur) == 0;
+			}
+		}
+		cur = d;
+		cur.fd_mu = 0.05f;
+		cur.gate_fast_a = 0.001f;
+		cur.gate_mid_a = 0.001f;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
+		audio_aec_tune_set(&d);
+		snprintf(buf, sizeof(buf),
+			 "%d/%d accepted (incl. fd_mu 0.05, gate_fast_a/gate_mid_a 0.001)",
+			 acc, nacc);
+		check("aec_tune accepts the inclusive bounds", acc == nacc, buf);
+
+		/* (b) a runtime change takes effect on the next block: the old
+		 * 160 ms re-arm brings check 19's re-arms back, the defaults
+		 * remove them again (tune_equiv.sh shows the runtime set and
+		 * the -D override give byte-identical runs) */
+		int cr1, n1, cr2, n2;
+		struct audio_aec_stats st;
+		size_t nt;
+		cur = d;
+		cur.rearm_ms = 160;
+		audio_aec_tune_set(&cur);
+		int r160 = pause_rearms(&cr1, &n1);
+		audio_aec_snapshot(&st, &nt);
+		uint32_t gen1 = st.tune_gen;
+		audio_aec_tune_set(&d);
+		int rdef = pause_rearms(&cr2, &n2);
+		snprintf(buf, sizeof(buf),
+			 "rearm_ms 160: %d re-arms, %d/%d cut; defaults: %d, %d/%d (gen %u)",
+			 r160, cr1, n1, rdef, cr2, n2, (unsigned)gen1);
+		check("aec_tune applies live (rearm_ms)",
+		      r160 >= 3 && (d.rearm_ms < 600 || rdef == 0), buf);
+
+		/* (c) rearm_ms raised after the session began: enable and the
+		 * speaker-idle bypass preset the re-arm count to full, not to
+		 * the hold-off of that moment, so the first reply is still
+		 * ducked. Path 0 raises it after enable, path 1 after a
+		 * speaker close (bypass). The 1.2 s after enable lets the
+		 * enable's own resync duck run out first. */
+		int armed_c[2], busy = 0;
+		for (int path = 0; path < 2; path++) {
+			audio_aec_tune_set(&d);
+			audio_aec_enable(true);
+			for (int b = 0; b < 60; b++) step(2);
+			if (path == 1) {
+				for (int b = 0; b < 100; b++) step(4);
+				for (int b = 0; b < 30; b++) step(0);
+				for (int b = 0; b < 10; b++) step(2);
+			}
+			cur = d;
+			cur.rearm_ms = 5000;
+			audio_aec_tune_set(&cur);
+			for (int b = 0; b < 10; b++) step(2);
+			audio_aec_snapshot(&st, &nt);
+			busy |= st.sup_onset > 0;
+			armed_c[path] = 0;
+			for (int b = 0; b < 10; b++) {
+				step(4);
+				audio_aec_snapshot(&st, &nt);
+				armed_c[path] |= st.sup_onset > 0;
+			}
+		}
+		audio_aec_tune_set(&d);
+		snprintf(buf, sizeof(buf),
+			 "rearm_ms 1000 -> 5000: first reply after enable %s, after a speaker close %s",
+			 armed_c[0] ? "ducked" : "NOT ducked",
+			 armed_c[1] ? "ducked" : "NOT ducked");
+		check("aec_tune raised rearm_ms ducks 1st reply",
+		      !busy && armed_c[0] && armed_c[1], buf);
+
+		/* (d) onset_ms 0 turns the reply-onset duck off, and only that:
+		 * a new reply after a long gap is not ducked, while the
+		 * ref-unreliable / resync fail-safe duck keeps its own fixed
+		 * shape (a backlog flush walks the window off the ring, as in
+		 * check 16c). A talker speaks over the reply with the gate
+		 * lift off, so the duck's ceiling applies to the talker, and
+		 * steady_gcap 1, so the duck eases toward no ceiling. Its
+		 * mean out-in over the held half of the duck (1-25 blocks
+		 * after its last reload) must be ducked, and over the eased
+		 * half (26-50) it must come back up (~9 dB); a duck held at
+		 * full depth for its whole length does not rise. */
+		struct audio_aec_tune z = d;
+		z.onset_ms = 0;
+		z.onset_hold_ms = 0;
+		int reply_ducked = 0;
+		audio_aec_tune_set(&z);
+		audio_aec_enable(true);
+		for (int b = 0; b < 300; b++) step(4);
+		for (int b = 0; b < 75; b++) step(2); /* 1.5s gap */
+		for (int b = 0; b < 50; b++) {
+			step(4);
+			audio_aec_snapshot(&st, &nt);
+			reply_ducked |= st.sup_onset > 0;
+		}
+		float half[2] = {0.0f, 0.0f};
+		float exc[600];
+		int last = -1;
+
+		z.onset_gate_lift = 0;
+		z.steady_gcap = 1.0f; /* ease toward no ceiling, whatever the gate */
+		audio_aec_tune_set(&z);
+		audio_aec_enable(true);
+		for (int b = 0; b < 250; b++) step(4);
+		near2_amp = 0.6f;
+		flush_mic(5);
+		for (int b = 0; b < 600; b++) {
+			struct blkstat s = step(4);
+
+			audio_aec_snapshot(&st, &nt);
+			exc[b] = (s.near_rms > -28.0f) ? s.out_rms - s.in_rms : NAN;
+			if (st.sup_onset == AEC_SUP_RESYNC_HOPS - 1 && b < 550) {
+				last = b;
+			}
+		}
+		near2_amp = 0.0f;
+		for (int h = 0; h < 2 && last >= 0; h++) {
+			double sum = 0;
+			int n = 0;
+
+			for (int b = last + 1 + 25 * h; b < last + 26 + 25 * h; b++) {
+				if (!isnan(exc[b])) {
+					sum += exc[b];
+					n++;
+				}
+			}
+			half[h] = n ? (float)(sum / n) : 0.0f;
+		}
+		audio_aec_tune_set(&d);
+		snprintf(buf, sizeof(buf),
+			 "reply %s; fail-safe duck %s, talker held %.1f, eased %.1f dB",
+			 reply_ducked ? "DUCKED" : "not ducked",
+			 last >= 0 ? "armed" : "NOT armed", half[0], half[1]);
+		check("aec_tune onset_ms 0: fail-safe duck only",
+		      !reply_ducked && last >= 0 && half[0] < -10.0f &&
+			      half[1] - half[0] > 4.0f,
+		      buf);
+		audio_aec_tune_set(&saved);
 	}
 #endif
 	printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "OK",

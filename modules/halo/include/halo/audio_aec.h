@@ -79,6 +79,89 @@ void audio_aec_suppress(bool enable);
 bool audio_aec_is_suppressed(void);
 
 /**
+ * @brief Runtime barge-in tunables (FDAF build).
+ *
+ * Every field defaults to the matching compile-time AEC_SUP_* / AEC_FD_MU
+ * constant in audio_aec.c. Durations are in milliseconds; the hop-counted
+ * ones (onset_ms, onset_hold_ms, rearm_ms, gate_hang_ms) are truncated to
+ * whole 20ms blocks. Device-global, kept across sessions and enable(),
+ * reset to the defaults at boot (not persisted). Exposed to Lua as
+ * frame.microphone.aec_tune().
+ */
+struct audio_aec_tune {
+	float sup_beta;            /**< AEC_SUP_BETA */
+	float sup_floor;           /**< AEC_SUP_FLOOR */
+	float onset_gcap;          /**< AEC_SUP_ONSET_GCAP */
+	float onset_beta;          /**< AEC_SUP_ONSET_BETA */
+	float onset_floor;         /**< AEC_SUP_ONSET_FLOOR */
+	uint32_t onset_ms;         /**< AEC_SUP_ONSET_HOPS x 20 */
+	uint32_t onset_hold_ms;    /**< AEC_SUP_ONSET_HOLD_HOPS x 20 */
+	uint32_t rearm_ms;         /**< AEC_SUP_ONSET_REARM_MS */
+	uint32_t onset_gate_lift;  /**< AEC_SUP_ONSET_GATE_LIFT (0, 1, 2) */
+	float steady_gcap;         /**< AEC_SUP_STEADY_GCAP */
+	float gate_kappa;          /**< AEC_SUP_GATE_KAPPA */
+	float gate_fast_a;         /**< AEC_SUP_GATE_FAST_A */
+	float gate_floor_a;        /**< AEC_SUP_GATE_FLOOR_A */
+	float gate_ratio;          /**< AEC_SUP_GATE_RATIO */
+	float gate_absfloor;       /**< AEC_SUP_GATE_ABSFLOOR */
+	uint32_t gate_hang_ms;     /**< AEC_SUP_GATE_HANG x 20 */
+	float gate_mid_a;          /**< AEC_SUP_GATE_MID_A */
+	float gate_edge_abs;       /**< AEC_SUP_GATE_EDGE_ABS */
+	float gate_edge_ratio;     /**< AEC_SUP_GATE_EDGE_RATIO */
+	float gate_pref_min;       /**< AEC_SUP_GATE_PREF_MIN */
+	uint32_t playback_hold_ms; /**< AEC_SUP_PLAYBACK_HOLD_MS */
+	float fd_mu;               /**< AEC_FD_MU */
+};
+
+/** @brief Field type of an audio_aec_tune key. */
+enum audio_aec_tune_type {
+	AUDIO_AEC_TUNE_FLOAT,
+	AUDIO_AEC_TUNE_U32,
+};
+
+/** @brief One audio_aec_tune field: name, location, type and valid range. */
+struct audio_aec_tune_key {
+	const char *name;  /**< snake_case key, as used by Lua */
+	uint16_t offset;   /**< offsetof(struct audio_aec_tune, field) */
+	uint8_t type;      /**< enum audio_aec_tune_type */
+	float min;         /**< inclusive */
+	float max;         /**< inclusive */
+};
+
+/**
+ * @brief The tunable keys, in struct order.
+ *
+ * @param count Receives the number of keys (0 in the time-domain build)
+ * @return The key table
+ */
+const struct audio_aec_tune_key *audio_aec_tune_keys(size_t *count);
+
+/**
+ * @brief Validate a full parameter set without applying it.
+ *
+ * @return NULL if valid, else the name of the first offending key
+ */
+const char *audio_aec_tune_check(const struct audio_aec_tune *t);
+
+/**
+ * @brief Apply a full parameter set, all or nothing.
+ *
+ * Validates every field (audio_aec_tune_check) and publishes the set under
+ * a spinlock with a generation bump; the mic thread picks it up at the
+ * start of its next block, so every block runs on one consistent set.
+ * Safe from any thread context.
+ *
+ * @return 0, -EINVAL (nothing applied) or -ENOTSUP (time-domain build)
+ */
+int audio_aec_tune_set(const struct audio_aec_tune *t);
+
+/** @brief Read the current (last published) parameter set. */
+void audio_aec_tune_get(struct audio_aec_tune *t);
+
+/** @brief Read the compile-time defaults. */
+void audio_aec_tune_defaults(struct audio_aec_tune *t);
+
+/**
  * @brief Feed far-end reference PCM (what the speaker just emitted).
  *
  * ISR-safe: called from the speaker driver's DMA completion callback,
@@ -167,6 +250,14 @@ struct audio_aec_stats {
 			     *   cap this block (real playback active but p_ref
 			     *   collapsed to ~0) that PREF_MIN would have lifted.
 			     *   Nonzero during a barge-flush feed-starvation. */
+	uint32_t tune_gen;  /**< generation of the audio_aec_tune set the mic
+			     *   thread is running (1 = boot defaults; bumps on
+			     *   every audio_aec_tune_set) */
+	uint32_t ref_quiet; /**< ref-silent blocks since the last active one,
+			     *   saturating at UINT32_MAX; enable and speaker
+			     *   idle preset it there (full). The onset duck
+			     *   re-arms on the next rising edge once it reaches
+			     *   the re-arm hold-off */
 	float p_ref;        /**< smoothed high-passed reference power */
 	float p_err;        /**< smoothed high-passed error power */
 	float p_mic;        /**< smoothed high-passed mic power */

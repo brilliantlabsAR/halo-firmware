@@ -13,3 +13,7 @@ static inline bool atomic_cas(atomic_t *p, atomic_val_t old, atomic_val_t nv)
 	*p = nv;
 	return true;
 }
+static inline atomic_val_t atomic_inc(atomic_t *p)
+{
+	return (*p)++;
+}
