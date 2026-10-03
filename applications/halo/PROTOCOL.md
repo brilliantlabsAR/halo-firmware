@@ -1142,6 +1142,9 @@ Initializes the speaker.
   a gap. Any other change stops the stream and starts a new one, which can
   lose the audio already inside the device. `budget` is fixed when a stream
   starts, so changing it restarts the stream.
+- **Standby:** a stream that is running when the device enters standby
+  pauses. Audio sent during standby waits in the receive buffer (8 KB) and
+  plays when the device wakes; the stream does not need restarting.
 - **Streaming over AUDIO RX:** writes to the audio characteristic do not need
   to line up with LC3 frames or PCM samples (MTU-sized chunks are fine); a
   frame split across two writes is joined before decoding.
@@ -1266,7 +1269,7 @@ Counts what happened to speaker audio at each stage, so audio that never played 
   | `decode_errors` | Frames the LC3 decoder failed on |
   | `bytes_misaligned` | Bytes of an incomplete frame (LC3) or sample (PCM) still waiting for the rest of its bytes when the stream stopped or restarted. Writes can be split anywhere; only a stream that ends mid-frame leaves bytes here. |
   | `frames_dropped_stop` | LC3 frames received but discarded because the stream stopped or restarted |
-  | `frames_write_failed` | Decoded frames the speaker refused (stopped, in standby, or taken over by LE Audio) |
+  | `frames_write_failed` | Decoded frames the speaker refused (stopped, or taken over by LE Audio) |
   | `pcm_bytes`, `pcm_bytes_failed` | PCM bytes played / refused (PCM streams and `play()`) |
   | `blocks_played` | Audio blocks sent to the amplifier. One block is one decoded LC3 frame from the stream, or up to 20 ms of PCM. |
   | `silence_blocks` | Silence blocks the amplifier played because a stream was open with no audio queued (between replies, or when audio arrives late). Keeps the echo canceller's reference continuous; in AEC builds (the default) this applies whether or not the mic is running. |

@@ -50,7 +50,9 @@ static struct {
 	K_THREAD_STACK_MEMBER(stack, CONFIG_HALO_LUA_SPEAKER_TASK_STACK_SIZE);
 	struct k_sem sem;
 	struct k_sem stream_exit_sem; /* Signals when thread exits streaming loop */
+	struct k_sem resume_sem;      /* Wakes a pump parked for standby */
 	bool thread_should_exit;
+	bool suspended; /* standby: the pump leaves audio in the ring */
 
 	/* Configuration */
 	bool use_lc3;
@@ -203,17 +205,33 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 		}
 
 		while (speaker_state.is_streaming && !speaker_state.thread_should_exit) {
+			/* In standby the speaker is off: leave incoming audio in
+			 * the ring until RESUME instead of feeding it to a
+			 * stopped speaker. The timeout re-checks is_streaming
+			 * so a stop() during standby still ends the loop.
+			 */
+			if (speaker_state.suspended) {
+				k_sem_take(&speaker_state.resume_sem, K_MSEC(500));
+				continue;
+			}
+
 			/* Read audio data from BLE, after any partial frame
-			 * carried over from the previous read
+			 * carried over from the previous read. A buffer that
+			 * is already full (parked by a suspend) is processed
+			 * without reading.
 			 */
 			size_t carry = speaker_state.carry_len;
-			int32_t got = halo_ble_lua_audio_read(
-				speaker_state.ble_buffer + carry,
-				LUA_SPEAKER_AUDIO_BUFFER_SIZE - carry, K_MSEC(500));
+			int32_t got = 0;
 
-			if (got <= 0) {
-				k_sleep(K_MSEC(10));
-				continue;
+			if (carry < LUA_SPEAKER_AUDIO_BUFFER_SIZE) {
+				got = halo_ble_lua_audio_read(
+					speaker_state.ble_buffer + carry,
+					LUA_SPEAKER_AUDIO_BUFFER_SIZE - carry, K_MSEC(500));
+
+				if (got <= 0) {
+					k_sleep(K_MSEC(10));
+					continue;
+				}
 			}
 
 			k_mutex_lock(&speaker_state.mutex, K_FOREVER);
@@ -232,6 +250,15 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 				speaker_state.carry_len = unit > 0 ? len % unit : 0;
 				k_mutex_unlock(&speaker_state.mutex);
 				break;
+			}
+
+			/* Suspended while this read was in progress: keep it
+			 * all for after RESUME
+			 */
+			if (speaker_state.suspended) {
+				speaker_state.carry_len = len;
+				k_mutex_unlock(&speaker_state.mutex);
+				continue;
 			}
 
 			/* Keep the tail that is not a whole unit for the next
@@ -355,8 +382,17 @@ static void speaker_cleanup_audio_resources(void)
 		}
 	}
 
-	/* A partial frame still waiting for the rest of its bytes is lost */
-	spk_cnt.bytes_misaligned += speaker_state.carry_len;
+	/* Audio still held in ble_buffer is lost: whole frames (parked by a
+	 * suspend) and a partial frame waiting for the rest of its bytes
+	 */
+	size_t unit = speaker_stream_unit();
+
+	if (speaker_state.use_lc3 && unit > 0) {
+		spk_cnt.frames_dropped_stop += speaker_state.carry_len / unit;
+		spk_cnt.bytes_misaligned += speaker_state.carry_len % unit;
+	} else {
+		spk_cnt.bytes_misaligned += unit > 0 ? speaker_state.carry_len % unit : 0;
+	}
 	speaker_state.carry_len = 0;
 
 	/* Free buffers (Lua-owned resources) */
@@ -991,6 +1027,7 @@ static void lua_speaker_cleanup(void)
 
 	/* Finally stop thread */
 	speaker_stop_thread();
+	speaker_state.suspended = false;
 
 	/* Don't leave this VM's audio to the next one's first stream */
 	halo_ble_lua_audio_flush();
@@ -1026,6 +1063,11 @@ static int speaker_service_event_handler(halo_lua_event_t event, void *user_data
 		if (speaker_state.speaker) {
 			audio_speaker_stop(speaker_state.speaker);
 		}
+		/* Park the pump (only when a RESUME will follow to release it) */
+		if (was_streaming) {
+			k_sem_reset(&speaker_state.resume_sem);
+			speaker_state.suspended = true;
+		}
 		k_mutex_unlock(&speaker_state.mutex);
 		/* Return 0 if was streaming (needs resume), 1 if not */
 		ret = was_streaming ? 0 : 1;
@@ -1036,6 +1078,8 @@ static int speaker_service_event_handler(halo_lua_event_t event, void *user_data
 		if (speaker_state.speaker && speaker_state.is_streaming) {
 			audio_speaker_start(speaker_state.speaker);
 		}
+		speaker_state.suspended = false;
+		k_sem_give(&speaker_state.resume_sem);
 		k_mutex_unlock(&speaker_state.mutex);
 		break;
 
@@ -1085,6 +1129,7 @@ int lua_open_speaker_library(lua_State *L)
 	k_mutex_init(&speaker_state.mutex);
 	k_sem_init(&speaker_state.sem, 0, 1);
 	k_sem_init(&speaker_state.stream_exit_sem, 0, 1);
+	k_sem_init(&speaker_state.resume_sem, 0, 1);
 
 	/* Get or create frame table */
 	lua_getglobal(L, "frame");
