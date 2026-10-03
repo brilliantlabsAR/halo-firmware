@@ -389,6 +389,8 @@ static void speaker_stop_thread(void)
  *
  * Start speaker playback with configuration.
  * Can be called multiple times to reconfigure (will stop and restart).
+ * Arguments are validated first: a bad one raises an error and leaves any
+ * running stream untouched.
  *
  * @param config Table with fields:
  *   - encoder: "pcm" or "lc3" (default: "pcm")
@@ -421,19 +423,9 @@ static int lua_speaker_start(lua_State *L)
 
 	LOG_DBG("Speaker start called");
 
-	/* If already running, stop first to reconfigure */
-	if (speaker_state.is_streaming) {
-		spk_cnt.restarts++;
-
-		/* Exit streaming loop first */
-		speaker_state.is_streaming = false;
-		k_sem_take(&speaker_state.stream_exit_sem, K_FOREVER);
-		
-		/* Then cleanup resources */
-		speaker_cleanup_audio_resources();
-	}
-
-	/* Parse configuration with defaults */
+	/* Parse and validate everything before touching a running stream, so
+	 * a bad argument raises an error and leaves the current stream playing.
+	 */
 	const char *encoder = "pcm";
 	int sample_rate = 8000;
 	int bit_depth = 16;
@@ -449,7 +441,7 @@ static int lua_speaker_start(lua_State *L)
 	}
 	lua_pop(L, 1);
 
-	speaker_state.use_lc3 = (strcmp(encoder, "lc3") == 0);
+	bool use_lc3 = (strcmp(encoder, "lc3") == 0);
 
 	/* sample_rate */
 	lua_getfield(L, 1, "sample_rate");
@@ -484,7 +476,7 @@ static int lua_speaker_start(lua_State *L)
 	}
 
 	/* LC3 parameters */
-	if (speaker_state.use_lc3) {
+	if (use_lc3) {
 		lua_getfield(L, 1, "duration");
 		if (lua_isnumber(L, -1)) {
 			lc3_duration = lua_tointeger(L, -1);
@@ -543,10 +535,23 @@ static int lua_speaker_start(lua_State *L)
 		return luaL_error(L, "Budget must be 10-100");
 	}
 
+	/* If already running, stop first to reconfigure */
+	if (speaker_state.is_streaming) {
+		spk_cnt.restarts++;
+
+		/* Exit streaming loop first */
+		speaker_state.is_streaming = false;
+		k_sem_take(&speaker_state.stream_exit_sem, K_FOREVER);
+
+		/* Then cleanup resources */
+		speaker_cleanup_audio_resources();
+	}
+
 	/* Save configuration */
+	speaker_state.use_lc3 = use_lc3;
 	speaker_state.sample_rate = sample_rate;
 	speaker_state.channel_count = channels;
-	speaker_state.lc3_duration = lc3_duration;																											
+	speaker_state.lc3_duration = lc3_duration;
 	speaker_state.lc3_bitrate = lc3_bitrate;
 
 	/* Initialize speaker hardware with channel configuration */

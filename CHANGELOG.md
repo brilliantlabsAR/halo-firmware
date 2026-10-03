@@ -19,6 +19,12 @@ release pages and tags are not publicly reachable.
   that loses audio shows where it was lost. `stats(true)` starts a new
   counting window.
 
+### Fixed
+
+- `frame.speaker.start()` with an invalid argument raises its error without
+  stopping a stream that is already playing. It used to stop the stream
+  first, so a bad value (silently, under `pcall`) left the speaker off.
+
 ## [0.8.16] - 2026-10-03
 
 ### Changed

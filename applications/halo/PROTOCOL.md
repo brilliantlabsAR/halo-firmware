@@ -1133,6 +1133,10 @@ Initializes the speaker.
   - Throws an error if speaker initialization fails
   - Throws an error if LC3 decoder creation fails
   - Throws an error if memory allocation fails
+  - Arguments are checked before anything changes: if a stream is already
+    running and an argument is invalid, the error is raised and the stream
+    keeps playing. Calling `start()` with valid arguments on a running stream
+    stops it and starts a new one.
 - **Example:**
   ```lua
   -- Start speaker with PCM format
