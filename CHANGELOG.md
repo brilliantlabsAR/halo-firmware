@@ -11,13 +11,15 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-10-03
+
 ### Added
 
 - `frame.speaker.stats([reset])` reports what happened to speaker audio at
   each stage: bytes received and rejected over BLE, frames decoded, concealed,
   muted or discarded, and blocks the amplifier played or threw away. A reply
   that loses audio shows where it was lost. `stats(true)` starts a new
-  counting window.
+  counting window (#52).
 
 ### Changed
 
@@ -26,37 +28,33 @@ release pages and tags are not publicly reachable.
   stream, so the audio already inside the device keeps playing. Apps that
   resend their speaker settings before each reply no longer lose up to a few
   hundred milliseconds of audio. A format or `budget` change still restarts.
-  `frame.speaker.stats()` counts these as `updates`.
+  `frame.speaker.stats()` counts these as `updates` (#54).
 
 ### Fixed
 
-- Speaker audio no longer loses a few frames when it arrives faster than
-  real time after a quiet moment (the start of a reply, or a backlog
-  catching up). The amplifier driver's block queue was one slot smaller
-  than its block pool, so a burst while it was playing silence overflowed
-  the queue (`frames_write_failed` in `frame.speaker.stats()`).
-
-- A speaker stream running when the device enters standby pauses and picks
-  up where it left off on wake. Audio that arrived during standby used to be
-  fed to the stopped speaker and lost (`frames_write_failed` in
-  `frame.speaker.stats()`).
-
+- `frame.speaker.start()` with an invalid argument raises its error without
+  stopping a stream that is already playing. It used to stop the stream
+  first, so a bad value (silently, under `pcall`) left the speaker off (#53).
+- Speaker audio streamed in writes that are not whole LC3 frames (for
+  example MTU-sized chunks) plays correctly. The partial frame at the end of
+  each write used to be discarded, shifting every frame after it: the stream
+  decoded as noise and then muted. PCM writes with an odd byte count are
+  handled the same way (#55).
 - `frame.speaker.stop()` discards speaker audio still buffered from BLE, as
   does a Lua VM reset. That audio used to play at the start of the next
   stream, delaying it, and a backlog over about 2 s filled the buffer so
   later writes were refused. Audio written after `stop()` is still kept for
   the next `start()`. `frame.speaker.stats()` reports the discarded bytes
-  as `ble_flushed_bytes`.
-
-- Speaker audio streamed in writes that are not whole LC3 frames (for
-  example MTU-sized chunks) plays correctly. The partial frame at the end of
-  each write used to be discarded, shifting every frame after it: the stream
-  decoded as noise and then muted. PCM writes with an odd byte count are
-  handled the same way.
-
-- `frame.speaker.start()` with an invalid argument raises its error without
-  stopping a stream that is already playing. It used to stop the stream
-  first, so a bad value (silently, under `pcall`) left the speaker off.
+  as `ble_flushed_bytes` (#56).
+- A speaker stream running when the device enters standby pauses and picks
+  up where it left off on wake. Audio that arrived during standby used to be
+  fed to the stopped speaker and lost (`frames_write_failed` in
+  `frame.speaker.stats()`) (#57).
+- Speaker audio no longer loses a few frames when it arrives faster than
+  real time after a quiet moment (the start of a reply, or a backlog
+  catching up). The amplifier driver's block queue was one slot smaller
+  than its block pool, so a burst while it was playing silence overflowed
+  the queue (`frames_write_failed` in `frame.speaker.stats()`) (#58).
 
 ## [0.8.16] - 2026-10-03
 
