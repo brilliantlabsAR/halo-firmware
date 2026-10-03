@@ -64,7 +64,14 @@ struct max98357a_block_ctx {
  * NOTE: current implementation is single-instance (one amplifier) global queue to keep callback
  * signature simple (i2s_sync callback lacks user data). Can be extended with a registry if needed.
  */
-#define MAX98357A_QUEUE_LEN MAX98357A_AUDIO_TX_BLOCK_COUNT
+/* One slot more than there are blocks: a ring of N slots holds N-1, and
+ * every queued block holds a free_block_sem token, so with N+1 slots a
+ * writer that got a token always finds room. With N slots the queue could
+ * fill while a token was still free - whenever the block in flight was the
+ * silence feed, which holds no token - and a burst after a quiet spell
+ * lost a few frames to -ENOSPC.
+ */
+#define MAX98357A_QUEUE_LEN (MAX98357A_AUDIO_TX_BLOCK_COUNT + 1)
 static struct max98357a_block_ctx block_queue[MAX98357A_QUEUE_LEN];
 static atomic_t queue_head; /* next write */
 static atomic_t queue_tail; /* next read */
@@ -780,13 +787,20 @@ static int max98357a_audio_write_impl(const struct device *dev, const void *data
 		}
 
 		struct max98357a_block_ctx ctx = { .mem = mem_block, .len = chunk };
-		bool send_now = false;
+
+		/* Decide send-now vs queue and act on it with the TX
+		 * completion locked out. Otherwise the last completion can
+		 * land between the check and the push, find the queue
+		 * empty, and stop emission - stranding this block (and
+		 * every later one) in the queue.
+		 */
+		unsigned int key = irq_lock();
+
 		if (dev_data->state == MAX98357A_AUDIO_TRIGGER_START && queue_is_empty() &&
 		    atomic_get(&dev_data->in_flight_blocks) == 0) {
-			send_now = true; /* first active block */
-		}
-		if (send_now) {
+			/* first active block */
 			if (i2s_sync_send(dev_data->i2s_dev, mem_block, chunk)) {
+				irq_unlock(key);
 				LOG_ERR("i2s_sync_send failed");
 				k_mem_slab_free(&max98357a_tx_slab, mem_block);
 				k_sem_give(&dev_data->free_block_sem);
@@ -797,12 +811,15 @@ static int max98357a_audio_write_impl(const struct device *dev, const void *data
 			atomic_inc(&dev_data->in_flight_blocks);
 		} else {
 			if (queue_is_full()) {
+				/* unreachable: see MAX98357A_QUEUE_LEN */
+				irq_unlock(key);
 				k_mem_slab_free(&max98357a_tx_slab, mem_block);
 				k_sem_give(&dev_data->free_block_sem);
 				return -ENOSPC;
 			}
 			queue_push(ctx);
 		}
+		irq_unlock(key);
 		src += chunk;
 		remaining -= chunk;
 		total_written += chunk;
