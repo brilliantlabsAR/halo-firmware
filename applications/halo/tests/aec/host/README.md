@@ -29,6 +29,21 @@ excess), and the first 3 blocks of each engage transition are exempt
 (the inserted hold-back silence and the starting delay stream are
 mis-scored by construction; real divergence bursts run hundreds of ms).
 
+Check 8 adds second-differenced white noise (+12dB/oct, mostly above
+4kHz) to the mic and scores in-band ERLE with the known noise excluded. It
+guards the linear filter's band-limited update under HF noise (the TD
+build's `AEC_LPF_ALPHA`). In the FDAF build it runs with the residual
+suppressor made transparent through the tune API (`sup_beta` 0,
+`sup_floor` 1, every cap 1; restored after), so it scores the linear
+stage: 14.2dB, limit 10. With the suppressor on, its per-block kernel
+scales the known noise too, so the exclusion no longer matched what is in
+the output and the score mostly measured how hard the playback ceiling
+attenuates noise that is not echo: 5.25dB at `steady_gcap` 0.25 against
+21.6dB of echo-only residual, falling as the cap deepened while the
+echo-only residual improved, and `AEC_FD_MU=1.0f` (linear stage 14.2 ->
+8.5dB) still passed it at 5.1. (`audio_aec_suppress(false)` is no
+substitute: it drops the kernel's SUP_D delay the scoring expects.)
+
 Check 15 is the capture-loss case (2026-07-13, the live-duplex death at
 ~100s): the reference window is anchored by cumulative SEEN mic samples
 - and so are both operands of the drift check - so mic blocks the PDM
@@ -105,18 +120,21 @@ window: fewer than 1 in 10 near blocks cut by more than 15dB (before:
 under the -12dB steady cap on most blocks. With the 2026-10-04 defaults
 (KAPPA 0.5, gate band below 1kHz, ABSFLOOR 0.9, HANG 60, BETA 1.25,
 FLOOR 0.15, two-band ceiling 750Hz / 0.5) it is -2.0dB (p10 -4.1, 5/370
-cut by more than 15dB).
+cut by more than 15dB); the top cap band does not change it.
 
-The gate band (`AEC_SUP_GATE_BAND_HZ`) and the two-band ceiling
-(`AEC_SUP_CAP_SPLIT_HZ`, `AEC_SUP_CAP_LO_GCAP`) were tuned offline by
+The gate band (`AEC_SUP_GATE_BAND_HZ`), the two-band ceiling
+(`AEC_SUP_CAP_SPLIT_HZ`, `AEC_SUP_CAP_LO_GCAP`) and the top cap band
+(`AEC_SUP_CAP_HI_SPLIT_HZ`, `AEC_SUP_CAP_HI_GCAP`) were tuned offline by
 replaying AEC-off device captures through this file, then A/B'd on two
 units on the desk. No host check targets them directly: the synthetic echo
 here has no coupling-dependent residual above 1kHz, so check 19 and the
 double-talk check are where they show (19 above; 13 is -1.3dB vs -1.6).
-Setting both to 0 together with KAPPA 0.15, ABSFLOOR 0.5, HANG 50, BETA
-1.5 and FLOOR 0.1 restores the item-5 output byte for byte
-(tune_equiv.sh). The high band's steady cap must stay at 0.25 or above:
-the HF-noise check (8) fails below it (control below).
+Setting the three splits to 0 together with KAPPA 0.15, ABSFLOOR 0.5,
+HANG 50, BETA 1.5 and FLOOR 0.1 restores the item-5 output byte for byte
+(tune_equiv.sh), and `cap_hi_split_hz` 0 alone the output before the top
+band. The top band (default 1.6kHz / 0.1) changes the host output only
+slightly (the synthetic echo path rolls off above ~2kHz, so little
+residual is left up there for it to cap): conv ERLE 20.0 -> 20.1dB.
 
 Check 23 covers runtime tuning (`frame.microphone.aec_tune`, 2026-10-04),
 through the same C API the Lua binding calls (`audio_aec_tune_set/get/
@@ -124,11 +142,15 @@ defaults`): the defaults equal the compile-time constants (mirrored in
 test_aec.c with the same `-D` hooks, so it holds under overrides too) and
 the key table covers the whole struct; out-of-range, NaN, hold > onset,
 `rearm_ms` 0, `onset_gate_lift` 3, a `gate_band_hz` under 500 Hz,
-`cap_split_hz` 9000 and `cap_lo_gcap` 1.5, and NaN, +inf and -inf in every
-float key, are rejected with nothing applied; every float key accepts its
-min and its max (the ranges are inclusive; among them `fd_mu` 0.05 and
-`gate_fast_a`/`gate_mid_a` 0.001, which the Lua binding once rejected by
-comparing a float bound widened to double); and a live change takes effect
+`cap_split_hz` 9000, `cap_lo_gcap` 1.5, `cap_hi_split_hz` 9000,
+`cap_hi_gcap` 1.5, and a `cap_hi_split_hz` at or below a non-zero
+`cap_split_hz`, and NaN, +inf and -inf in every float key, are rejected
+with nothing applied; every float key accepts its min and its max (the
+ranges are inclusive; among them `fd_mu` 0.05 and `gate_fast_a`/
+`gate_mid_a` 0.001, which the Lua binding once rejected by comparing a
+float bound widened to double), and `cap_hi_split_hz` is accepted at any
+value with `cap_split_hz` 0, just above it, and off with the split at
+8000; and a live change takes effect
 from the next block (check 19's scenario re-arms 5 times at `rearm_ms` 160
 and 0 times after `'defaults'`). `rearm_ms` raised from 1000 to 5000
 after enable, or after a speaker close, must still duck the first reply
@@ -166,7 +188,9 @@ defaults): `rearm_ms=160` vs `-DAEC_SUP_ONSET_REARM_MS=160` (check 19
 fails identically, 6 re-arms), `gate_kappa=0.3` vs
 `-DAEC_SUP_GATE_KAPPA=0.3f`, a two-key gate set, the gate band and the
 two-band ceiling switched off, a different split and low-band cap, the
-whole pre-2026-10-04 set, and an explicit default. All must print SAME.
+top cap band off, at 1.6kHz / 0.1, at 2kHz / 0.15 and at 1kHz / 0.05 with
+the low split off, the whole pre-2026-10-04 set, and an explicit default.
+All must print SAME.
 
 Both filter cores build from the same file:
 
@@ -228,18 +252,15 @@ Failing controls (prove the checks discriminate):
   (`left 49`, near blocks cut by more than 10dB in each).
 - TD build: `-DAEC_LPF_ALPHA=1.0f` (no update band-limit) fails the
   HF-noise check.
-- FDAF build: `-DAEC_FD_MU=1.0f` degrades voice/HF markedly (7.3/8.6dB vs
-  10.9/14.3 at the default 0.25); `-DAEC_FD_LEAK=1.0f` costs ~1dB voiced.
+- FDAF build: `-DAEC_FD_MU=1.0f` fails the HF-noise check (linear stage
+  8.5dB vs 14.2 at the default 0.25, limit 10), and with it double talk
+  (-3.3dB) and check 20 (ERLE 11.5dB); voiced drops 14.9 -> 11.4dB.
+  `-DAEC_FD_LEAK=1.0f` costs ~1dB voiced.
 - FDAF build, onset stage: `-DAEC_SUP_BETA=0.0f` (suppressor passthrough)
   fails the cold-onset check (5.5 vs 6.8dB); `-DAEC_FD_MU_HOT_EXCESS=0.0f`
   (old soft-start pace) fails it harder (4.2dB); `-DAEC_SUP_BETA=6.0f`
   (over-aggressive) fails the double-talk check (-4.5dB median vs the
   -3dB bound; default 1.25 sits at -1.3).
-- FDAF build: `-DAEC_SUP_STEADY_GCAP=0.2f` fails the HF-noise check
-  (4.7dB vs the 5dB bound; 0.25 gives 5.3). Keep the high band's steady
-  cap at 0.25 or above, and use `AEC_SUP_CAP_LO_GCAP` to change the low
-  band.
-
 - FDAF build, onset re-arm: `-DAEC_SUP_ONSET_REARM_MS=160` (the old
   re-arm after the 160ms adaptation hangover) fails check 19 (6 re-arms;
   7/370 near blocks < -15dB with the gate lift, 58/370 with the item-5

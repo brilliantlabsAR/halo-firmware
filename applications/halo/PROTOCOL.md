@@ -1556,7 +1556,7 @@ Runtime tuning of the echo canceller's barge-in behaviour (residual suppressor, 
 - `aec_tune{key = value, ...}` validates every key, then applies all of them at once, and returns the new table. An unknown key, a non-number, a non-integer for a `*_ms` or switch key, or an out-of-range value raises an error naming the key and its range, and **nothing** is applied. Keys you leave out keep their current values.
 - `aec_tune('defaults')` restores the compiled defaults and returns the table.
 
-The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks; `gate_band_hz` and `cap_split_hz` are rounded up to whole 15.625 Hz bins.
+The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks; `gate_band_hz`, `cap_split_hz` and `cap_hi_split_hz` are rounded up to whole 15.625 Hz bins.
 
 | Key | Unit | Default | Range | What it does | Tradeoff |
 |-----|------|---------|-------|--------------|----------|
@@ -1569,7 +1569,7 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
 | `onset_hold_ms` | ms | 400 | 0–`onset_ms` | Full-strength part of the onset duck | Longer is safer on a cold filter, slower to let the wearer through |
 | `rearm_ms` | ms | 1000 | 20–60000 | Speaker silence needed before the next playback onset re-arms the duck | Shorter re-ducks the wearer after pauses inside one reply (160 was the old behaviour); longer can leave a quick new reply unducked |
 | `onset_gate_lift` | switch | 2 | 0, 1, 2 | Lets the near-end gate lift the duck's blanket ceiling: 0 never, 1 always, 2 once the filter has adapted | 1 lets an early talker through sooner but can leak a cold onset; 0 cuts a talker for the whole duck |
-| `steady_gcap` | gain | 0.25 | 0–1 | Ceiling held during playback while the gate sees no wearer (0.25 = −12 dB); with `cap_split_hz` set, only above the split (and below 312 Hz); 1 turns it off | Lower scrambles residual echo more, but caps a wearer the gate misses just as hard |
+| `steady_gcap` | gain | 0.25 | 0–1 | Ceiling held during playback while the gate sees no wearer (0.25 = −12 dB); with `cap_split_hz` set, only above the split (and below 312 Hz), and with `cap_hi_split_hz` set, only below that; 1 turns it off | Lower scrambles residual echo more, but caps a wearer the gate misses just as hard |
 | `gate_kappa` | ratio | 0.5 | 0–4 | Echo allowance in the near-end gate: excess = √(residual power) − kappa × √(reference power), both measured below `gate_band_hz` | Higher gives fewer false releases on echo, but a quiet wearer is detected less often |
 | `gate_fast_a` | coefficient | 0.5 | 0.001–1 | Fast smoothing of the excess (per block) | Higher reacts sooner and is noisier |
 | `gate_floor_a` | coefficient | 0.01 | 0.0001–1 | Smoothing of the slow ambient floor (~2 s) | Higher follows noise faster, and also follows a long barge-in |
@@ -1585,10 +1585,12 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
 | `gate_band_hz` | Hz | 1000 | 0, 500–8000 | The near-end gate measures residual and reference power only below this frequency; 0 = the whole 312–3800 Hz band | The filter cancels best, and the voice is strongest, below ~1 kHz; full band, the poorly cancelled echo above it can release the gate on echo when the echo is loud (worn, or a high-coupling unit) |
 | `cap_split_hz` | Hz | 750 | 0–8000 | From 312 Hz (the bottom of the adaptation band) up to this frequency the playback ceiling is `cap_lo_gcap` instead of `steady_gcap`; below 312 Hz it stays `steady_gcap`; 0 = one band | A split spares the low band of a wearer the gate misses, where most of the voice is, for a little more low-band echo |
 | `cap_lo_gcap` | gain | 0.5 | 0–1 | Playback ceiling from 312 Hz up to `cap_split_hz` while the gate sees no wearer | Higher keeps more of a missed wearer and lets more low-band echo through |
+| `cap_hi_split_hz` | Hz | 1600 | 0–8000, above `cap_split_hz` when both are set | From this frequency up (and no lower than 312 Hz) the playback ceiling is `cap_hi_gcap` instead of `steady_gcap`; 0 = off | The residual echo is mostly at 1.6–3.4 kHz; a top band caps it harder while the wearer's 0.75–1.6 kHz stays under `steady_gcap` |
+| `cap_hi_gcap` | gain | 0.1 | 0–1 | Playback ceiling from `cap_hi_split_hz` up while the gate sees no wearer (0.1 = −20 dB) | Lower removes more high-band echo, and takes more of the consonants of a wearer the gate misses |
 
 - **Parameters:** none, a table of keys, or the string `'defaults'`
 - **Returns:** `table` (every key and its value after the call)
-- **Errors:** `"aec_tune: unknown key '<k>'"`, `"aec_tune: <k> must be in [<min>, <max>]"`, `"aec_tune: <k> must be an integer in [<min>, <max>]"`, `"aec_tune: onset_hold_ms must be <= onset_ms"`, `"aec_tune: gate_band_hz must be 0 or in [500, 8000]"`
+- **Errors:** `"aec_tune: unknown key '<k>'"`, `"aec_tune: <k> must be in [<min>, <max>]"`, `"aec_tune: <k> must be an integer in [<min>, <max>]"`, `"aec_tune: onset_hold_ms must be <= onset_ms"`, `"aec_tune: gate_band_hz must be 0 or in [500, 8000]"`, `"aec_tune: cap_hi_split_hz must be 0 or above cap_split_hz"`
 - **Example:**
   ```lua
   local t = frame.microphone.aec_tune()          -- current values
@@ -1596,7 +1598,8 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
   frame.microphone.aec_tune{gate_kappa = 0.3, gate_edge_ratio = 1.8}
   -- the gate and suppressor values of 0.8.17 and earlier (full-band gate, one-band ceiling)
   frame.microphone.aec_tune{gate_kappa = 0.15, gate_absfloor = 0.5, gate_hang_ms = 1000,
-                            sup_beta = 1.5, sup_floor = 0.1, gate_band_hz = 0, cap_split_hz = 0}
+                            sup_beta = 1.5, sup_floor = 0.1, gate_band_hz = 0, cap_split_hz = 0,
+                            cap_hi_split_hz = 0}
   frame.microphone.aec_tune('defaults')
   ```
 

@@ -775,8 +775,7 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * ONSET_GCAP stays one band. 750Hz / 0.5 (-6dB): desk talker under the
  * echo (the gate misses it), talker frames cut by more than 10dB 52% ->
  * 11% on Halo 28 and 21% -> 1% on the EC, for ~1dB less echo removal.
- * STEADY_GCAP (the high band) stays 0.25: the host HF-noise check fails
- * below it.
+ * Above the split STEADY_GCAP applies, up to CAP_HI_SPLIT_HZ (below).
  */
 #ifndef AEC_SUP_CAP_SPLIT_HZ
 #define AEC_SUP_CAP_SPLIT_HZ 750
@@ -784,9 +783,36 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_CAP_LO_GCAP
 #define AEC_SUP_CAP_LO_GCAP 0.5f
 #endif
+/* Third (top) band of the steady ceiling: adaptation bins at or above
+ * CAP_HI_SPLIT_HZ take CAP_HI_GCAP instead of STEADY_GCAP while the
+ * ceiling holds (0 = off). The residual echo left after the suppressor
+ * is mostly at 1.6-3.4kHz; the wearer's F2 (0.75-1.6kHz) stays under
+ * STEADY_GCAP. Like the other bands it applies only with the gate closed
+ * during playback: a release or idle lifts it, so its cost lands only on
+ * frames where the gate misses the wearer. When CAP_SPLIT_HZ is also set
+ * it must be above it. 1600Hz / 0.1 (-20dB), 2026-10-04: offline on
+ * replayed device and worn captures the 1.6-3.4kHz echo removal rose
+ * from ~14 to ~20.5dB (worn full band 12.2 -> 18.1dB) at about half the
+ * missed-talker cost of a uniform 0.1. Desk A/B (afplay talker under the
+ * echo): 1.6-3.4kHz 15.2 -> 22.1dB on Halo 28, 14.4 -> 21.3dB on the EC,
+ * talker frames cut by more than 10dB 6/126 -> 6/123 and 3/118 -> 5/113,
+ * inside the run-to-run spread (0-11).
+ */
+#ifndef AEC_SUP_CAP_HI_SPLIT_HZ
+#define AEC_SUP_CAP_HI_SPLIT_HZ 1600
+#endif
+#ifndef AEC_SUP_CAP_HI_GCAP
+#define AEC_SUP_CAP_HI_GCAP 0.1f
+#endif
 /* first bin at or above hz (bins are 15.625Hz = 1000/64) */
 #define AEC_HZ_TO_BIN(hz) ((uint32_t)(((hz) * 64u + 999u) / 1000u))
 #define AEC_SUP_GATE_BAND_MIN_HZ 500
+/* first bin of the top cap band: adaptation bins only (the bone-conduction
+ * band below FD_BIN_LO keeps STEADY_GCAP); 0 Hz = off (past every bin) */
+#define AEC_CAP_HI_BIN(hz) \
+	((hz) == 0 ? (uint32_t)FD_BINS \
+		   : (AEC_HZ_TO_BIN(hz) > FD_BIN_LO ? AEC_HZ_TO_BIN(hz) \
+						    : (uint32_t)FD_BIN_LO))
 #define AEC_SUP_D     128
 #define AEC_SUP_KLEN  (2 * AEC_SUP_D + 1)
 #define AEC_SUP_POW_A 0.33f
@@ -840,6 +866,8 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 	.gate_band_hz = AEC_SUP_GATE_BAND_HZ, \
 	.cap_split_hz = AEC_SUP_CAP_SPLIT_HZ, \
 	.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP, \
+	.cap_hi_split_hz = AEC_SUP_CAP_HI_SPLIT_HZ, \
+	.cap_hi_gcap = AEC_SUP_CAP_HI_GCAP, \
 }
 
 #define TUNE_KEY(f, ty, lo, hi) \
@@ -874,6 +902,8 @@ static const struct audio_aec_tune_key tune_keys[] = {
 	TUNE_KEY(gate_band_hz, U32, 0.0f, 8000.0f),
 	TUNE_KEY(cap_split_hz, U32, 0.0f, 8000.0f),
 	TUNE_KEY(cap_lo_gcap, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(cap_hi_split_hz, U32, 0.0f, 8000.0f),
+	TUNE_KEY(cap_hi_gcap, FLOAT, 0.0f, 1.0f),
 };
 
 /* the mic thread's snapshot: the parameter set plus its block counts */
@@ -886,6 +916,7 @@ struct aec_tune_rt {
 	uint32_t gate_hang;
 	uint32_t gate_bin_end;  /* gate band: bins [FD_BIN_LO, end) */
 	uint32_t cap_split_bin; /* bins [FD_BIN_LO, it) take cap_lo_gcap (0 = off) */
+	uint32_t cap_hi_bin;    /* bins >= it take cap_hi_gcap (FD_BINS = off) */
 };
 
 static struct audio_aec_tune tune_pub = AEC_TUNE_DEFAULTS;
@@ -901,6 +932,7 @@ static struct aec_tune_rt tune = {
 	.gate_bin_end = AEC_SUP_GATE_BAND_HZ ? AEC_HZ_TO_BIN(AEC_SUP_GATE_BAND_HZ)
 					     : FD_BIN_HI + 1,
 	.cap_split_bin = AEC_HZ_TO_BIN(AEC_SUP_CAP_SPLIT_HZ),
+	.cap_hi_bin = AEC_CAP_HI_BIN(AEC_SUP_CAP_HI_SPLIT_HZ),
 };
 static atomic_t tune_gen = ATOMIC_INIT(1);
 static uint32_t tune_seen = 1;
@@ -931,6 +963,7 @@ static void aec_tune_refresh(void)
 	tune.gate_bin_end = tune.p.gate_band_hz ? AEC_HZ_TO_BIN(tune.p.gate_band_hz)
 						: FD_BIN_HI + 1;
 	tune.cap_split_bin = AEC_HZ_TO_BIN(tune.p.cap_split_hz);
+	tune.cap_hi_bin = AEC_CAP_HI_BIN(tune.p.cap_hi_split_hz);
 }
 #endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
 
@@ -977,6 +1010,10 @@ const char *audio_aec_tune_check(const struct audio_aec_tune *t)
 	}
 	if (t->gate_band_hz != 0 && t->gate_band_hz < AEC_SUP_GATE_BAND_MIN_HZ) {
 		return "gate_band_hz";
+	}
+	if (t->cap_hi_split_hz != 0 && t->cap_split_hz != 0 &&
+	    t->cap_hi_split_hz <= t->cap_split_hz) {
+		return "cap_hi_split_hz";
 	}
 	return NULL;
 #else
@@ -2529,10 +2566,20 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			g_cap_lo = tp->onset_gcap + (tp->cap_lo_gcap - tp->onset_gcap) *
 							    (1.0f - ob_cap);
 		}
+		/* top band (see AEC_SUP_CAP_HI_SPLIT_HZ): the same, with
+		 * cap_hi_gcap, for the adaptation bins from cap_hi_bin up */
+		const uint32_t hi = tune.cap_hi_bin;
+		float g_cap_hi = g_cap;
+
+		if (cap_hold) {
+			g_cap_hi = tp->onset_gcap + (tp->cap_hi_gcap - tp->onset_gcap) *
+							    (1.0f - ob_cap);
+		}
 		for (uint32_t b = 1; b < FD_BINS; b++) {
 			float gj = 1.0f;
-			float gc = (b >= FD_BIN_LO && b < split) ? g_cap_lo
-							       : g_cap;
+			float gc = (b >= hi) ? g_cap_hi
+					     : (b >= FD_BIN_LO && b < split) ? g_cap_lo
+									     : g_cap;
 
 			if (b >= FD_BIN_LO && b <= FD_BIN_HI) {
 				gj = sup.g[b - FD_BIN_LO];

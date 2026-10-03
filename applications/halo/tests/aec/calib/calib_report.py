@@ -481,7 +481,8 @@ def write_report(root, silero=False):
         P("\n`current` = the device's `aec_tune('defaults')`; `0.8.17` = the 0.8.17 release "
           "source (before the onset, gate and gain fixes); `old-gate` = the full-band gate "
           "defaults that preceded the gate band; `B2-15` = the band-limited gate and two-band "
-          "cap (the compiled defaults since); `B15` = B2-15 without the two-band "
+          "cap; `B3-10` / `B3-15` = B2-15 plus the top cap band (1.6 kHz up at 0.1 / 0.15); "
+          "`S15` = B2-15 with the band above 750 Hz at 0.15; `B15` = B2-15 without the two-band "
           "cap; `A15` = full-band gate, kappa 0.47. Talker kept by level (normal / "
           "quiet / loud) for the recommended set: "
           + " / ".join(_f(s3["recommended"]["S"].get(f"syn_kept_{lv}"), "{:.2f}")

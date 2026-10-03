@@ -136,11 +136,17 @@ old-gate set on this tree (an approximation; the report says so). Scored:
 
 Compared sets: `current` (the device's defaults), `0.8.17`, `old-gate` (the
 full-band gate defaults before the gate band), `B2-15` (the band-limited gate
-and two-band cap, the defaults since), `B15` (without the two-band cap), `A15`
-(full-band gate, kappa 0.47). The search starts from the current defaults and
-from A15: a kappa × floor grid, then coordinate refinement over kappa, floor,
-beta, gate hang, absfloor, edge abs, steady cap and the low-band cap (steady
-cap stays ≥ 0.25, the host HF-noise check; floor ≥ 0.10). The objective is
+and two-band cap), `B3-10` and `B3-15` (B2-15 plus the top cap band, 1.6 kHz
+up at 0.1 / 0.15; B3-10 is the compiled default since stack item 8), `S15` (B2-15 with the band above 750 Hz at 0.15), `B15`
+(without the two-band cap), `A15` (full-band gate, kappa 0.47). Keys the
+device's firmware lacks are replayed switched off (`calib_common.OFF`). The
+search starts from the current defaults and from A15: the top cap band
+switched on (1.6 kHz at 0.1 and 0.15, or off if the start has it), a kappa ×
+floor grid, then coordinate refinement over kappa, floor, beta, gate hang,
+absfloor, edge abs, steady cap (0.1–0.5), the low-band cap and the top band's
+cap and split (floor ≥ 0.10). The cap depth only acts on frames where the
+gate misses the wearer, so a worn sitting is what can tell how deep it may
+go. The objective is
 echo removed minus penalties for near-end loss beyond the current defaults
 (crushed +0.02, kept −0.5 dB, ttfp +20 ms are free). Against fitting one
 sitting, a searched set replaces its starting set only if it wins by > 0.5 dB

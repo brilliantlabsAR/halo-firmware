@@ -115,6 +115,8 @@ struct audio_aec_tune {
 	uint32_t gate_band_hz;     /**< AEC_SUP_GATE_BAND_HZ (0 = full band) */
 	uint32_t cap_split_hz;     /**< AEC_SUP_CAP_SPLIT_HZ (0 = one band) */
 	float cap_lo_gcap;         /**< AEC_SUP_CAP_LO_GCAP */
+	uint32_t cap_hi_split_hz;  /**< AEC_SUP_CAP_HI_SPLIT_HZ (0 = off) */
+	float cap_hi_gcap;         /**< AEC_SUP_CAP_HI_GCAP */
 };
 
 /** @brief Field type of an audio_aec_tune key. */
