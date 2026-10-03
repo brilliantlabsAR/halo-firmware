@@ -30,6 +30,11 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- A speaker stream running when the device enters standby pauses and picks
+  up where it left off on wake. Audio that arrived during standby used to be
+  fed to the stopped speaker and lost (`frames_write_failed` in
+  `frame.speaker.stats()`).
+
 - `frame.speaker.stop()` discards speaker audio still buffered from BLE, as
   does a Lua VM reset. That audio used to play at the start of the next
   stream, delaying it, and a backlog over about 2 s filled the buffer so

@@ -12,8 +12,8 @@ Cases: clean LC3 stream (every frame decoded and played), the same config
 re-sent mid-stream (in-place update), a budget change mid-stream (restart),
 garbage LC3 (PLC then mute), writes that are not whole frames, a full BLE
 ring while the speaker is stopped and its flush at stop(), audio sent before
-start(), PCM via frame.speaker.play(), and a start() with a bad argument on
-a running stream.
+start(), PCM via frame.speaker.play(), a start() with a bad argument on a
+running stream, and standby while a stream is playing.
 """
 import argparse
 import asyncio
@@ -275,6 +275,24 @@ async def main(args):
           s["frames_decoded"] == 50,
           f"streaming {s['streaming']} restarts {s['restarts']} "
           f"frames_decoded {s['frames_decoded']}/50")
+    await b.send_lua("frame.speaker.stop()")
+
+    print("8. standby while a stream is playing")
+    await b.send_lua(START)
+    await stats(b)
+    feed = asyncio.create_task(stream(b, clip))
+    await asyncio.sleep(0.5)
+    await b.send_lua("frame.standby(2)")
+    await feed
+    await asyncio.sleep(3.0)
+    s = await stats(b)
+    check("no writes to the stopped speaker", s["frames_write_failed"] == 0,
+          f"frames_write_failed {s['frames_write_failed']}")
+    check("audio kept through standby", s["frames_decoded"] == n and
+          s["streaming"],
+          f"frames_decoded {s['frames_decoded']}/{n} "
+          f"played {s['blocks_played']} discarded {s['blocks_discarded']} "
+          f"rejected {s['ble_rejected']} streaming {s['streaming']}")
     await b.send_lua("frame.speaker.stop()")
 
     await b.send_reset_signal()
