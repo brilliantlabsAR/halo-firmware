@@ -223,9 +223,6 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 
 			if (ccc_val == GATT_CCC_START_NTF) {
 				bas_ctx.level_ccc_cfg = GATT_CCC_START_NTF;
-
-				/* Send initial notification */
-				halo_ble_battery_notify(bas_ctx.battery_level);
 			} else {
 				bas_ctx.level_ccc_cfg = GATT_CCC_STOP_NTFIND;
 			}
@@ -263,7 +260,8 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 	if (status == GAP_ERR_NO_ERROR) {
 		if (att_idx == BAS_IDX_BATTERY_LEVEL_CCC &&
 		    bas_ctx.level_ccc_cfg == GATT_CCC_START_NTF) {
-			/* Already sent via halo_ble_battery_notify() above */
+			/* Send initial battery level notification */
+			halo_ble_battery_notify(bas_ctx.battery_level);
 		} else if (att_idx == BAS_IDX_BATTERY_STATE_CCC &&
 			   bas_ctx.state_ccc_cfg == GATT_CCC_START_NTF) {
 			/* Send initial battery state notification */
