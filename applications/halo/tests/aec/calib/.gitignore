@@ -1,0 +1,5 @@
+# generated: host tool builds, say clips, calibration sittings
+.build/
+clips/
+sessions/
+__pycache__/
