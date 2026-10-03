@@ -59,6 +59,45 @@ The LUA parser channel consists of **LUA TX** and **LUA RX**, forming a full-dup
 | `0x06` | None | CTRL+F (Exit Lua runtime completely) |
 | `0x07` | None | CTRL+G (Remove all files/folders, except settings) |
 
+**Break (`0x03`) behaviour.** A break raises the Lua error `"interrupted"`
+(possibly prefixed with `<chunk>:<line>: `) **once**, in the code that is running
+when it arrives. A blocking call such as `frame.sleep()` returns early so the
+error is raised promptly, and a break that arrives during `frame.standby()`
+wakes the device and is raised there.
+
+- The innermost `pcall` around the running code catches the error like any
+  other. If its handler carries on, the script keeps running and the REPL does
+  not get control; a further break is caught the same way.
+- A script with a long-running loop must therefore re-raise the break from
+  every `pcall` that can be running when it arrives: around `frame.standby()`,
+  `frame.sleep()`, and any function that blocks or loops.
+- Callbacks registered from Lua (button, BLE receive, IMU tap, AAD and so on)
+  survive a break; only a restart (`0x04` or `0x05`) clears them. A script that
+  exits on a break should unregister any it no longer wants.
+- A break stops a running `frame.microphone` capture and `frame.speaker`
+  stream, and releases camera resources, whether or not the script catches it.
+
+```lua
+local function is_interrupt(err)
+    return type(err) == 'string' and string.find(err, 'interrupted$') ~= nil
+end
+
+while true do
+    local ok, err = pcall(frame.standby, 15)
+    if not ok then
+        if is_interrupt(err) then
+            error(err, 0)  -- hand the break on so the REPL gets control
+        end
+        print('standby error: ' .. tostring(err))
+    end
+end
+```
+
+Unlike a break, `0x04` (restart) cannot be caught: the error is raised again
+on every instruction until the VM is torn down, and `main.lua` then runs again
+from the top. To reach the REPL on a device whose `main.lua` catches breaks,
+use `0x05`, which removes `main.lua` and restarts.
+
 ##### 3.1.3 Audio Channel
 
 The audio channel supports multiple formats:

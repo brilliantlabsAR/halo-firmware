@@ -11,6 +11,13 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Documentation
+
+- PROTOCOL.md describes how a break (`0x03`) reaches Lua: it is raised once
+  and can be caught by a `pcall`, so scripts with long-running loops must
+  re-raise it to hand control back to the REPL. Includes the re-raise
+  pattern and what a break stops regardless (#60).
+
 ## [0.8.17] - 2026-10-03
 
 ### Added
