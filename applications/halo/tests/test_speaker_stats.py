@@ -10,7 +10,8 @@ can go missing and checks that the matching counter moves.
 
 Cases: clean LC3 stream (every frame decoded and played), a restart mid-
 stream, garbage LC3 (PLC then mute), a write that is not whole frames, a
-full BLE ring while the speaker is stopped, and PCM via frame.speaker.play().
+full BLE ring while the speaker is stopped, PCM via frame.speaker.play(), and
+a start() with a bad argument on a running stream.
 """
 import argparse
 import asyncio
@@ -178,6 +179,30 @@ async def main(args):
     check("pcm bytes counted", s["pcm_bytes"] == 3200 and
           s["pcm_bytes_failed"] == 0,
           f"pcm_bytes {s['pcm_bytes']} failed {s['pcm_bytes_failed']}")
+
+    print("7. bad start() arguments leave a running stream alone")
+    await b.send_lua(START)
+    await stats(b)
+    lines.clear()
+    await b.send_lua(
+        "local ok,e=pcall(frame.speaker.start,{encoder='lc3', "
+        "sample_rate=16000, channels=1, duration=1000, bitrate=32000, "
+        "volume=30, budget=150}) print(tostring(ok)..'|'..tostring(e))")
+    for _ in range(40):
+        if lines:
+            break
+        await asyncio.sleep(0.05)
+    err = lines[0] if lines else ""
+    await stream(b, clip[:FB * 50])
+    await asyncio.sleep(0.6)
+    s = await stats(b)
+    check("bad budget rejected", err.startswith("false|") and "Budget" in err,
+          err or "no reply")
+    check("stream kept running", s["streaming"] and s["restarts"] == 0 and
+          s["frames_decoded"] == 50,
+          f"streaming {s['streaming']} restarts {s['restarts']} "
+          f"frames_decoded {s['frames_decoded']}/50")
+    await b.send_lua("frame.speaker.stop()")
 
     await b.send_reset_signal()
     await b.disconnect()
