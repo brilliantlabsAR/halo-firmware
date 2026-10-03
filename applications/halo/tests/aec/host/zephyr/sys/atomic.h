@@ -4,3 +4,12 @@ typedef long atomic_val_t;
 #define ATOMIC_INIT(x) (x)
 #define atomic_get(p) (*(p))
 #define atomic_set(p, v) (*(p) = (v))
+#include <stdbool.h>
+static inline bool atomic_cas(atomic_t *p, atomic_val_t old, atomic_val_t nv)
+{
+	if (*p != old) {
+		return false;
+	}
+	*p = nv;
+	return true;
+}

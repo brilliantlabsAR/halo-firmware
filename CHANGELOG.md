@@ -11,6 +11,21 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- With echo cancellation on, the microphone is no longer muted for about
+  a second at the start of a speaker session that follows an earlier one.
+  The canceller's onset duck (and its fail-safe for an unreliable speaker
+  reference) was frozen when the previous session closed and resumed with
+  the next `frame.speaker.start()`, `start{aec=true}` or
+  `frame.microphone.aec(true)`, pulling the wearer's voice down by about
+  34 dB for up to 1.4 s. Each new session now starts clean, and
+  `frame.microphone.aec(true)` no longer resets the canceller from the Lua
+  thread while the microphone thread is using it. While the canceller
+  refills its reference history (session start, re-anchor) it no longer
+  mistakes the not-yet-cancelled echo for the wearer talking, which used to
+  let that echo through for about a second.
+
 ### Documentation
 
 - PROTOCOL.md describes how a break (`0x03`) reaches Lua: it is raised once

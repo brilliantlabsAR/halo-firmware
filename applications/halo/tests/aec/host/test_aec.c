@@ -170,6 +170,34 @@ struct blkstat { float in_rms, out_rms, near_rms; };
  */
 static float near_amp;
 
+/* second, independent near-end talker (own generator state, so it can run
+ * over a speech-like REFERENCE without sharing speech_sample()'s clock):
+ * f0 ~210Hz, 250ms syllables / 100ms gaps, continuous utterance */
+static float near2_amp;
+static float n2_phase, n2_lp, n2_a, n2_b, n2_c, n2_d;
+static int n2_t;
+static float near2_sample(void)
+{
+	n2_t++;
+	float tsec = n2_t / 16000.0f;
+	float syl = fmodf(tsec, 0.35f) < 0.25f ? 1.0f : 0.0f;
+	float f0 = 210.0f + 20.0f * sinf(2.0f * 3.14159f * 0.6f * tsec);
+	float v = 0.0f;
+
+	n2_phase += f0 / 16000.0f;
+	if (n2_phase >= 1.0f) {
+		n2_phase -= 1.0f;
+		v = 1.0f;
+	}
+	n2_lp += 0.25f * (v - n2_lp);
+	n2_a += 0.20f * (n2_lp - n2_a);
+	n2_b += 0.20f * (n2_a - n2_b);
+	n2_c += 0.50f * (n2_lp - n2_c);
+	n2_d += 0.50f * (n2_c - n2_d);
+	return (2.5f * (n2_a - n2_b) + 1.5f * (n2_c - n2_d) + 0.6f * n2_lp) *
+	       syl * 1.2f;
+}
+
 static int16_t deferred_tap[2 * BLK];
 static int have_deferred;
 
@@ -276,6 +304,10 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 
 		float near = (near_amp > 0.0f) ? near_amp * speech_sample()
 					       : 0.0f;
+
+		if (near2_amp > 0.0f) {
+			near += near2_amp * near2_sample();
+		}
 		float d = echo + rumble + hfn + noise + near;
 
 		pnear += near * near;
@@ -889,6 +921,12 @@ int main(int argc, char **argv)
 
 		for (int b = 0; b < 50; b++) { /* first 1s of the reply */
 			struct blkstat s = step(3);
+			if (getenv("DUMP12")) {
+				struct audio_aec_stats st; size_t nt;
+				audio_aec_snapshot(&st, &nt);
+				printf("  12 b%2d in %6.1f out %6.1f onset %2u rel %u gmean %.2f pref %.3g perr %.3g fast %.2f mid %.2f floor %.2f\n",
+				       b, s.in_rms, s.out_rms, st.sup_onset, st.sup_gate_rel, st.sup_gmean, st.p_ref, st.p_err, st.sup_gate_fast, st.sup_gate_mid, st.sup_gate_floor);
+			}
 
 			if (b >= 3 && s.in_rms > -55.0f) {
 				pi += pow(10, s.in_rms / 10);
@@ -1284,6 +1322,101 @@ int main(int argc, char **argv)
 		      buf);
 	}
 
+
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+	/* --- 17. bug A: no stale onset duck carried into a new session --- */
+	{
+		/* a short earcon arms the onset duck, then the speaker session
+		 * closes before the duck finishes (speaker-idle bypass), or the
+		 * AEC is re-enabled. The next session opens with silence feed
+		 * (speaker.start, nothing queued yet) while the wearer talks:
+		 * there is no echo, so the wearer must pass untouched. The
+		 * 1.2 s gap before the earcon makes it a new reply, so the
+		 * earcon arms the duck itself. */
+		for (int path = 0; path < 2; path++) {
+			audio_aec_enable(true);
+			for (int b = 0; b < 300; b++) step(3);
+			for (int b = 0; b < 60; b++) step(2);  /* 1.2 s gap */
+			struct audio_aec_stats st;
+			size_t nt;
+			unsigned armed = 0;
+			for (int b = 0; b < 10; b++) {         /* 200ms earcon */
+				step(3);
+				audio_aec_snapshot(&st, &nt);
+				if (st.sup_onset > armed) armed = st.sup_onset;
+			}
+			for (int b = 0; b < 30; b++) step(0);  /* session closed */
+			audio_aec_snapshot(&st, &nt);
+			unsigned frozen = st.sup_onset;
+			if (path == 1) {
+				audio_aec_enable(true); /* aec(false)->aec(true) */
+			}
+			near2_amp = 0.6f;
+			float exc[100];
+			int nexc = 0;
+			float worst = 0.0f;
+			for (int b = 0; b < 90; b++) { /* silence-fed session */
+				struct blkstat s = step(2);
+				if (getenv("DUMP17")) {
+					struct audio_aec_stats st; size_t nt;
+					audio_aec_snapshot(&st, &nt);
+					printf("  17.%d b%2d in %6.1f out %6.1f near %6.1f onset %2u rel %u pb %u gmean %.2f pref %.3g\n",
+					       path, b, s.in_rms, s.out_rms, s.near_rms, st.sup_onset, st.sup_gate_rel, st.sup_pb_hold, st.sup_gmean, st.p_ref);
+				}
+				if (b >= 3 && s.near_rms > -28.0f) {
+					float e = s.out_rms - s.in_rms;
+					exc[nexc++] = e;
+					if (e < worst) worst = e;
+				}
+			}
+			near2_amp = 0.0f;
+			int crushed = 0;
+			for (int i = 0; i < nexc; i++) crushed += exc[i] < -10.0f;
+			snprintf(buf, sizeof(buf),
+				 "%s: earcon duck %u, left %u, %d/%d near blocks < -10dB, worst %.1f dB",
+				 path ? "re-enable" : "idle-gap ", armed, frozen,
+				 crushed, nexc, worst);
+			check("no stale onset duck in a new session",
+			      armed > 0 && nexc > 15 && crushed == 0, buf);
+		}
+	}
+
+	/* --- 18. info: does a reply right after a session close get its
+	 * onset duck? (frozen gate_hangover skips the rising-edge re-arm) */
+	{
+		audio_aec_enable(true);
+		for (int b = 0; b < 300; b++) step(3);
+		for (int b = 0; b < 30; b++) step(0);
+		int armed = 0;
+		for (int b = 0; b < 4; b++) {
+			step(3);
+			struct audio_aec_stats st;
+			size_t nt;
+			audio_aec_snapshot(&st, &nt);
+			if (st.sup_onset > 0) armed = 1;
+		}
+		printf("%-44s INFO  onset duck %s on the first reply after a session close\n",
+		       "re-engage onset (info)", armed ? "ARMED" : "NOT armed");
+	}
+
+	/* --- 21. info: false gate releases on echo-only cold onset ------- */
+	{
+		audio_aec_enable(true);
+		for (int b = 0; b < 100; b++) step(0);
+		int rel = 0, relob = 0;
+		for (int b = 0; b < 75; b++) {
+			step(4);
+			struct audio_aec_stats st;
+			size_t nt;
+			audio_aec_snapshot(&st, &nt);
+			rel += st.sup_gate_rel;
+			relob += st.sup_gate_rel && st.sup_onset > 0;
+		}
+		printf("%-44s INFO  gate released %d/75 blocks (%d inside the duck)\n",
+		       "cold-onset false gate releases (info)", rel, relob);
+	}
+
+#endif
 	printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "OK",
 	       failures, failures == 1 ? "" : "s");
 	return failures ? 1 : 0;
