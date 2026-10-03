@@ -1313,6 +1313,9 @@ static int lua_microphone_aec_tune(lua_State *L)
 			if (strcmp(bad, "onset_hold_ms") == 0) {
 				return luaL_error(L, "aec_tune: onset_hold_ms must be <= onset_ms");
 			}
+			if (strcmp(bad, "gate_band_hz") == 0) {
+				return luaL_error(L, "aec_tune: gate_band_hz must be 0 or in [500, 8000]");
+			}
 			return luaL_error(L, "aec_tune: %s out of range", bad);
 		}
 	}

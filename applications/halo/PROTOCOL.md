@@ -1556,12 +1556,12 @@ Runtime tuning of the echo canceller's barge-in behaviour (residual suppressor, 
 - `aec_tune{key = value, ...}` validates every key, then applies all of them at once, and returns the new table. An unknown key, a non-number, a non-integer for a `*_ms` or switch key, or an out-of-range value raises an error naming the key and its range, and **nothing** is applied. Keys you leave out keep their current values.
 - `aec_tune('defaults')` restores the compiled defaults and returns the table.
 
-The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks.
+The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks; `gate_band_hz` and `cap_split_hz` are rounded up to whole 15.625 Hz bins.
 
 | Key | Unit | Default | Range | What it does | Tradeoff |
 |-----|------|---------|-------|--------------|----------|
-| `sup_beta` | ratio | 1.5 | 0–20 | Residual suppressor over-subtraction: per-bin gain = 1 − beta × predicted echo / residual | Higher removes more residual echo but takes more of the wearer's voice in double talk |
-| `sup_floor` | gain | 0.1 | 0–1 | Lowest per-bin suppressor gain (0.1 = −20 dB) | Lower suppresses deeper, with more musical noise and voice damage |
+| `sup_beta` | ratio | 1.25 | 0–20 | Residual suppressor over-subtraction: per-bin gain = 1 − beta × predicted echo / residual | Higher removes more residual echo but takes more of the wearer's voice in double talk |
+| `sup_floor` | gain | 0.15 | 0–1 | Lowest per-bin suppressor gain (0.15 = −16.5 dB) | Lower suppresses deeper, with more musical noise and voice damage |
 | `onset_gcap` | gain | 0.02 | 0–1 | Blanket ceiling at the start of a reply (0.02 = −34 dB); 1 turns it off | Deeper keeps reply onsets below a server VAD, but mutes a wearer who talks at the start of a reply |
 | `onset_beta` | ratio | 4.0 | 0–20 | Suppressor beta at the start of a reply, eased to `sup_beta` | Higher crushes more onset echo and more onset double talk |
 | `onset_floor` | gain | 0.02 | 0–1 | Suppressor floor at the start of a reply, eased to `sup_floor` | Lower is a deeper onset duck |
@@ -1569,28 +1569,34 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
 | `onset_hold_ms` | ms | 400 | 0–`onset_ms` | Full-strength part of the onset duck | Longer is safer on a cold filter, slower to let the wearer through |
 | `rearm_ms` | ms | 1000 | 20–60000 | Speaker silence needed before the next playback onset re-arms the duck | Shorter re-ducks the wearer after pauses inside one reply (160 was the old behaviour); longer can leave a quick new reply unducked |
 | `onset_gate_lift` | switch | 2 | 0, 1, 2 | Lets the near-end gate lift the duck's blanket ceiling: 0 never, 1 always, 2 once the filter has adapted | 1 lets an early talker through sooner but can leak a cold onset; 0 cuts a talker for the whole duck |
-| `steady_gcap` | gain | 0.25 | 0–1 | Ceiling held during playback while the gate sees no wearer (0.25 = −12 dB); 1 turns it off | Lower scrambles residual echo more, but caps a wearer the gate misses just as hard |
-| `gate_kappa` | ratio | 0.15 | 0–4 | Echo allowance in the near-end gate: excess = √(residual power) − kappa × √(reference power) | Higher gives fewer false releases on echo, but a quiet wearer is detected less often |
+| `steady_gcap` | gain | 0.25 | 0–1 | Ceiling held during playback while the gate sees no wearer (0.25 = −12 dB); with `cap_split_hz` set, only above the split (and below 312 Hz); 1 turns it off | Lower scrambles residual echo more, but caps a wearer the gate misses just as hard |
+| `gate_kappa` | ratio | 0.5 | 0–4 | Echo allowance in the near-end gate: excess = √(residual power) − kappa × √(reference power), both measured below `gate_band_hz` | Higher gives fewer false releases on echo, but a quiet wearer is detected less often |
 | `gate_fast_a` | coefficient | 0.5 | 0.001–1 | Fast smoothing of the excess (per block) | Higher reacts sooner and is noisier |
 | `gate_floor_a` | coefficient | 0.01 | 0.0001–1 | Smoothing of the slow ambient floor (~2 s) | Higher follows noise faster, and also follows a long barge-in |
 | `gate_ratio` | ratio | 2.0 | 1–100 | Level release: fast excess above ratio × floor | Lower releases on quieter speech and on noise |
-| `gate_absfloor` | excess units | 0.5 | 0–1e6 | Level release also needs fast − floor above this | Higher ignores small excesses near silence, and misses a quiet wearer |
-| `gate_hang_ms` | ms | 1000 | 0–10000 | How long a release is held after the last detection | Longer bridges word gaps, but holds the cap open on echo after a false release |
+| `gate_absfloor` | excess units | 0.9 | 0–1e6 | Level release also needs fast − floor above this | Higher ignores small excesses near silence, and misses a quiet wearer |
+| `gate_hang_ms` | ms | 1200 | 0–10000 | How long a release is held after the last detection | Longer bridges word gaps, but holds the cap open on echo after a false release |
 | `gate_mid_a` | coefficient | 0.08 | 0.001–1 | Smoothing of the medium (~240 ms) baseline the edge detector rises above | Higher makes the edge test less sensitive to slow onsets |
 | `gate_edge_abs` | excess units | 0.6 | 0–1e6 | Edge release needs fast − mid above this; a very large value turns the edge path off | Higher is more robust near silence and slower to release |
 | `gate_edge_ratio` | ratio | 1.4 | 1–100 | Edge release: fast excess above ratio × mid | Lower lets a barge-in through faster, with more false releases on echo and noise (1.8 was noise-safe offline) |
 | `gate_pref_min` | power | 0.05 | 0–1e6 | Below this reference power the playback ceiling lifts (speaker idle) | Higher lifts during quiet playback (echo leaks); lower can let idle dither through the cap |
 | `playback_hold_ms` | ms | 400 | 0–10000 | Keeps the ceiling while real audio was played this recently, even if the reference reads silent | Longer covers feed stalls but delays the lift after playback ends |
 | `fd_mu` | step | 0.25 | 0.05–1 | Step size of the linear (FDAF) filter | Higher adapts faster, with a noisier filter (1.0 is worse everywhere on the host harness) |
+| `gate_band_hz` | Hz | 1000 | 0, 500–8000 | The near-end gate measures residual and reference power only below this frequency; 0 = the whole 312–3800 Hz band | The filter cancels best, and the voice is strongest, below ~1 kHz; full band, the poorly cancelled echo above it can release the gate on echo when the echo is loud (worn, or a high-coupling unit) |
+| `cap_split_hz` | Hz | 750 | 0–8000 | From 312 Hz (the bottom of the adaptation band) up to this frequency the playback ceiling is `cap_lo_gcap` instead of `steady_gcap`; below 312 Hz it stays `steady_gcap`; 0 = one band | A split spares the low band of a wearer the gate misses, where most of the voice is, for a little more low-band echo |
+| `cap_lo_gcap` | gain | 0.5 | 0–1 | Playback ceiling from 312 Hz up to `cap_split_hz` while the gate sees no wearer | Higher keeps more of a missed wearer and lets more low-band echo through |
 
 - **Parameters:** none, a table of keys, or the string `'defaults'`
 - **Returns:** `table` (every key and its value after the call)
-- **Errors:** `"aec_tune: unknown key '<k>'"`, `"aec_tune: <k> must be in [<min>, <max>]"`, `"aec_tune: <k> must be an integer in [<min>, <max>]"`, `"aec_tune: onset_hold_ms must be <= onset_ms"`
+- **Errors:** `"aec_tune: unknown key '<k>'"`, `"aec_tune: <k> must be in [<min>, <max>]"`, `"aec_tune: <k> must be an integer in [<min>, <max>]"`, `"aec_tune: onset_hold_ms must be <= onset_ms"`, `"aec_tune: gate_band_hz must be 0 or in [500, 8000]"`
 - **Example:**
   ```lua
   local t = frame.microphone.aec_tune()          -- current values
   frame.microphone.aec_tune{rearm_ms = 160}      -- old mid-reply re-arm, for an A/B
   frame.microphone.aec_tune{gate_kappa = 0.3, gate_edge_ratio = 1.8}
+  -- the gate and suppressor values of 0.8.17 and earlier (full-band gate, one-band ceiling)
+  frame.microphone.aec_tune{gate_kappa = 0.15, gate_absfloor = 0.5, gate_hang_ms = 1000,
+                            sup_beta = 1.5, sup_floor = 0.1, gate_band_hz = 0, cap_split_hz = 0}
   frame.microphone.aec_tune('defaults')
   ```
 

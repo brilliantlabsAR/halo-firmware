@@ -443,12 +443,16 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * which exists only while playback is active. Offline on real voice
  * captures: onset-1s ERLE +0.7..+1.5dB -> +9.3..+17.5dB.
  * (BETA/FLOOR overridable for host A/B; BETA=0 = passthrough gains.)
+ * BETA 1.25 / FLOOR 0.15 (was 1.5 / 0.1, 2026-10-04): with the gate band
+ * below and the two-band ceiling, the lighter suppressor keeps more of a
+ * wearer the gate misses; the ceiling now holds on echo, so the echo
+ * removal still rose (desk Halo 28 at -31dBFS echo, 11.4 -> 17.1dB).
  */
 #ifndef AEC_SUP_BETA
-#define AEC_SUP_BETA  1.5f
+#define AEC_SUP_BETA  1.25f
 #endif
 #ifndef AEC_SUP_FLOOR
-#define AEC_SUP_FLOOR 0.1f
+#define AEC_SUP_FLOOR 0.15f
 #endif
 /* Onset boost (the head-worn barge-in fix, 2026-07-13): each reply's onset
  * leaks enough echo to trip the server VAD before the steady suppressor
@@ -577,10 +581,17 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #define AEC_SUP_GCAP_ENV_GATE 1
 #endif
 /* Echo-removal coupling (excess = max(0, sqrt(p_err) - KAPPA*sqrt(p_ref))).
- * Roughly volume-independent (echo and reference both scale with volume);
- * robust across ~0.09-0.3 offline. */
+ * Roughly volume-independent (echo and reference both scale with volume),
+ * but not coupling-independent: the echo-only ratio sqrt(p_err/p_ref) is
+ * ~0.06 on the desk EC, ~0.22 on a desk Halo 28 after a coupling step and
+ * ~0.34 worn (full band, median), so 0.15 released the cap on echo for
+ * most of a reply on the louder units. 0.5 (2026-10-04, with the gate band
+ * AEC_SUP_GATE_BAND_HZ) holds it on echo there: desk Halo 28, false
+ * release 80% -> 0% of the reply. The cost: a wearer whose voice is below
+ * the echo at the mic is not detected while the reply plays (desk talker
+ * at -36dBFS under -31dBFS echo); the two-band ceiling limits the damage. */
 #ifndef AEC_SUP_GATE_KAPPA
-#define AEC_SUP_GATE_KAPPA 0.15f
+#define AEC_SUP_GATE_KAPPA 0.5f
 #endif
 /* Fast-envelope smoothing of the excess (~0.5 = 2-block attack). */
 #ifndef AEC_SUP_GATE_FAST_A
@@ -596,11 +607,11 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #define AEC_SUP_GATE_RATIO 2.0f
 #endif
 #ifndef AEC_SUP_GATE_ABSFLOOR
-#define AEC_SUP_GATE_ABSFLOOR 0.5f
+#define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
-/* Release hangover (blocks) to hold through brief near-end dips (~1s). */
+/* Release hangover (blocks) to hold through brief near-end dips (~1.2s). */
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 50
+#define AEC_SUP_GATE_HANG 60
 #endif
 /* Rising-edge (transient) release path (worn latency lever, 2026-07-14).
  *
@@ -739,6 +750,43 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_ONSET_LIFT_WARM
 #define AEC_SUP_ONSET_LIFT_WARM 0.1f
 #endif
+/* Near-end gate band (Hz). The gate's residual and reference powers sum
+ * only the adaptation bins below this frequency; 0 = the whole adaptation
+ * band (312Hz-3.8kHz). The linear filter cancels best below ~1kHz and the
+ * wearer's voice carries most of its energy there; above it the echo is
+ * poorly cancelled. Full band, the echo-only residual/reference ratio
+ * grows with the echo coupling (desk 0.06-0.22, worn 0.34 median) past any
+ * fixed KAPPA, and the gate releases on echo (offline replays, desk Halo 28
+ * at high coupling and a worn capture: 92% of the reply). Below 1kHz that
+ * ratio stays low and the talker stands out. Nonzero values must cover at
+ * least 500Hz.
+ */
+#ifndef AEC_SUP_GATE_BAND_HZ
+#define AEC_SUP_GATE_BAND_HZ 1000
+#endif
+/* Two-band steady ceiling: below CAP_SPLIT_HZ the sustained ceiling is
+ * CAP_LO_GCAP instead of STEADY_GCAP (0 = one band). The residual echo
+ * that survives the suppressor sits mostly at 1.6-3.4kHz, the wearer's
+ * voice mostly below 800Hz, so a lighter low-band cap spares a wearer the
+ * gate misses for little echo. Applies only while the ceiling holds (gate
+ * closed, playback), and only to the adaptation bins (312Hz up to the
+ * split); the bone-conduction band below 312Hz keeps STEADY_GCAP. A
+ * release lifts both bands. The onset duck's
+ * ONSET_GCAP stays one band. 750Hz / 0.5 (-6dB): desk talker under the
+ * echo (the gate misses it), talker frames cut by more than 10dB 52% ->
+ * 11% on Halo 28 and 21% -> 1% on the EC, for ~1dB less echo removal.
+ * STEADY_GCAP (the high band) stays 0.25: the host HF-noise check fails
+ * below it.
+ */
+#ifndef AEC_SUP_CAP_SPLIT_HZ
+#define AEC_SUP_CAP_SPLIT_HZ 750
+#endif
+#ifndef AEC_SUP_CAP_LO_GCAP
+#define AEC_SUP_CAP_LO_GCAP 0.5f
+#endif
+/* first bin at or above hz (bins are 15.625Hz = 1000/64) */
+#define AEC_HZ_TO_BIN(hz) ((uint32_t)(((hz) * 64u + 999u) / 1000u))
+#define AEC_SUP_GATE_BAND_MIN_HZ 500
 #define AEC_SUP_D     128
 #define AEC_SUP_KLEN  (2 * AEC_SUP_D + 1)
 #define AEC_SUP_POW_A 0.33f
@@ -789,6 +837,9 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 	.gate_pref_min = AEC_SUP_GATE_PREF_MIN, \
 	.playback_hold_ms = AEC_SUP_PLAYBACK_HOLD_MS, \
 	.fd_mu = AEC_FD_MU, \
+	.gate_band_hz = AEC_SUP_GATE_BAND_HZ, \
+	.cap_split_hz = AEC_SUP_CAP_SPLIT_HZ, \
+	.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP, \
 }
 
 #define TUNE_KEY(f, ty, lo, hi) \
@@ -820,6 +871,9 @@ static const struct audio_aec_tune_key tune_keys[] = {
 	TUNE_KEY(gate_pref_min, FLOAT, 0.0f, 1e6f),
 	TUNE_KEY(playback_hold_ms, U32, 0.0f, 10000.0f),
 	TUNE_KEY(fd_mu, FLOAT, 0.05f, 1.0f),
+	TUNE_KEY(gate_band_hz, U32, 0.0f, 8000.0f),
+	TUNE_KEY(cap_split_hz, U32, 0.0f, 8000.0f),
+	TUNE_KEY(cap_lo_gcap, FLOAT, 0.0f, 1.0f),
 };
 
 /* the mic thread's snapshot: the parameter set plus its block counts */
@@ -830,6 +884,8 @@ struct aec_tune_rt {
 	uint32_t ease_hops;
 	uint32_t rearm_blocks;
 	uint32_t gate_hang;
+	uint32_t gate_bin_end;  /* gate band: bins [FD_BIN_LO, end) */
+	uint32_t cap_split_bin; /* bins [FD_BIN_LO, it) take cap_lo_gcap (0 = off) */
 };
 
 static struct audio_aec_tune tune_pub = AEC_TUNE_DEFAULTS;
@@ -842,6 +898,9 @@ static struct aec_tune_rt tune = {
 			     : 1,
 	.rearm_blocks = AEC_SUP_ONSET_REARM_BLOCKS,
 	.gate_hang = AEC_SUP_GATE_HANG,
+	.gate_bin_end = AEC_SUP_GATE_BAND_HZ ? AEC_HZ_TO_BIN(AEC_SUP_GATE_BAND_HZ)
+					     : FD_BIN_HI + 1,
+	.cap_split_bin = AEC_HZ_TO_BIN(AEC_SUP_CAP_SPLIT_HZ),
 };
 static atomic_t tune_gen = ATOMIC_INIT(1);
 static uint32_t tune_seen = 1;
@@ -869,6 +928,9 @@ static void aec_tune_refresh(void)
 				 : 1;
 	tune.rearm_blocks = tune.p.rearm_ms / 20;
 	tune.gate_hang = tune.p.gate_hang_ms / 20;
+	tune.gate_bin_end = tune.p.gate_band_hz ? AEC_HZ_TO_BIN(tune.p.gate_band_hz)
+						: FD_BIN_HI + 1;
+	tune.cap_split_bin = AEC_HZ_TO_BIN(tune.p.cap_split_hz);
 }
 #endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
 
@@ -912,6 +974,9 @@ const char *audio_aec_tune_check(const struct audio_aec_tune *t)
 	}
 	if (t->onset_hold_ms > t->onset_ms) {
 		return "onset_hold_ms";
+	}
+	if (t->gate_band_hz != 0 && t->gate_band_hz < AEC_SUP_GATE_BAND_MIN_HZ) {
+		return "gate_band_hz";
 	}
 	return NULL;
 #else
@@ -1226,6 +1291,8 @@ static struct {
 	float gate_fast;         /* fast EMA of the excess residual */
 	float gate_floor;        /* slow ambient-floor EMA (no freeze) */
 	float gate_mid;          /* medium EMA: edge-detector baseline (see MID_A) */
+	float gate_pref;         /* gate-band reference / residual powers */
+	float gate_perr;         /* (AEC_SUP_GATE_BAND_HZ) */
 	bool  gate_floor_init;   /* seed the floor/mid on the first block */
 	uint32_t gate_hang;      /* release hangover blocks remaining */
 	bool  gate_released;     /* last block's release decision (diagnostics) */
@@ -1444,6 +1511,8 @@ static void aec_session_reset(void)
 	sup.gate_fast = 0.0f;
 	sup.gate_floor = 0.0f;
 	sup.gate_mid = 0.0f;
+	sup.gate_pref = 0.0f;
+	sup.gate_perr = 0.0f;
 	sup.gate_floor_init = false;
 	sup.gate_hang = 0;
 	sup.gate_released = false;
@@ -2077,7 +2146,9 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 	 * powers for the double-talk detector
 	 */
 	float pr = 0.0f, pe = 0.0f, psum = 0.0f;
+	float pr_g = 0.0f, pe_g = 0.0f; /* the gate band's share */
 	const float *Xn = fd.Xf[slot];
+	const uint32_t gate_end = tune.gate_bin_end;
 
 	for (uint32_t b = FD_BIN_LO; b <= FD_BIN_HI; b++) {
 		float inst = 0.0f;
@@ -2091,11 +2162,20 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		fd.Pi[b] = inst;
 		fd.P[b] += AEC_FD_POW_ALPHA * (inst - fd.P[b]);
 		psum += fd.P[b];
-		pr += Xn[2 * b] * Xn[2 * b] + Xn[2 * b + 1] * Xn[2 * b + 1];
-		pe += E[2 * b] * E[2 * b] + E[2 * b + 1] * E[2 * b + 1];
+		float prb = Xn[2 * b] * Xn[2 * b] + Xn[2 * b + 1] * Xn[2 * b + 1];
+		float peb = E[2 * b] * E[2 * b] + E[2 * b + 1] * E[2 * b + 1];
+
+		pr += prb;
+		pe += peb;
+		if (b < gate_end) {
+			pr_g += prb;
+			pe_g += peb;
+		}
 	}
 	aec.p_ref += AEC_FD_POW_ALPHA * (pr - aec.p_ref);
 	aec.p_err += AEC_FD_POW_ALPHA * (pe - aec.p_err);
+	sup.gate_pref += AEC_FD_POW_ALPHA * (pr_g - sup.gate_pref);
+	sup.gate_perr += AEC_FD_POW_ALPHA * (pe_g - sup.gate_perr);
 
 #if AEC_SUP_GCAP_ENV_GATE
 	/* near-end release gate (see AEC_SUP_GCAP_ENV_GATE): echo-removed
@@ -2104,8 +2184,13 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 	 * by the steady-cap block below.
 	 */
 	{
-		float re = __builtin_sqrtf(aec.p_err > 0.0f ? aec.p_err : 0.0f);
-		float xr = __builtin_sqrtf(aec.p_ref > 0.0f ? aec.p_ref : 0.0f);
+		/* gate band (AEC_SUP_GATE_BAND_HZ); full band = the DTD's
+		 * in-band powers, so 0 is the original gate exactly */
+		bool full = gate_end > FD_BIN_HI;
+		float gpe = full ? aec.p_err : sup.gate_perr;
+		float gpr = full ? aec.p_ref : sup.gate_pref;
+		float re = __builtin_sqrtf(gpe > 0.0f ? gpe : 0.0f);
+		float xr = __builtin_sqrtf(gpr > 0.0f ? gpr : 0.0f);
 		float ex = re - tp->gate_kappa * xr;
 
 		if (ex < 0.0f) {
@@ -2375,6 +2460,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		 * prediction-independent limit on every in-band gain
 		 */
 		float steady_cap = tp->steady_gcap;
+		bool cap_hold = true; /* the sustained ceiling applies */
 #if AEC_SUP_GCAP_ENV_GATE
 		/* lift the sustained ceiling when either there is no real echo to
 		 * scramble (idle: p_ref below the floor - fixes the dither
@@ -2389,6 +2475,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			/* keep steady_cap = steady_gcap (fail safe) */
 		} else if (sup.gate_released) {
 			steady_cap = 1.0f; /* genuine near-end voice: release */
+			cap_hold = false;
 		} else if (aec.p_ref < tp->gate_pref_min) {
 			/* p_ref below the echo floor. This is genuine idle ONLY if
 			 * the speaker is not actively playing: a live reference
@@ -2407,6 +2494,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 
 			if (rf == 0 || rf_age > (int32_t)tp->playback_hold_ms) {
 				steady_cap = 1.0f; /* genuinely idle */
+				cap_hold = false;
 			} else {
 				sup.pb_hold = true; /* collapse guard: hold cap */
 			}
@@ -2414,6 +2502,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 #elif AEC_SUP_GCAP_DTD_GATE
 		if (aec.p_err >= AEC_SUP_GCAP_DTD_RATIO * aec.p_ref) {
 			steady_cap = 1.0f; /* near-end: release the sustained cap */
+			cap_hold = false;
 		}
 #endif
 		float ob_cap = ob;
@@ -2429,18 +2518,31 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 #endif
 		float g_cap = tp->onset_gcap +
 			      (steady_cap - tp->onset_gcap) * (1.0f - ob_cap);
+		/* two-band steady ceiling (see AEC_SUP_CAP_SPLIT_HZ): in the
+		 * adaptation bins below the split, cap_lo_gcap replaces
+		 * steady_gcap while the ceiling holds; the onset duck and a
+		 * release are the same in both */
+		const uint32_t split = tune.cap_split_bin;
+		float g_cap_lo = g_cap;
+
+		if (split > 0 && cap_hold) {
+			g_cap_lo = tp->onset_gcap + (tp->cap_lo_gcap - tp->onset_gcap) *
+							    (1.0f - ob_cap);
+		}
 		for (uint32_t b = 1; b < FD_BINS; b++) {
 			float gj = 1.0f;
+			float gc = (b >= FD_BIN_LO && b < split) ? g_cap_lo
+							       : g_cap;
 
 			if (b >= FD_BIN_LO && b <= FD_BIN_HI) {
 				gj = sup.g[b - FD_BIN_LO];
-				if (gj > g_cap) {
-					gj = g_cap;
+				if (gj > gc) {
+					gj = gc;
 				}
 			} else if (b >= FD_CAP_BIN_LO && b < FD_BIN_LO) {
 				/* bone-conduction echo band, below adaptation:
 				 * blanket cap only (no per-bin prediction here) */
-				gj = g_cap;
+				gj = gc;
 			}
 			fd.spec[2 * b] = gj;
 			fd.spec[2 * b + 1] = 0.0f;
@@ -2672,6 +2774,8 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 		sup.gate_released = false;
 		aec.p_ref = 0.0f;
 		aec.p_err = 0.0f;
+		sup.gate_pref = 0.0f;
+		sup.gate_perr = 0.0f;
 #endif
 		return;
 	}
