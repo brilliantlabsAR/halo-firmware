@@ -697,6 +697,14 @@ static int lua_display_bitmap(lua_State *L)
 		return luaL_error(L, "scale factors must be positive integers");
 	}
 
+	/* The scale loops use int counters and every scaled pixel is visited,
+	 * so an oversized factor is either an overflowed, never-ending loop or
+	 * a very long one drawing off screen. Nothing larger than the display
+	 * can be meant. */
+	if (x_scale > LOG_WIDTH || y_scale > LOG_HEIGHT) {
+		return luaL_error(L, "scale factors must not exceed the display size");
+	}
+
 	if (!pixel_data) {
 		return luaL_error(L, "pixel data pointer is null");
 	}
