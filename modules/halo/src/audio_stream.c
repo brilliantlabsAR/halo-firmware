@@ -103,6 +103,7 @@ struct audio_codec_ctx {
 	int bad_score;    /**< garbage-input score (decoder only) */
 	int good_streak;  /**< consecutive good frames while muted */
 	bool muted;       /**< output muted due to sustained bad input */
+	uint8_t last_flags; /**< AUDIO_LC3_FRAME_* for the last decoded frame */
 };
 
 audio_codec_ctx_t *audio_lc3_decoder_create(int sample_rate, int duration, int bitrate)
@@ -157,12 +158,15 @@ int audio_lc3_decode_frame(audio_codec_ctx_t *ctx, const uint8_t *encoded_data, 
 	int ret = lc3_api_decode_frame(&ctx->config, &ctx->lc3.decoder, encoded_data, encoded_len,
 				       0, &bec_detect, pcm_out, ctx->scratch);
 
+	ctx->last_flags = 0;
+
 	if (ret != 0) {
 		LOG_ERR("LC3 decode failed: %d", ret);
 		return -EIO;
 	}
 
 	if (bec_detect) {
+		ctx->last_flags |= AUDIO_LC3_FRAME_BAD;
 		ctx->good_streak = 0;
 		ctx->bad_score += LC3_SCORE_BAD;
 		if (ctx->bad_score > LC3_SCORE_MAX) {
@@ -170,6 +174,7 @@ int audio_lc3_decode_frame(audio_codec_ctx_t *ctx, const uint8_t *encoded_data, 
 		}
 		if (!ctx->muted && ctx->bad_score >= LC3_MUTE_SCORE) {
 			ctx->muted = true;
+			ctx->last_flags |= AUDIO_LC3_FRAME_MUTE_ENGAGED;
 			LOG_WRN("Sustained bad LC3 input - muting");
 		} else if (!ctx->muted) {
 			LOG_WRN("Bad LC3 frame detected, PLC applied");
@@ -192,9 +197,15 @@ int audio_lc3_decode_frame(audio_codec_ctx_t *ctx, const uint8_t *encoded_data, 
 		 * valid-parsing frames are silenced.
 		 */
 		memset(pcm_out, 0, pcm_len); /* pcm_len is bytes */
+		ctx->last_flags |= AUDIO_LC3_FRAME_MUTED;
 	}
 
 	return 0;
+}
+
+uint8_t audio_lc3_decoder_frame_flags(const audio_codec_ctx_t *ctx)
+{
+	return ctx ? ctx->last_flags : 0;
 }
 
 void audio_lc3_decoder_destroy(audio_codec_ctx_t *ctx)

@@ -17,6 +17,11 @@
 #include <halo/lua_runtime.h>
 #include <halo/pm_manager.h>
 #include <halo/file_manager.h>
+#include <halo/ble_lua.h>
+
+#if defined(CONFIG_MAX98357A_AUDIO)
+#include <max98357a_audio.h>
+#endif
 
 LOG_MODULE_REGISTER(lua_speaker, CONFIG_HALO_LOG_LEVEL);
 
@@ -77,6 +82,37 @@ static struct {
 };
 
 /* ============================================================================
+ * Playback Accounting (frame.speaker.stats)
+ * ============================================================================ */
+
+/* Monotonic from boot; stats(true) moves the baselines instead of zeroing,
+ * so nothing here is written by more than one context at a time: the
+ * decode/write counters change under speaker_state.mutex (pump thread or
+ * play()), starts/restarts on the Lua thread.
+ */
+struct speaker_counters {
+	uint32_t starts;
+	uint32_t restarts;
+	uint32_t frames_decoded;
+	uint32_t frames_plc;
+	uint32_t frames_muted;
+	uint32_t mute_events;
+	uint32_t decode_errors;
+	uint32_t bytes_misaligned;
+	uint32_t frames_dropped_stop;
+	uint32_t frames_write_failed;
+	uint32_t pcm_bytes;
+	uint32_t pcm_bytes_failed;
+};
+
+static struct speaker_counters spk_cnt;
+static struct speaker_counters spk_base;
+static struct halo_ble_lua_audio_rx_stats rx_base;
+#if defined(CONFIG_MAX98357A_AUDIO)
+static struct max98357a_audio_tx_diag amp_base;
+#endif
+
+/* ============================================================================
  * Speaker Background Thread
  * ============================================================================ */
 
@@ -86,6 +122,53 @@ static struct {
  * Continuously reads audio data from BLE and writes to speaker hardware.
  * Handles LC3 decoding if enabled.
  */
+/* Decode one channel's LC3 frame into channel_buffer, counting the result.
+ * Caller holds speaker_state.mutex.
+ */
+static int speaker_decode(int ch, const uint8_t *frame, size_t frame_size)
+{
+	audio_codec_ctx_t *dec = speaker_state.lc3_decoder[ch];
+	int ret = audio_lc3_decode_frame(dec, frame, frame_size,
+					 speaker_state.channel_buffer,
+					 speaker_state.pcm_frame_size);
+
+	if (ret != 0) {
+		spk_cnt.decode_errors++;
+		return ret;
+	}
+
+	uint8_t flags = audio_lc3_decoder_frame_flags(dec);
+
+	spk_cnt.frames_decoded++;
+	if (flags & AUDIO_LC3_FRAME_MUTED) {
+		spk_cnt.frames_muted++;
+	} else if (flags & AUDIO_LC3_FRAME_BAD) {
+		spk_cnt.frames_plc++;
+	}
+	if (flags & AUDIO_LC3_FRAME_MUTE_ENGAGED) {
+		spk_cnt.mute_events++;
+	}
+	return 0;
+}
+
+/* Hand PCM to the speaker, counting anything it refuses (stopped,
+ * suspended, or preempted by LE Audio). Caller holds speaker_state.mutex.
+ */
+static void speaker_write(uint8_t *pcm, size_t len, bool lc3)
+{
+	int ret = audio_speaker_write(speaker_state.speaker, pcm, len);
+	size_t written = ret > 0 ? (size_t)ret : 0;
+
+	if (lc3) {
+		if (written < len) {
+			spk_cnt.frames_write_failed++;
+		}
+	} else {
+		spk_cnt.pcm_bytes += written;
+		spk_cnt.pcm_bytes_failed += len - MIN(written, len);
+	}
+}
+
 static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 {
 	ARG_UNUSED(arg1);
@@ -115,6 +198,17 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 
 			/* Check state again after acquiring mutex */
 			if (!speaker_state.is_streaming || speaker_state.thread_should_exit) {
+				if (speaker_state.use_lc3) {
+					size_t fs = audio_lc3_get_frame_size(
+						speaker_state.sample_rate,
+						speaker_state.lc3_duration,
+						speaker_state.lc3_bitrate) *
+						speaker_state.channel_count;
+
+					if (fs > 0) {
+						spk_cnt.frames_dropped_stop += len / fs;
+					}
+				}
 				k_mutex_unlock(&speaker_state.mutex);
 				break;
 			}
@@ -133,6 +227,12 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 					size_t samples_per_frame =
 						speaker_state.pcm_frame_size / sizeof(int16_t);
 
+					/* A read that is not whole frames leaves a
+					 * tail that is discarded here (and misaligns
+					 * the frames after it).
+					 */
+					spk_cnt.bytes_misaligned += len % frame_size_total;
+
 					for (size_t i = 0; i < num_frames; i++) {
 						/* Decode each channel separately */
 						for (int ch = 0; ch < speaker_state.channel_count;
@@ -141,12 +241,10 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 									ch * frame_size;
 
 							/* Decode to single-channel buffer */
-							int ret = audio_lc3_decode_frame(
-								speaker_state.lc3_decoder[ch],
+							int ret = speaker_decode(
+								ch,
 								speaker_state.ble_buffer + offset,
-								frame_size,
-								speaker_state.channel_buffer,
-								speaker_state.pcm_frame_size);
+								frame_size);
 
 							if (ret != 0) {
 								LOG_ERR("LC3 decode failed for "
@@ -172,21 +270,22 @@ static void speaker_thread_fn(void *arg1, void *arg2, void *arg3)
 						size_t total_pcm_size =
 							speaker_state.pcm_frame_size *
 							speaker_state.channel_count;
-						audio_speaker_write(
-							speaker_state.speaker,
+						speaker_write(
 							(uint8_t *)speaker_state.pcm_buffer,
-							total_pcm_size);
+							total_pcm_size, true);
 
 						if (speaker_state.thread_should_exit ||
 						    !speaker_state.is_streaming) {
+							/* rest of this read is lost */
+							spk_cnt.frames_dropped_stop +=
+								num_frames - i - 1;
 							break;
 						}
 					}
 				}
 			} else {
 				/* PCM direct playback */
-				audio_speaker_write(speaker_state.speaker, speaker_state.ble_buffer,
-						    len);
+				speaker_write(speaker_state.ble_buffer, len, false);
 			}
 
 			k_mutex_unlock(&speaker_state.mutex);
@@ -324,6 +423,8 @@ static int lua_speaker_start(lua_State *L)
 
 	/* If already running, stop first to reconfigure */
 	if (speaker_state.is_streaming) {
+		spk_cnt.restarts++;
+
 		/* Exit streaming loop first */
 		speaker_state.is_streaming = false;
 		k_sem_take(&speaker_state.stream_exit_sem, K_FOREVER);
@@ -534,6 +635,7 @@ static int lua_speaker_start(lua_State *L)
 	}
 
 	speaker_state.is_streaming = true;
+	spk_cnt.starts++;
 	k_sem_give(&speaker_state.sem);
 
 	LOG_DBG("Speaker: %s %dHz %dbit vol=%d bitrate:%d duration:%d",
@@ -616,9 +718,7 @@ static int lua_speaker_play(lua_State *L)
 				size_t offset = i * frame_size_total + ch * frame_size;
 
 				/* Decode to single-channel buffer */
-				int ret = audio_lc3_decode_frame(
-					speaker_state.lc3_decoder[ch], data + offset, frame_size,
-					speaker_state.channel_buffer, speaker_state.pcm_frame_size);
+				int ret = speaker_decode(ch, data + offset, frame_size);
 
 				if (ret != 0) {
 					k_mutex_unlock(&speaker_state.mutex);
@@ -636,14 +736,13 @@ static int lua_speaker_play(lua_State *L)
 			/* Write interleaved PCM to speaker */
 			size_t total_pcm_size =
 				speaker_state.pcm_frame_size * speaker_state.channel_count;
-			audio_speaker_write(speaker_state.speaker,
-					    (uint8_t *)speaker_state.pcm_buffer,
-					    total_pcm_size);
+			speaker_write((uint8_t *)speaker_state.pcm_buffer,
+				      total_pcm_size, true);
 		}
 	} else {
 		/* PCM direct playback - cast needed as HPF may modify buffer in-place.
 		 * The Lua string data is heap-allocated and consumed immediately. */
-		audio_speaker_write(speaker_state.speaker, (uint8_t *)data, len);
+		speaker_write((uint8_t *)data, len, false);
 	}
 
 	k_mutex_unlock(&speaker_state.mutex);
@@ -692,6 +791,86 @@ static int lua_speaker_volume(lua_State *L)
 		return 0;
 	}
 }
+
+#define STAT(name, val)                                                        \
+	do {                                                                   \
+		lua_pushinteger(L, (lua_Integer)(val));                        \
+		lua_setfield(L, -2, name);                                     \
+	} while (0)
+
+/**
+ * @brief frame.speaker.stats([reset])
+ *
+ * Playback accounting along the whole speaker path, so a lost stretch of
+ * audio can be placed: never arrived (ble_rejected*), arrived but not
+ * decoded (bytes_misaligned, decode_errors, frames_dropped_stop), decoded
+ * but silenced or refused (frames_muted, frames_write_failed), or queued
+ * but thrown away at a stop (blocks_discarded). Cheap counters only - no
+ * logging. Counts cover the window since boot or the last stats(true).
+ *
+ * @param reset true: return this window's counts and start a new window
+ * @return table of integer counters plus `streaming` (boolean)
+ */
+static int lua_speaker_stats(lua_State *L)
+{
+	bool reset = lua_toboolean(L, 1);
+	struct speaker_counters c = spk_cnt;
+	struct halo_ble_lua_audio_rx_stats rx;
+
+	halo_ble_lua_audio_rx_stats_get(&rx);
+
+	lua_createtable(L, 0, 26);
+
+	lua_pushboolean(L, speaker_state.is_streaming);
+	lua_setfield(L, -2, "streaming");
+	STAT("starts", c.starts - spk_base.starts);
+	STAT("restarts", c.restarts - spk_base.restarts);
+
+	STAT("ble_writes", rx.writes - rx_base.writes);
+	STAT("ble_bytes", rx.bytes - rx_base.bytes);
+	STAT("ble_rejected", rx.rejected - rx_base.rejected);
+	STAT("ble_rejected_bytes", rx.rejected_bytes - rx_base.rejected_bytes);
+	STAT("ring_bytes", rx.ring_level);
+	STAT("ring_peak", rx.ring_peak);
+
+	STAT("frames_decoded", c.frames_decoded - spk_base.frames_decoded);
+	STAT("frames_plc", c.frames_plc - spk_base.frames_plc);
+	STAT("frames_muted", c.frames_muted - spk_base.frames_muted);
+	STAT("mute_events", c.mute_events - spk_base.mute_events);
+	STAT("decode_errors", c.decode_errors - spk_base.decode_errors);
+	STAT("bytes_misaligned", c.bytes_misaligned - spk_base.bytes_misaligned);
+	STAT("frames_dropped_stop",
+	     c.frames_dropped_stop - spk_base.frames_dropped_stop);
+	STAT("frames_write_failed",
+	     c.frames_write_failed - spk_base.frames_write_failed);
+	STAT("pcm_bytes", c.pcm_bytes - spk_base.pcm_bytes);
+	STAT("pcm_bytes_failed", c.pcm_bytes_failed - spk_base.pcm_bytes_failed);
+
+#if defined(CONFIG_MAX98357A_AUDIO)
+	struct max98357a_audio_tx_diag amp;
+
+	max98357a_audio_tx_diag_get(&amp);
+	STAT("blocks_played", amp.real_sends - amp_base.real_sends);
+	STAT("silence_blocks", amp.silence_sends - amp_base.silence_sends);
+	STAT("blocks_discarded", amp.stop_discards - amp_base.stop_discards);
+	STAT("drain_timeouts", amp.drain_timeouts - amp_base.drain_timeouts);
+	STAT("i2s_errors", (amp.err_completions - amp_base.err_completions) +
+				   (amp.cb_send_fails - amp_base.cb_send_fails));
+#endif
+
+	if (reset) {
+		spk_base = c;
+		rx_base = rx;
+		halo_ble_lua_audio_rx_peak_reset();
+#if defined(CONFIG_MAX98357A_AUDIO)
+		amp_base = amp;
+#endif
+	}
+
+	return 1;
+}
+
+#undef STAT
 
 void halo_lua_speaker_interrupt(void)
 {
@@ -811,6 +990,7 @@ HALO_LUA_SERVICE_DEFINE(speaker_service, speaker_service_event_handler, NULL, fa
  *   - stop() - Stop speaker
  *   - play(data) - Direct playback
  *   - volume(level) - Set volume
+ *   - stats([reset]) - Playback accounting
  */
 int lua_open_speaker_library(lua_State *L)
 {
@@ -845,6 +1025,7 @@ int lua_open_speaker_library(lua_State *L)
 						 {"stop", lua_speaker_stop},
 						 {"play", lua_speaker_play},
 						 {"volume", lua_speaker_volume},
+						 {"stats", lua_speaker_stats},
 						 {NULL, NULL}};
 
 	luaL_setfuncs(L, speaker_funcs, 0);

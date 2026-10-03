@@ -1219,6 +1219,9 @@ static int lua_microphone_voice(lua_State *L)
  *                    probes (for the PDM-vs-I2S skew hunt)
  *   diag('zero')  -> zero the clock-rate monitor and PDM/speaker counters
  */
+/* diag('zero') baseline for the amplifier's monotonic TX counters */
+static struct max98357a_audio_tx_diag spk_diag_base;
+
 static int lua_microphone_diag(lua_State *L)
 {
 	const char *cmd = luaL_checkstring(L, 1);
@@ -1363,16 +1366,19 @@ static int lua_microphone_diag(lua_State *L)
 
 		struct max98357a_audio_tx_diag spk;
 
+		/* Driver counters are monotonic (frame.speaker.stats() reads
+		 * them too); report them relative to the last diag('zero').
+		 */
 		max98357a_audio_tx_diag_get(&spk);
-		lua_pushinteger(L, spk.real_sends);
+		lua_pushinteger(L, spk.real_sends - spk_diag_base.real_sends);
 		lua_setfield(L, -2, "spk_real_sends");
-		lua_pushinteger(L, spk.silence_sends);
+		lua_pushinteger(L, spk.silence_sends - spk_diag_base.silence_sends);
 		lua_setfield(L, -2, "spk_silence_sends");
-		lua_pushinteger(L, spk.err_completions);
+		lua_pushinteger(L, spk.err_completions - spk_diag_base.err_completions);
 		lua_setfield(L, -2, "spk_err_completions");
-		lua_pushinteger(L, spk.tap_drops);
+		lua_pushinteger(L, spk.tap_drops - spk_diag_base.tap_drops);
 		lua_setfield(L, -2, "spk_tap_drops");
-		lua_pushinteger(L, spk.cb_send_fails);
+		lua_pushinteger(L, spk.cb_send_fails - spk_diag_base.cb_send_fails);
 		lua_setfield(L, -2, "spk_cb_send_fails");
 		for (size_t i = 0; i < ARRAY_SIZE(clk_regs); i++) {
 			lua_pushnumber(L,
@@ -1394,7 +1400,7 @@ static int lua_microphone_diag(lua_State *L)
 		t5838_diag_gap_max_us = 0;
 		t5838_diag_gap_over = 0;
 		t5838_diag_lost_est = 0;
-		max98357a_audio_tx_diag_zero();
+		max98357a_audio_tx_diag_get(&spk_diag_base);
 		return 0;
 	}
 

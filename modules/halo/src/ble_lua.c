@@ -103,6 +103,10 @@ struct ble_lua_ctx {
 	halo_ble_lua_ctrl_handler_t ctrl_handler;
 } lua_ctx __attribute__((noinit));
 
+/* Audio RX accounting for frame.speaker.stats(). Outside lua_ctx so it
+ * survives service re-init; written only from the GATT write handler. */
+static struct halo_ble_lua_audio_rx_stats audio_rx_stats;
+
 /* Helper macros for 128-bit UUID conversion */
 #define ATT_128_TO_ARRAY(uuid)                                                                     \
 	{uuid[0], uuid[1], uuid[2],  uuid[3],  uuid[4],  uuid[5],  uuid[6],  uuid[7],              \
@@ -383,12 +387,22 @@ static void on_att_val_set(uint8_t conidx, uint8_t user_lid, uint16_t token, uin
 			status = ATT_ERR_INVALID_OFFSET;
 			break;
 		}
-		/* Store audio input data */
+		/* Store audio input data. A full ring rejects the write; a
+		 * write-without-response sender never sees the error, so
+		 * count it for frame.speaker.stats(). */
 		if (ring_buf_space_get(&lua_ctx.audio_rx_ring) < len) {
+			audio_rx_stats.rejected++;
+			audio_rx_stats.rejected_bytes += len;
 			status = ATT_ERR_INSUFF_RESOURCE;
 			break;
 		}
 		ring_buf_put(&lua_ctx.audio_rx_ring, data, len);
+		audio_rx_stats.writes++;
+		audio_rx_stats.bytes += len;
+		uint32_t level = ring_buf_size_get(&lua_ctx.audio_rx_ring);
+		if (level > audio_rx_stats.ring_peak) {
+			audio_rx_stats.ring_peak = level;
+		}
 		k_sem_give(&lua_ctx.audio_rx_sem);
 		break;
 	}
@@ -816,6 +830,21 @@ int32_t halo_ble_lua_audio_read(uint8_t *data, size_t len, k_timeout_t timeout)
 	}
 
 	return read_len;
+}
+
+void halo_ble_lua_audio_rx_stats_get(struct halo_ble_lua_audio_rx_stats *out)
+{
+	*out = audio_rx_stats;
+	out->ring_level = (lua_ctx.initialized == BLE_LUA_INIT_MAGIC)
+				  ? ring_buf_size_get(&lua_ctx.audio_rx_ring)
+				  : 0;
+}
+
+void halo_ble_lua_audio_rx_peak_reset(void)
+{
+	audio_rx_stats.ring_peak = (lua_ctx.initialized == BLE_LUA_INIT_MAGIC)
+					   ? ring_buf_size_get(&lua_ctx.audio_rx_ring)
+					   : 0;
 }
 
 int32_t halo_ble_lua_audio_write(const uint8_t *data, size_t len)

@@ -103,18 +103,14 @@ static inline int display_budget_drop(void)
 
 /* TX-path diagnostic counters (see max98357a_audio.h): every way the tap
  * feed could diverge from real emission is counted, so a reference-
- * timeline slip can be attributed from session data.
+ * timeline slip can be attributed from session data. Monotonic: consumers
+ * keep their own baselines.
  */
 static struct max98357a_audio_tx_diag g_tx_diag;
 
 void max98357a_audio_tx_diag_get(struct max98357a_audio_tx_diag *out)
 {
 	*out = g_tx_diag;
-}
-
-void max98357a_audio_tx_diag_zero(void)
-{
-	memset(&g_tx_diag, 0, sizeof(g_tx_diag));
 }
 
 void max98357a_audio_set_tx_tap(max98357a_audio_tx_tap_t tap)
@@ -632,6 +628,7 @@ static int max98357a_audio_trigger_impl(const struct device *dev,
 		}
 		
 		if (wait_ms <= 0) {
+			g_tx_diag.drain_timeouts++;
 			LOG_WRN("Timeout waiting for audio drain, forcing stop");
 		}
 		
@@ -648,8 +645,9 @@ static int max98357a_audio_trigger_impl(const struct device *dev,
 			struct max98357a_block_ctx ctx = queue_pop();
 			k_mem_slab_free(&max98357a_tx_slab, ctx.mem);
 			k_sem_give(&data->free_block_sem);
+			g_tx_diag.stop_discards++;
 		}
-		
+
 		/* Reset counters */
 		atomic_set(&queue_head, 0);
 		atomic_set(&queue_tail, 0);
