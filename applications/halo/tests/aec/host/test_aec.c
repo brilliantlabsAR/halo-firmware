@@ -1331,8 +1331,9 @@ int main(int argc, char **argv)
 		 * AEC is re-enabled. The next session opens with silence feed
 		 * (speaker.start, nothing queued yet) while the wearer talks:
 		 * there is no echo, so the wearer must pass untouched. The
-		 * 1.2 s gap before the earcon makes it a new reply, so the
-		 * earcon arms the duck itself. */
+		 * 1.2 s gap before the earcon (longer than the 1 s re-arm
+		 * hold-off) makes it a new reply, so the earcon arms the duck
+		 * itself. */
 		for (int path = 0; path < 2; path++) {
 			audio_aec_enable(true);
 			for (int b = 0; b < 300; b++) step(3);
@@ -1399,6 +1400,75 @@ int main(int argc, char **argv)
 		       "re-engage onset (info)", armed ? "ARMED" : "NOT armed");
 	}
 
+	/* --- 19. mid-reply pauses must not re-duck the wearer ------------ */
+	{
+		/* warm filter, a long speech reply (speech_sample: 1.5s talk /
+		 * 0.5s pause, 300/120ms syllables) with the wearer talking over
+		 * it the whole time. Each 0.5s pause re-arms the legacy duck
+		 * (hangover 160ms), crushing ~0.4s of the wearer to -34dB. */
+		audio_aec_enable(true);
+		for (int b = 0; b < 300; b++) step(4);
+		near2_amp = 0.6f;
+		float exc[600];
+		int nexc = 0, crushed = 0, rearms = 0;
+		unsigned prev_on = 0;
+		for (int b = 0; b < 500; b++) {
+			struct blkstat s = step(4);
+			struct audio_aec_stats st;
+			size_t nt;
+			audio_aec_snapshot(&st, &nt);
+			if (st.sup_onset > prev_on) rearms++;
+			prev_on = st.sup_onset;
+			if (b >= 3 && s.near_rms > -40.0f) {
+				float e = s.out_rms - s.in_rms;
+				exc[nexc++] = e;
+				crushed += e < -15.0f;
+			}
+		}
+		near2_amp = 0.0f;
+		for (int i = 1; i < nexc; i++) {
+			float v = exc[i]; int j = i - 1;
+			while (j >= 0 && exc[j] > v) { exc[j + 1] = exc[j]; j--; }
+			exc[j + 1] = v;
+		}
+		float med = nexc ? exc[nexc / 2] : -1000.0f;
+		float p10 = nexc ? exc[nexc / 10] : -1000.0f;
+		snprintf(buf, sizeof(buf),
+			 "re-arms %d, %d/%d near blocks < -15dB, median %.1f, p10 %.1f dB",
+			 rearms, crushed, nexc, med, p10);
+		check("mid-reply pauses do not re-duck the wearer",
+		      nexc > 200 && rearms == 0 && crushed * 20 < nexc, buf);
+	}
+
+	/* --- 20. a genuine new reply (long gap) still gets the duck, and
+	 * its echo-only onset stays cancelled ------------------------------ */
+	{
+		audio_aec_enable(true);
+		for (int b = 0; b < 300; b++) step(4);
+		for (int b = 0; b < 75; b++) step(2); /* 1.5s silence-fed gap */
+		double pi = 0, po = 0;
+		int armed = 0, rel = 0, relob = 0;
+		for (int b = 0; b < 50; b++) {
+			struct blkstat s = step(4);
+			struct audio_aec_stats st;
+			size_t nt;
+			audio_aec_snapshot(&st, &nt);
+			if (st.sup_onset > 0) armed = 1;
+			rel += st.sup_gate_rel;
+			relob += st.sup_gate_rel && st.sup_onset > 0;
+			if (b >= 3 && s.in_rms > -55.0f) {
+				pi += pow(10, s.in_rms / 10);
+				po += pow(10, s.out_rms / 10);
+			}
+		}
+		double erle = 10 * log10(pi / po);
+		snprintf(buf, sizeof(buf),
+			 "duck %s, ERLE(0-1s) %.1f dB (want > 12), gate released %d/50 (%d inside duck)",
+			 armed ? "armed" : "NOT armed", erle, rel, relob);
+		check("new reply after a long gap is ducked + cancelled",
+		      armed && erle > 12, buf);
+	}
+
 	/* --- 21. info: false gate releases on echo-only cold onset ------- */
 	{
 		audio_aec_enable(true);
@@ -1416,6 +1486,43 @@ int main(int argc, char **argv)
 		       "cold-onset false gate releases (info)", rel, relob);
 	}
 
+	/* --- 22. wearer already talking when a new reply starts --------- */
+	{
+		/* warm filter; the wearer talks through a 1.2s reply gap and on
+		 * into the next reply (the README voice-mode follow-up: a barge
+		 * held across a reply restart is re-crushed by the onset duck).
+		 * Scores the wearer over the duck window (first 0.9s). */
+		audio_aec_enable(true);
+		for (int b = 0; b < 300; b++) step(4);
+		for (int b = 0; b < 60; b++) step(2);
+		near2_amp = 0.6f;
+		for (int b = 0; b < 30; b++) step(2); /* talking before */
+		float exc[60];
+		int nexc = 0, crushed = 0, armed = 0;
+		for (int b = 0; b < 45; b++) {
+			struct blkstat s = step(4);
+			struct audio_aec_stats st; size_t nt;
+			audio_aec_snapshot(&st, &nt);
+			armed |= st.sup_onset > 0;
+			if (b >= 3 && s.near_rms > -28.0f) {
+				float e = s.out_rms - s.in_rms;
+				exc[nexc++] = e;
+				crushed += e < -15.0f;
+			}
+		}
+		near2_amp = 0.0f;
+		for (int i = 1; i < nexc; i++) {
+			float v = exc[i]; int j = i - 1;
+			while (j >= 0 && exc[j] > v) { exc[j + 1] = exc[j]; j--; }
+			exc[j + 1] = v;
+		}
+		snprintf(buf, sizeof(buf),
+			 "duck %s, %d/%d near blocks < -15dB, median %.1f dB",
+			 armed ? "armed" : "NOT armed", crushed, nexc,
+			 nexc ? exc[nexc / 2] : -1000.0f);
+		check("wearer talking into a new reply is not cut",
+		      nexc > 15 && armed && crushed * 10 < nexc, buf);
+	}
 #endif
 	printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "OK",
 	       failures, failures == 1 ? "" : "s");

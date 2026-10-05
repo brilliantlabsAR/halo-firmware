@@ -70,8 +70,9 @@ recipes must hold cancellation in both builds.
 Check 17 is the stale-session case (bug A, 2026-10-04): a short earcon
 arms the onset duck, then the speaker session closes (speaker-idle
 bypass) or the AEC is re-enabled before the duck has run out. The earcon
-follows a 1.2s silence-fed gap, so it is a new reply, and the check
-requires that it armed the duck (`earcon duck` > 0). The next
+follows a 1.2s silence-fed gap (longer than the 1s re-arm hold-off), so
+it is a new reply, and the check requires that it armed the duck
+(`earcon duck` > 0). The next
 session opens with silence feed (`speaker.start`, nothing queued) while a
 second near-end talker speaks. There is no echo, so no fully-voiced near
 block may be attenuated by more than 10dB. Before the fix the last
@@ -85,6 +86,24 @@ so the rising edge re-arms), 21 counts envelope-gate releases on an
 echo-only cold onset (released blocks there are false releases; the
 gate is held while the reference history refills after a wipe).
 `DUMP12=1` / `DUMP17=1` print per-block traces of checks 12 and 17.
+
+Checks 19, 20 and 22 cover the onset duck's re-arm (2026-10-04). The
+duck used to re-arm on every reference rising edge after the adaptation
+gate's 160ms hangover, so every pause inside a reply re-ducked the wearer
+by 34dB for ~0.4s; it now re-arms only after AEC_SUP_ONSET_REARM_MS
+(1000ms) of reference silence, and a near-end gate release lifts its
+blanket ceiling once the filter is warm (AEC_SUP_ONSET_GATE_LIFT). 19
+runs a warm 10s speech reply (1.5s talk / 0.5s pause) with the wearer
+talking over all of it: zero re-arms and fewer than 1 in 20 near blocks
+cut by more than 15dB (before: 6 re-arms, 95/370). 20 is the guard on the
+other side: a new reply after a 1.5s silence-fed gap must still arm the
+duck and stay cancelled (ERLE(0-1s) > 12dB). 22 has the wearer talk
+through a 1.2s reply gap and into the next reply, scored over the duck
+window: fewer than 1 in 10 near blocks cut by more than 15dB (before:
+11/25, median -13.5dB). 19's median out-in sits near -10dB in both
+builds: outside the duck the wearer is still held under the -12dB steady
+cap on most blocks because the envelope gate releases only
+intermittently on a speech-like reference (gate tuning, not the duck).
 
 Both filter cores build from the same file:
 
@@ -153,6 +172,13 @@ Failing controls (prove the checks discriminate):
   (old soft-start pace) fails it harder (4.2dB); `-DAEC_SUP_BETA=6.0f`
   (over-aggressive) fails the double-talk check (-4.3dB median vs the
   -3dB bound; default 1.5 sits at -1.5).
+
+- FDAF build, onset re-arm: `-DAEC_SUP_ONSET_REARM_MS=160` (the old
+  re-arm after the 160ms adaptation hangover) fails check 19 (6 re-arms,
+  58/370 near blocks < -15dB even with the gate lift);
+  `-DAEC_SUP_ONSET_GATE_LIFT=0` (the duck caps the wearer too) fails
+  check 22 (11/25, median -13.5dB); `-DAEC_SUP_ONSET_REARM_MS=2000`
+  (longer than check 20's gap) fails checks 20 and 22 (duck not armed).
 
 FDAF-specific regression worth knowing about: the update views (error and
 reference alike) MUST be streaming-filtered (IIR across block boundaries)

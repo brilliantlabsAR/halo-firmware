@@ -701,6 +701,36 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_RESYNC_HOPS
 #define AEC_SUP_RESYNC_HOPS 50   /* ~1s ease from ONSET_GCAP back to steady */
 #endif
+/* Onset duck re-arm hold-off: the reference rising edge re-arms the duck only
+ * after this much continuous reference silence (processed blocks). It used to
+ * re-arm whenever the adaptation gate's 160ms hangover (AEC_GATE_HANGOVER_BLOCKS)
+ * had run out, so every pause inside a reply (word and sentence gaps, TTS chunk
+ * seams: up to ~640ms in Noa replies) re-ducked the wearer by 34dB for ~0.4s.
+ * A new reply follows the wearer's turn plus server latency, which is longer.
+ * Enable and the speaker-idle bypass preset the count to full (UINT32_MAX,
+ * not the hold-off of that moment), so the first reply of a session and the
+ * first after a speaker close are always ducked, even if the hold-off is
+ * raised in between.
+ */
+#ifndef AEC_SUP_ONSET_REARM_MS
+#define AEC_SUP_ONSET_REARM_MS 1000
+#endif
+#define AEC_SUP_ONSET_REARM_BLOCKS (AEC_SUP_ONSET_REARM_MS / 20)
+/* Let the near-end envelope gate lift the onset duck's blanket ceiling (g_cap),
+ * so a wearer already talking when a reply starts is not cut to -34dB:
+ * 0 = never (the duck caps the wearer too), 1 = whenever the gate releases,
+ * 2 = only once the filter is warm (cold-start hot-mu excess decayed below
+ * AEC_SUP_ONSET_LIFT_WARM). The duck exists because a cold filter
+ * under-predicts the onset, and that is exactly when the gate's echo removal
+ * (excess = sqrt(p_err) - KAPPA*sqrt(p_ref)) cannot be trusted, hence 2.
+ * Never while the reference is unreliable. The beta/floor boost stays on.
+ */
+#ifndef AEC_SUP_ONSET_GATE_LIFT
+#define AEC_SUP_ONSET_GATE_LIFT 2
+#endif
+#ifndef AEC_SUP_ONSET_LIFT_WARM
+#define AEC_SUP_ONSET_LIFT_WARM 0.1f
+#endif
 #define AEC_SUP_D     128
 #define AEC_SUP_KLEN  (2 * AEC_SUP_D + 1)
 #define AEC_SUP_POW_A 0.33f
@@ -770,6 +800,9 @@ static struct {
 
 	/* adaptation gate / onset ramp (mic consumer thread) */
 	uint32_t gate_hangover;
+	uint32_t ref_quiet;     /* processed ref-silent blocks since the last
+				 * active one, saturating at UINT32_MAX; enable
+				 * and speaker idle preset it full (onset re-arm) */
 	uint32_t mu_ramp;
 	/* cold-onset hot-mu excess, decaying per adapted block (FDAF) */
 	float mu_hot_excess;
@@ -1199,6 +1232,7 @@ static void aec_session_reset(void)
 	sup.gate_released = false;
 	sup.pb_hold = false;
 	aec.ref_unrel_hops = 0;
+	aec.ref_quiet = UINT32_MAX; /* full: the first reply is ducked */
 #else
 	aec.xf_norm2 = 0.0f;
 #endif
@@ -2148,8 +2182,18 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			steady_cap = 1.0f; /* near-end: release the sustained cap */
 		}
 #endif
+		float ob_cap = ob;
+#if AEC_SUP_GCAP_ENV_GATE && AEC_SUP_ONSET_GATE_LIFT
+		/* near-end release lifts the duck's blanket ceiling too (see
+		 * AEC_SUP_ONSET_GATE_LIFT): the wearer is not cut mid-word */
+		if (sup.gate_released && aec.ref_unrel_hops == 0 &&
+		    (AEC_SUP_ONSET_GATE_LIFT == 1 ||
+		     aec.mu_hot_excess < AEC_SUP_ONSET_LIFT_WARM)) {
+			ob_cap = 0.0f;
+		}
+#endif
 		float g_cap = AEC_SUP_ONSET_GCAP +
-			      (steady_cap - AEC_SUP_ONSET_GCAP) * (1.0f - ob);
+			      (steady_cap - AEC_SUP_ONSET_GCAP) * (1.0f - ob_cap);
 		for (uint32_t b = 1; b < FD_BINS; b++) {
 			float gj = 1.0f;
 
@@ -2379,6 +2423,7 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 		sup.onset = 0;
 		aec.gate_hangover = 0;
 		aec.ref_unrel_hops = 0;
+		aec.ref_quiet = UINT32_MAX;
 		sup.gate_floor_init = false;
 		sup.gate_fast = 0.0f;
 		sup.gate_hang = 0;
@@ -2444,8 +2489,10 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 		for (size_t i = 0; i < take; i++) {
 			ref_e2 += x_new[i] * x_new[i];
 		}
-		if (take > 0 &&
-		    ref_e2 > AEC_REF_GATE_RMS * AEC_REF_GATE_RMS * (float)take) {
+		bool ref_active = take > 0 &&
+			ref_e2 > AEC_REF_GATE_RMS * AEC_REF_GATE_RMS * (float)take;
+
+		if (ref_active) {
 #if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
 			/* reference silence->active = a reply onset. THIS is the
 			 * per-reply onset trigger: the round-8 driver silence-
@@ -2454,11 +2501,14 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			 * fires between replies - only the reference gate does.
 			 * Head-worn, every reply's onset residual trips the
 			 * server VAD before the steady suppressor re-establishes,
-			 * so re-arm the onset boost on the gate's rising edge.
+			 * so re-arm the onset boost on the gate's rising edge -
+			 * but only after AEC_SUP_ONSET_REARM_MS of reference
+			 * silence: a pause inside a reply is not a new reply.
 			 */
-			if (aec.gate_hangover == 0) {
+			if (aec.ref_quiet >= AEC_SUP_ONSET_REARM_BLOCKS) {
 				sup.onset = AEC_SUP_ONSET_HOPS;
 			}
+			aec.ref_quiet = 0;
 #endif
 			aec.gate_hangover = AEC_GATE_HANGOVER_BLOCKS;
 		} else if (aec.gate_hangover > 0) {
@@ -2471,6 +2521,11 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			 */
 			aec.gate_hangover--;
 		}
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+		if (!ref_active && aec.ref_quiet < UINT32_MAX) {
+			aec.ref_quiet++;
+		}
+#endif
 
 		bool adapt_ok = aec.gate_hangover > 0;
 		bool adapted = false;
