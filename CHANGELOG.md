@@ -21,6 +21,14 @@ release pages and tags are not publicly reachable.
   apply to every session but are not saved: each boot starts from the
   defaults. PROTOCOL.md lists the keys with their units, ranges and
   tradeoffs.
+- `applications/halo/tests/aec/calib`, a worn echo-cancellation
+  calibration: in one sitting of about 11 minutes it records the wearer
+  and the glasses' own echo, replays them on the Mac through this tree's
+  canceller to pick `aec_tune` settings, checks the pick on the glasses
+  against the defaults, and writes a report with a ready-to-paste
+  `frame.microphone.aec_tune{...}` line when the pick holds up there
+  (otherwise it says to keep the defaults). See "Worn calibration" in
+  `tests/aec/README.md`.
 
 ### Changed
 

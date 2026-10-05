@@ -38,6 +38,206 @@ As of this branch the beamformer exists only as an offline harness (no C
 stage in the mic path), so there is nothing to disable during AEC bring-up;
 when it is ported, the chain is `mic → AEC → beamform → LC3`.
 
+## Worn calibration
+
+`calib/halo_calib.py` tunes the barge-in parameters (`frame.microphone.aec_tune`)
+for one wearer and one unit in a single sitting of about 10–12 minutes. It
+records AEC-off data on the worn glasses, replays it offline through this
+tree's `audio_aec.c` to pick a set, checks that set on the device against the
+defaults, and writes a report with a paste-ready REPL line
+(`frame.microphone.aec_tune('defaults') frame.microphone.aec_tune{...}`) and the
+matching compile-time `#define`s, given only for a set that passed that
+on-device check.
+
+### Before you start
+
+- A Mac with [uv](https://docs.astral.sh/uv/) and a C compiler (`xcode-select
+  --install`). The reply clips and the desk voice are made with macOS `say` on
+  the first run (`calib/clips/`, not committed).
+- Run it from the tree the device firmware was built from: step 3 builds and
+  replays that tree's `audio_aec.c`.
+- Close the Noa app or turn off the phone's Bluetooth: the glasses accept one
+  BLE connection.
+- A quiet room. Wear the glasses as usual and sit facing the screen.
+
+### Run it
+
+```sh
+cd applications/halo/tests/aec/calib
+uv run halo_calib.py --name "Halo 28"          # worn: follow the prompts on screen
+uv run halo_calib.py --name "Halo EC" --desk   # desk dry run: the Mac speaks the phrases
+uv run halo_calib.py --resume latest           # continue after a stop
+uv run test_calib.py                           # device-free tests (~1 min)
+```
+
+Useful options: `--confirm-reps 2` (step 4 on two replies, +2 min),
+`--search-budget 90` (step 3 seconds), `--gain-policy ask|keep|set`, `--guard
+SESSION ...` / `--no-guard`, `--silero` (adds Silero VAD; downloads torch the
+first time), `--steps 1,2a,2b,2c,3` (for example on firmware without `aec_tune`;
+step 4 is skipped there anyway).
+
+| step | what | AEC | time |
+|---|---|---|---|
+| 1 | connect, break (nothing is wiped), read the firmware, the live and default `aec_tune()` tables and the saved `gain()`; 5 s noise floor | off | 0.5 min |
+| 2a | echo only: three `say` replies (Karen, Samantha, Moira), 10 s each with 160–700 ms pauses, levelled to a Noa TTS reply, 2 reps each | off | 2 min |
+| 2b | wearer only: four phrases per pass on screen with a countdown; normal ×2, quieter, louder | off | 1.5 min |
+| 2c | wearer over echo: a reply plays and the wearer interrupts on cue, twice per reply (one cue at the reply onset) | off | 1 min |
+| 3 | offline replay and narrowed search on these captures (host only; the wearer relaxes) | – | 1 min |
+| 4 | `aec_tune('defaults')` vs the recommended set, ABBA: echo only and wearer over echo on reply B | on | 1.5 min |
+
+Noa settings throughout: `microphone.start{gain=1, voice=true, aec=...}` and
+`speaker.start{volume=100, gain=6, budget=100}`. The reply is uploaded as LC3
+(32 kbps, 10 ms) and played gap-free from Lua RAM; each recording goes to
+`/lfs/cap.lc3` and is read back; `cap.lc3` is removed at the end. The only
+other change is the saved mic gain (`audio/gain`), and only if you let it be
+set for the sitting (below): the old value goes into `session.json` before it
+is changed. At the end the harness calls `aec_tune('defaults')`, restores that
+gain and resets the VM so `main.lua` resumes, each step on its own; anything
+it could not put back is listed with the command that fixes it. The report
+is `calib/sessions/<stamp>-<name>/report.md`.
+
+**Saved mic gain.** A gain saved with `frame.microphone.gain(x)` (or over
+AICS) overrides `start{gain=1}`, and `gain()` reads 0 both when nothing is
+saved and when 0 is saved. If it reads 0, step 2a plays reply A once more at
+`start{gain=0}`: about 6 dB lower means nothing is saved (gain 1 applies), the
+same level means a saved 0 overrides it (the report says so; `gain(1)` fixes it
+and persists). Any other saved value: the worn run asks whether to set 1 for
+the sitting and restores the old value at the end. A `--resume` reuses the
+choice made at the start and never asks again.
+
+**Step 3.** The AEC-off captures become replay pairs: the reference is the
+exact LC3 bytes played, decoded and passed through the production
+`speaker_protect.c` (built on the host), aligned by cross-correlation near the
+playback command's capture time, 24 samples early. A recording whose
+cross-correlation peak is under 15× the median of its search window (no
+better than chance; real echo aligns at 30–140) is flagged, left out of the
+scoring and the report warns: redo it. `calib_build.py` builds
+`aec_replay` from this tree's `audio_aec.c` with replay hooks inserted into a
+copy (the shadow signal and the processing path; the source is not edited, and
+`test_calib.py` checks the output is bit-identical to `host/aec_wav.c`). Sets
+are applied with `-t key=value,...` through the same C API as `aec_tune`, so a
+set means the same offline and on the device. The 0.8.17 release source (git
+tag) is built too, as a reference; on firmware without `aec_tune` it stands
+for `current`, and in a clone without the tag `current` falls back to the
+old-gate set on this tree (an approximation; the report says so). Scored:
+- **echo**: dB removed per band on the 2a captures, residual over the floor,
+  gate false-release fraction;
+- **talker**: the 2b captures mixed into the 2a captures at their real levels
+  and pushed through the AEC as a shadow, so the kept gain is exact (kept,
+  crushed fraction). Time to pass (ttfp) uses step 4's method: onset (from
+  the wearer-only capture) to the first output frame over that set's energy-VAD
+  threshold (max(floor + 10 dB, p95 of its echo-only residual + 3 dB)), median
+  over all onsets with a miss (none in 0.8 s) counted as 800 ms, plus the
+  missed fraction. Time to full pass (talker kept within 6 dB) is shown too:
+  it is the gate release time, since a closed gate holds the talker at about
+  −6..−8 dB;
+- **real double talk**: the 2c captures, energy method against the same
+  reply's echo-only capture.
+
+Compared sets: `current` (the device's defaults), `0.8.17`, `old-gate` (the
+full-band gate defaults before the gate band), `B2-15` (the band-limited gate
+and two-band cap, the defaults since), `B15` (without the two-band cap), `A15`
+(full-band gate, kappa 0.47). The search starts from the current defaults and
+from A15: a kappa × floor grid, then coordinate refinement over kappa, floor,
+beta, gate hang, absfloor, edge abs, steady cap and the low-band cap (steady
+cap stays ≥ 0.25, the host HF-noise check; floor ≥ 0.10). The objective is
+echo removed minus penalties for near-end loss beyond the current defaults
+(crushed +0.02, kept −0.5 dB, ttfp +20 ms are free). Against fitting one
+sitting, a searched set replaces its starting set only if it wins by > 0.5 dB
+of objective and does not lose on any **guard sitting**: the other non-sim
+sessions of the same device in `calib/sessions/` (other units' sessions only
+when there is none, labelled secondary; or `--guard`), checked for echo −1 dB,
+crushed +0.03, kept −0.3 dB, ttfp +15 ms. Only the metrics a guard sitting has
+are checked (desk sittings often have no near-end score), the log says how
+many checks ran, and if no near-end check ran the 1.0 dB no-guard margin
+applies. Without a guard sitting the margin is 1.0 dB. **No set is picked that
+loses near end to the current defaults** (crushed +0.03, kept −0.3 dB, ttfp
++15 ms) **or removes more than 1 dB less echo than them**, on the session
+itself or on any guard sitting (the guard alone compares echo only with the
+family's start); this also covers a family's unsearched start (A15). Past those bounds the objective drops 25 dB
+per bound, so echo gains never buy a worse talker than the defaults. The
+final pick keeps the current defaults unless something beats them by > 0.3 dB.
+When it keeps them, step 4 tests the best alternative, so the device still
+checks the verdict. Rerun step 3 alone on a saved session (offline, no device)
+with `uv run calib_offline.py step3 SESSION` and then `uv run calib_report.py
+SESSION`.
+
+**Step 4** (`calib_report.py`): echo removed per band and in the first second,
+residual over floor, frames over floor +10/+20 dB, and an energy VAD threshold
+per set (max(floor + 10 dB, p95 of that set's echo-only residual + 3 dB)). The
+wearer's onsets come from `diag('stats').p_mic` (raw mic power every ~60 ms):
+the first sample after the cue where the wearer-over-echo pass exceeds the
+echo-only pass by 4 dB. Then time to pass (onset to the first output frame
+over the threshold), pass fraction and kept over the first 0.8 s. Onsets are
+good to about ±60 ms: read the cur/rec difference.
+
+**Step 4 has the last word.** The report opens with a **Recommendation**: a
+step 3 pick that keeps the wearer more than 3 dB worse than the defaults on
+the device (kept vs raw mic or vs the step 2b level), passes them more than
+60 ms later (median) or misses more phrases is rejected, and the headline is
+"keep the current defaults" with the rejected set and its numbers. The
+paste-ready line and `#define`s appear only for a set that passed step 4; a
+pick step 4 has not tested (step 3 rerun since, or no `aec_tune`) is shown as
+unverified.
+
+### If it stops midway
+
+- A BLE drop (0x98 is common) reconnects and redoes the current recording, up
+  to `--retries 4` times; everything recorded is kept.
+- Ctrl+C, a crash or retries running out: every recording is saved as it
+  finishes (`trials/`, atomic), and `session.json` keeps the plan.
+  `--resume latest` reconnects (the break stops whatever the device was
+  doing) and continues at the first unfinished recording. It refuses another
+  `--name` than the session's, a firmware change (rerun with the `--redo` it
+  names, or flash the session's firmware back) and a different saved-gain
+  choice. If step 3's pick has changed since step 4 was recorded, step 4
+  starts over; the report only pools step 4 recordings whose `aec_tune()`
+  readback matches the set tested.
+- Glasses taken off or refitted between stop and resume: `--resume latest
+  --redo 2a,2c` re-records the echo so all AEC-off captures share one fit.
+- A bad take (a cough, a missed cue): the harness offers a redo when a wearer
+  pass is too quiet; otherwise `--redo 2b`.
+- Device in a strange state: power-cycle it. `aec_tune` is not persisted; a
+  changed saved gain is kept as `gain_restore` in `session.json` and the next
+  `--resume` restores it (`--resume <session> --steps none` does only that).
+
+### Desk mode and other platforms
+
+`--desk` plays the phrases on the Mac (`say` voice Daniel, `afplay -v`,
+default 0.3; the quiet pass ×0.5, the loud pass ×2 but never above
+`--afplay-max`, which defaults to the normal level). The phrases are levelled
+to the speech level of the desk_aec talker clip (−18.6 dBFS active RMS), so
+`--afplay-volume 1.0` is close to a realistic voice at the glasses' mic: on
+Halo EC −30 dBFS against −27 for the desk_aec voice (the raw `say` phrases
+read −35; the rest is the Mac speaker's response to the lower male voice).
+Clips made at the old level are made again on the next run. It never changes
+the system volume. The run is wrapped in `caffeinate -dui`: an external display's
+speakers go silent when the display sleeps (after 10 minutes idle), and a
+probe run without it recorded no voice at all. At the default 0.3 the Mac
+voice sits near or under the device's own echo at the glasses' mic (echo −26
+to −39 dBFS), so the near-end numbers and step 4's onsets are at the
+detection floor: such a sitting checks the harness and the echo numbers, not
+the near-end tradeoff; use 1.0 for a realistic talker. Desk sittings make
+good guard sittings.
+
+On Linux the BLE side (bleak) and step 3 work (any C compiler); `say`,
+`afplay` and `caffeinate` do not exist there, so generate `calib/clips/` on a
+Mac once and copy it (or set `AEC_CALIB_CLIPS`), and run worn sittings only
+(no `--desk`).
+
+### Files
+
+| file | what |
+|---|---|
+| `calib/halo_calib.py` | the harness: plan, prompts, BLE, retries/resume, steps 1, 2 and 4 |
+| `calib/calib_offline.py` | step 3: replay pairs, scoring, search, guard |
+| `calib/calib_report.py` | step 4 analysis and `report.md` |
+| `calib/calib_common.py` | audio/LC3 helpers, clips and phrases, the named `aec_tune` sets, the session store |
+| `calib/calib_build.py`, `aec_replay.c`, `spk_ref.c` | host replay tools, built into `calib/.build/` |
+| `calib/sim_device.py` | simulated Halo for `--sim` (real speaker model and AEC replay) |
+| `calib/silero_vad.py` | optional Silero VAD scoring (`--silero`) |
+| `calib/test_calib.py` | device-free tests |
+
 ## Offline harness
 
 `aec.py` runs the full prototype pipeline on an aligned `(mic, reference)` WAV
