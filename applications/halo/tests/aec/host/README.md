@@ -67,6 +67,25 @@ blocks while the session is open, so the reference timeline never
 breaks and the emission epoch is established once per session). All
 recipes must hold cancellation in both builds.
 
+Check 17 is the stale-session case (bug A, 2026-10-04): a short earcon
+arms the onset duck, then the speaker session closes (speaker-idle
+bypass) or the AEC is re-enabled before the duck has run out. The earcon
+follows a 1.2s silence-fed gap, so it is a new reply, and the check
+requires that it armed the duck (`earcon duck` > 0). The next
+session opens with silence feed (`speaker.start`, nothing queued) while a
+second near-end talker speaks. There is no echo, so no fully-voiced near
+block may be attenuated by more than 10dB. Before the fix the last
+hangover blocks before the bypass always armed the ref-unreliable
+fail-safe (the read window walks past the frozen write head), the bypass
+froze it with `onset` at 49, and the next session muted the wearer by
+~34dB for ~1.0-1.4s (36/59 and 38/60 blocks crushed). Two INFO lines
+follow: 18 reports whether the first reply after a session close still
+arms its onset duck (it must: the bypass clears the adaptation hangover
+so the rising edge re-arms), 21 counts envelope-gate releases on an
+echo-only cold onset (released blocks there are false releases; the
+gate is held while the reference history refills after a wipe).
+`DUMP12=1` / `DUMP17=1` print per-block traces of checks 12 and 17.
+
 Both filter cores build from the same file:
 
     cd applications/halo/tests/aec/host
@@ -83,7 +102,8 @@ Both filter cores build from the same file:
         -o test_aec_fd ../../../../../modules/halo/src/audio_aec.c test_aec.c -lm
     ./test_aec_fd
 
-All sixteen checks must PASS in both builds. The FDAF build is held to
+All checks must PASS in both builds (checks 17 and up, and the INFO
+lines, run in the FDAF build only). The FDAF build is held to
 higher thresholds where its per-bin adaptation (and its suppressor/onset
 stage) is the point: >14dB on noise convergence (TD: >10), >8dB voiced
 (TD plateau: >3), >6dB cold-onset (TD: >2) and >12dB warm re-engage
@@ -120,6 +140,10 @@ Failing controls (prove the checks discriminate):
   without bound (~89k ms over the 20s recovery vs ~7.5k frozen with the
   fix) as the too-late anchor never re-anchors - the session-212454
   walk-off crush.
+- FDAF build: drop the onset / fail-safe clears (`sup.onset`,
+  `ref_unrel_hops`, and in the bypass `gate_hangover`) from the session
+  reset and the speaker-idle bypass: check 17 MUST fail in both paths
+  (`left 49`, near blocks cut by more than 10dB in each).
 - TD build: `-DAEC_LPF_ALPHA=1.0f` (no update band-limit) fails the
   HF-noise check.
 - FDAF build: `-DAEC_FD_MU=1.0f` degrades voice/HF markedly (7.3/8.6dB vs

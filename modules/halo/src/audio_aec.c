@@ -1155,51 +1155,83 @@ static void clkmon_note(struct aec_clkmon *m, size_t frames)
 	m->last_ms = now_ms;
 }
 
+/* Session reset requested by audio_aec_enable(true), consumed by the mic
+ * thread at the top of audio_aec_process. The wipe touches the filter and
+ * suppressor state the mic thread is using inside fd_process_block, so it
+ * must not run on the caller's (Lua) thread.
+ */
+static atomic_t reset_req;
+
+/* start from a clean filter: adaptation is fast (<1s) and a stale/diverged
+ * state is worse than a cold start. Mic consumer thread only.
+ */
+static void aec_session_reset(void)
+{
+	memset(aec.w, 0, sizeof(aec.w));
+	memset(aec.x, 0, sizeof(aec.x));
+	memset(aec.xf, 0, sizeof(aec.xf));
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	memset(fd.X, 0, sizeof(fd.X));
+	memset(fd.Xf, 0, sizeof(fd.Xf));
+	memset(fd.W, 0, sizeof(fd.W));
+	memset(fd.P, 0, sizeof(fd.P));
+	fd.frame = 0;
+	aec.fd_hist_fill = 0;
+	/* W wiped -> cold-onset hot-mu schedule re-arms */
+	aec.mu_hot_excess = AEC_FD_MU_HOT_EXCESS;
+	memset(sup.res_hist, 0, sizeof(sup.res_hist));
+	memset(sup.Sy, 0, sizeof(sup.Sy));
+	memset(sup.Se, 0, sizeof(sup.Se));
+	for (size_t j = 0; j < AEC_SUP_NBINS; j++) {
+		sup.g[j] = 1.0f;
+	}
+	sup.gmin = 1.0f;
+	/* no onset duck, envelope-gate or fail-safe state survives
+	 * into a new session: a duck left over from the previous one
+	 * would mute the wearer at the start of this one
+	 */
+	sup.onset = 0;
+	sup.gate_fast = 0.0f;
+	sup.gate_floor = 0.0f;
+	sup.gate_mid = 0.0f;
+	sup.gate_floor_init = false;
+	sup.gate_hang = 0;
+	sup.gate_released = false;
+	sup.pb_hold = false;
+	aec.ref_unrel_hops = 0;
+#else
+	aec.xf_norm2 = 0.0f;
+#endif
+	aec.p_ref = 0.0f;
+	aec.p_err = 0.0f;
+	aec.p_mic = 0.0f;
+	aec.mic_lf1 = 0.0f;
+	aec.mic_lf2 = 0.0f;
+	aec.ref_lf1 = 0.0f;
+	aec.ref_lf2 = 0.0f;
+	aec.err_lf1 = 0.0f;
+	aec.err_lf2 = 0.0f;
+	memset(aec.ref_lp, 0, sizeof(aec.ref_lp));
+	memset(aec.err_lp, 0, sizeof(aec.err_lp));
+	aec.ref_pe = 0.0f;
+	aec.err_pe = 0.0f;
+	have_held = false;
+	aec.gate_hangover = 0;
+	aec.mu_ramp = 0;
+	aec.overload_streak = 0;
+#if AEC_MARGIN_SERVO
+	aec.ref_skew_adj = 0;
+#endif
+}
+
 void audio_aec_enable(bool enable)
 {
 	if (enable) {
-		/* start from a clean filter: adaptation is fast (<1s) and a
-		 * stale/diverged state is worse than a cold start
+		/* the state wipe runs on the mic thread before its next block
+		 * (see reset_req); set the request before enabling so that
+		 * thread never processes an enabled block without it
 		 */
-		memset(aec.w, 0, sizeof(aec.w));
-		memset(aec.x, 0, sizeof(aec.x));
-		memset(aec.xf, 0, sizeof(aec.xf));
-#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
-		memset(fd.X, 0, sizeof(fd.X));
-		memset(fd.Xf, 0, sizeof(fd.Xf));
-		memset(fd.W, 0, sizeof(fd.W));
-		memset(fd.P, 0, sizeof(fd.P));
-		fd.frame = 0;
-		aec.fd_hist_fill = 0;
-		/* W wiped -> cold-onset hot-mu schedule re-arms */
-		aec.mu_hot_excess = AEC_FD_MU_HOT_EXCESS;
-		memset(sup.res_hist, 0, sizeof(sup.res_hist));
-		memset(sup.Sy, 0, sizeof(sup.Sy));
-		memset(sup.Se, 0, sizeof(sup.Se));
-		for (size_t j = 0; j < AEC_SUP_NBINS; j++) {
-			sup.g[j] = 1.0f;
-		}
-		sup.gmin = 1.0f;
-#else
-		aec.xf_norm2 = 0.0f;
-#endif
-		aec.p_ref = 0.0f;
-		aec.p_err = 0.0f;
-		aec.p_mic = 0.0f;
-		aec.mic_lf1 = 0.0f;
-		aec.mic_lf2 = 0.0f;
-		aec.ref_lf1 = 0.0f;
-		aec.ref_lf2 = 0.0f;
-		aec.err_lf1 = 0.0f;
-		aec.err_lf2 = 0.0f;
-		memset(aec.ref_lp, 0, sizeof(aec.ref_lp));
-		memset(aec.err_lp, 0, sizeof(aec.err_lp));
-		aec.ref_pe = 0.0f;
-		aec.err_pe = 0.0f;
-		have_held = false;
-		aec.gate_hangover = 0;
-		aec.mu_ramp = 0;
-		aec.overload_streak = 0;
+		atomic_set(&reset_req, 1);
 		/* per-session diagnostics start fresh */
 		aec.ref_underruns = 0;
 		aec.ref_pads = 0;
@@ -1222,9 +1254,6 @@ void audio_aec_enable(bool enable)
 		aec.cap_slip_ms = 0;
 		aec.emit_slips = 0;
 		aec.emit_slip_ms = 0;
-#if AEC_MARGIN_SERVO
-		aec.ref_skew_adj = 0;
-#endif
 	}
 	atomic_set(&aec.enabled, enable ? 1 : 0);
 	if (!enable) {
@@ -1849,6 +1878,16 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		sup.gate_mid += AEC_SUP_GATE_MID_A * (ex - sup.gate_mid);
 		bool active = level || edge;
 
+		/* while the reference history refills after a wipe (enable,
+		 * resync, re-engage) the residual is uncancelled by
+		 * construction: it reads as near-end excess and trips the
+		 * edge test on pure echo, and the 1 s hangover then lifts the
+		 * cap over the echo. Keep tracking, but do not release on it.
+		 */
+		if (aec.fd_hist_fill < FD_HIST_FILL_HOPS) {
+			active = false;
+		}
+
 		if (active) {
 			sup.gate_hang = AEC_SUP_GATE_HANG;
 		} else if (sup.gate_hang > 0) {
@@ -2292,6 +2331,9 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 	if (atomic_get(&aec.enabled) == 0 || !aec.ref_format_ok) {
 		return;
 	}
+	if (atomic_cas(&reset_req, 1, 0)) {
+		aec_session_reset();
+	}
 
 	if (sample_rate != AEC_SAMPLE_RATE || channels != 1) {
 		if (!aec.warned_mic_format) {
@@ -2321,6 +2363,29 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 	if (feed_ms == 0 || feed_age > (int32_t)AEC_SPK_HANGOVER_MS) {
 		have_held = false;
 		aec.synced = false;
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+		/* the speaker session is closed. Everything below stops
+		 * running, so whatever onset duck, fail-safe or adaptation
+		 * hangover is live would freeze here and resume with the next
+		 * session: the window walking past the frozen write head in
+		 * the last hangover blocks always leaves the fail-safe armed,
+		 * which re-ducks the wearer for ~1.4 s from the next
+		 * speaker.start. Clear it; the next playback is a new reply
+		 * and arms its own duck on the reference rising edge. The
+		 * envelope gate re-seeds on re-engage, and p_ref/p_err restart
+		 * with the history (wiped on re-engage). Sy/Se are kept as
+		 * the prior for the re-engage.
+		 */
+		sup.onset = 0;
+		aec.gate_hangover = 0;
+		aec.ref_unrel_hops = 0;
+		sup.gate_floor_init = false;
+		sup.gate_fast = 0.0f;
+		sup.gate_hang = 0;
+		sup.gate_released = false;
+		aec.p_ref = 0.0f;
+		aec.p_err = 0.0f;
+#endif
 		return;
 	}
 
