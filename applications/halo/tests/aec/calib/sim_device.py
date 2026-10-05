@@ -26,7 +26,8 @@ import numpy as np
 import calib_common as C
 import calib_offline as O
 
-ITEM6_KEYS = ["gate_band_hz", "cap_split_hz", "cap_lo_gcap"]
+# keys the old-gate firmware (before the gate band) does not have
+ITEM6_KEYS = ["gate_band_hz", "cap_split_hz", "cap_lo_gcap", "cap_hi_split_hz", "cap_hi_gcap"]
 
 
 class SimDrop(RuntimeError):

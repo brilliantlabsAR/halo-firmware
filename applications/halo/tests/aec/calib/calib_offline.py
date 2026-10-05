@@ -632,9 +632,13 @@ SPACE = {
     "gate_hang_ms": (600, 1800, True),
     "gate_absfloor": (0.5, 1.5, False),
     "gate_edge_abs": (0.6, 3.0, False),
-    "steady_gcap": (0.25, 0.5, False),     # >= 0.25: host HF-noise check wall
+    "steady_gcap": (0.1, 0.5, False),
     "cap_lo_gcap": (0.25, 1.0, False),     # only with cap_split_hz > 0
+    "cap_hi_gcap": (0.05, 0.5, False),     # only with cap_hi_split_hz > 0
+    "cap_hi_split_hz": (1000, 3000, True), # only when on; kept above cap_split_hz
 }
+# the top cap band, switched on from a set without it (or off from one with it)
+HI_ON = ((1600, 0.1), (1600, 0.15))
 
 
 # past the near-end slack (NE_LIMITS) the objective drops this many dB per
@@ -671,19 +675,21 @@ def feasible(S, anchor):
 def _clean(k, v, it):
     if k.endswith("_ms"):
         return int(round(v / 20.0)) * 20
+    if k.endswith("_hz"):
+        return int(round(v / 50.0)) * 50
     return int(round(v)) if it else float(round(v, 3))
 
 
 def search(data, fam, base, deadline, log, rows, anchor, guards, roles=None, current=None):
-    """Start at the family's set, grid (kappa x floor), then coordinate
-    refinement until the deadline. A searched set replaces the starting set
-    only if it beats it by > 0.5 dB of objective, does not lose on any guard
-    sitting vs the starting set (echo -1 dB, crushed +0.03, kept -0.3 dB,
-    ttfp +15 ms) AND does not lose on the near end (crushed, kept, ttfp) or
-    echo (same slack) to the current defaults (`current`, scores `anchor`)
-    on this sitting or on any guard sitting. With no guard sitting the
-    margin is 1.0 dB. One sitting is one fit and ~16 phrases: these rules
-    are there against overfitting it."""
+    """Start at the family's set, try the top cap band on/off, grid (kappa x
+    floor), then coordinate refinement until the deadline. A searched set
+    replaces the starting set only if it beats it by > 0.5 dB of objective,
+    does not lose on any guard sitting vs the starting set (echo -1 dB,
+    crushed +0.03, kept -0.3 dB, ttfp +15 ms) AND does not lose on the near
+    end (crushed, kept, ttfp) or echo (same slack) to the current defaults
+    (`current`, scores `anchor`) on this sitting or on any guard sitting.
+    With no guard sitting the margin is 1.0 dB. One sitting is one fit and
+    ~16 phrases: these rules are there against overfitting it."""
     Sb, _ = evaluate(data, base)
     jb = objective(Sb, anchor)
     rows.append(dict(family=fam, tag="base", params=base, S=Sb, J=jb, feasible=feasible(Sb, anchor)))
@@ -712,21 +718,40 @@ def search(data, fam, base, deadline, log, rows, anchor, guards, roles=None, cur
                 f"ttfp {S['ttfp']:.0f}  J {j:.2f}")
         return j
 
-    k0 = base["gate_kappa"]
+    # cap depth first (the deadline may cut the grid short): the top cap
+    # band on at two depths, or off if the starting set has it
+    if "cap_hi_split_hz" in base:
+        cur = best[1]
+        if cur["cap_hi_split_hz"]:
+            tryp(dict(cur, cap_hi_split_hz=0), "top band off")
+        else:
+            for hz, g in HI_ON:
+                if not cur.get("cap_split_hz") or hz > cur["cap_split_hz"]:
+                    tryp(dict(cur, cap_hi_split_hz=hz, cap_hi_gcap=g),
+                         f"top band {hz} Hz / {g}")
+    # the grid around the best set so far (the top band step may have moved it)
+    g0 = best[1]
+    k0 = g0["gate_kappa"]
     for kf in (1.0, 0.85, 1.15, 0.7, 1.3):
         for fl in (0.15, 0.10, 0.20, 0.25):
-            p = dict(base, gate_kappa=round(min(0.75, k0 * kf), 3), sup_floor=fl)
+            p = dict(g0, gate_kappa=round(min(0.75, k0 * kf), 3), sup_floor=fl)
             tryp(p, f"grid kappa={p['gate_kappa']} floor={fl}")
     for rd in range(3):
         improved = False
         for key, (lo, hi, it) in SPACE.items():
+            if key not in best[1]:
+                continue
             if key == "cap_lo_gcap" and not best[1].get("cap_split_hz"):
+                continue
+            if key in ("cap_hi_gcap", "cap_hi_split_hz") and not best[1].get("cap_hi_split_hz"):
                 continue
             cur = best[1]
             v0 = cur[key]
             for f in (0.8, 1.25):
                 v = _clean(key, min(hi, max(lo, v0 * f)), it)
                 if C.same(v, v0):
+                    continue
+                if key == "cap_hi_split_hz" and cur.get("cap_split_hz") and v <= cur["cap_split_hz"]:
                     continue
                 jb_before = best[0]
                 tryp(dict(cur, **{key: v}), f"r{rd} {key}={v}")
@@ -801,8 +826,8 @@ def step3(sess_dir, budget=90.0, log=print, guards=None):
     dev_def = S.defaults()
     dev_keys = sorted(dev_def) if dev_def else None
     # the firmware's defaults, as a table this tree's replay understands
-    defaults = C.apply(tree, dev_def) if dev_def else dict(tree)
-    live = C.apply(tree, S.live()) if S.live() else None
+    defaults = C.firmware_table(tree, dev_def) if dev_def else dict(tree)
+    live = C.firmware_table(tree, S.live()) if S.live() else None
     unknown = C.missing(dev_def, tree)
     if unknown:
         log(f"  note: the device has keys this tree's AEC lacks (ignored offline): {unknown}")
@@ -966,7 +991,7 @@ def main():
     elif cmd == "eval":
         prep(a[1])
         S0 = C.Session(a[1])
-        base = C.apply(tree_defaults(), S0.defaults() or {})
+        base = C.firmware_table(tree_defaults(), S0.defaults() or {})
         p = C.REF_SET if "--ref" in a else dict(base)
         if p != C.REF_SET:
             for kv in a[2:]:

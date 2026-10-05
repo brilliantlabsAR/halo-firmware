@@ -323,20 +323,32 @@ def ensure_desk_voice(d=None):
 # gives all of them, so it means the same thing whatever the firmware's
 # compiled defaults are.
 SET_KEYS = ("sup_beta", "sup_floor", "steady_gcap", "gate_kappa", "gate_absfloor",
-            "gate_hang_ms", "gate_band_hz", "cap_split_hz", "cap_lo_gcap")
+            "gate_hang_ms", "gate_band_hz", "cap_split_hz", "cap_lo_gcap",
+            "cap_hi_split_hz", "cap_hi_gcap")
 _A15 = dict(sup_beta=1.25, sup_floor=0.15, steady_gcap=0.25, gate_kappa=0.47, gate_absfloor=0.9,
-            gate_hang_ms=1200, gate_band_hz=0, cap_split_hz=0, cap_lo_gcap=0.5)
+            gate_hang_ms=1200, gate_band_hz=0, cap_split_hz=0, cap_lo_gcap=0.5,
+            cap_hi_split_hz=0, cap_hi_gcap=0.1)
+_B2 = dict(_A15, gate_kappa=0.5, gate_band_hz=1000, cap_split_hz=750, cap_lo_gcap=0.5)
 NAMED = {
     # the defaults before the gate band: full-band gate, falsely released by
     # loud echo on high-coupling units
     "old-gate": dict(sup_beta=1.5, sup_floor=0.1, steady_gcap=0.25, gate_kappa=0.15,
                    gate_absfloor=0.5, gate_hang_ms=1000, gate_band_hz=0, cap_split_hz=0,
-                   cap_lo_gcap=0.5),
-    # offline-tuned sets; B2-15 is the compiled default since the gate band
-    "B2-15": dict(_A15, gate_kappa=0.5, gate_band_hz=1000, cap_split_hz=750, cap_lo_gcap=0.5),
+                   cap_lo_gcap=0.5, cap_hi_split_hz=0, cap_hi_gcap=0.1),
+    # offline-tuned sets; B2-15 = the gate band and the two-band cap
+    "B2-15": dict(_B2),
+    # B2-15 plus the top cap band (1.6 kHz up at 0.1 / 0.15), and B2-15 with
+    # the whole band above 750 Hz at 0.15: the cap depth, which only acts on
+    # frames where the gate misses the wearer
+    "B3-10": dict(_B2, cap_hi_split_hz=1600, cap_hi_gcap=0.1),
+    "B3-15": dict(_B2, cap_hi_split_hz=1600, cap_hi_gcap=0.15),
+    "S15": dict(_B2, steady_gcap=0.15),
     "B15": dict(_A15, gate_kappa=0.5, gate_band_hz=1000),
     "A15": dict(_A15),
 }
+# A key the device's firmware lacks behaves as switched off there (it
+# predates the feature): replay it at this value, not at the tree's default.
+OFF = {"gate_band_hz": 0, "cap_split_hz": 0, "cap_hi_split_hz": 0}
 REF_SET = "0.8.17"           # the 0.8.17 release source (calib_build.aec_replay_ref)
 
 
@@ -363,6 +375,17 @@ def apply(base, over):
 def diff(table, base):
     """Keys of table that differ from base (what aec_tune{...} has to send)."""
     return {k: v for k, v in table.items() if k in base and not same(v, base[k])}
+
+
+def firmware_table(tree, dev):
+    """The device's defaults as a full table of this tree: tree keys the
+    firmware lacks take their OFF value when they have one, then the
+    device's values (keys the tree lacks dropped)."""
+    t = dict(tree)
+    for k, v in OFF.items():
+        if k in t and k not in dev:
+            t[k] = v
+    return apply(t, dev)
 
 
 def missing(over, keys):

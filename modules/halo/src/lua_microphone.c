@@ -1316,6 +1316,9 @@ static int lua_microphone_aec_tune(lua_State *L)
 			if (strcmp(bad, "gate_band_hz") == 0) {
 				return luaL_error(L, "aec_tune: gate_band_hz must be 0 or in [500, 8000]");
 			}
+			if (strcmp(bad, "cap_hi_split_hz") == 0) {
+				return luaL_error(L, "aec_tune: cap_hi_split_hz must be 0 or above cap_split_hz");
+			}
 			return luaL_error(L, "aec_tune: %s out of range", bad);
 		}
 	}

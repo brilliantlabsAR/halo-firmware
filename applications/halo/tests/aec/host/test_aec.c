@@ -564,6 +564,12 @@ static void apply_env_tune(void)
 #ifndef AEC_SUP_CAP_LO_GCAP
 #define AEC_SUP_CAP_LO_GCAP 0.5f
 #endif
+#ifndef AEC_SUP_CAP_HI_SPLIT_HZ
+#define AEC_SUP_CAP_HI_SPLIT_HZ 1600
+#endif
+#ifndef AEC_SUP_CAP_HI_GCAP
+#define AEC_SUP_CAP_HI_GCAP 0.1f
+#endif
 
 /* check 19's scenario, shortened: warm speech reply with the wearer over
  * it; returns the number of onset-duck re-arms
@@ -890,6 +896,30 @@ int main(int argc, char **argv)
 		 * (the dev kit steady-state failure); the band-limited
 		 * update must hold in-band cancellation regardless
 		 */
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+		/* FDAF: score the linear stage, with the residual suppressor
+		 * made transparent through the tune API (gain 1 in every bin,
+		 * the kernel's SUP_D delay kept, which the scoring expects).
+		 * With the suppressor on, its kernel scales the known noise
+		 * too, so the score measured how hard the playback ceiling
+		 * attenuates that noise (it fell as the cap deepened while the
+		 * echo-only residual improved) and missed a real linear-stage
+		 * regression (fd_mu 1 still passed).
+		 */
+		struct audio_aec_tune t8_saved, t8;
+
+		audio_aec_tune_get(&t8_saved);
+		t8 = t8_saved;
+		t8.sup_beta = 0.0f;
+		t8.sup_floor = 1.0f;
+		t8.steady_gcap = 1.0f;
+		t8.cap_lo_gcap = 1.0f;
+		t8.cap_hi_gcap = 1.0f;
+		audio_aec_tune_set(&t8);
+		const double hf_min = 10.0;
+#else
+		const double hf_min = 5.0;
+#endif
 		hf_noise_amp = 0.009f;
 
 		double pi = 0, po = 0;
@@ -903,11 +933,21 @@ int main(int argc, char **argv)
 			}
 		}
 		hf_noise_amp = 0.0f;
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+		audio_aec_tune_set(&t8_saved);
+#endif
 
 		double erle = 10 * log10(pi / po);
 
-		snprintf(buf, sizeof(buf), "ERLE %.1f dB (want > 5)", erle);
-		check("in-band ERLE despite HF mic noise", erle > 5, buf);
+		snprintf(buf, sizeof(buf), "ERLE %.1f dB (want > %.0f%s)", erle,
+			 hf_min,
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+			 ", linear stage"
+#else
+			 ""
+#endif
+		);
+		check("in-band ERLE despite HF mic noise", erle > hf_min, buf);
 	}
 
 	/* --- 9. speech-like stimulus: sparse, periodic, gappy ----------- */
@@ -1726,6 +1766,8 @@ int main(int argc, char **argv)
 			.gate_band_hz = AEC_SUP_GATE_BAND_HZ,
 			.cap_split_hz = AEC_SUP_CAP_SPLIT_HZ,
 			.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP,
+			.cap_hi_split_hz = AEC_SUP_CAP_HI_SPLIT_HZ,
+			.cap_hi_gcap = AEC_SUP_CAP_HI_GCAP,
 		};
 		size_t nk;
 		const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
@@ -1765,6 +1807,15 @@ int main(int argc, char **argv)
 		bad = d; bad.cap_split_hz = 9000;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		bad = d; bad.cap_lo_gcap = 1.5f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.cap_hi_split_hz = 9000;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.cap_hi_gcap = 1.5f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		/* the top band must sit above the low split when both are on */
+		bad = d; bad.cap_split_hz = 750; bad.cap_hi_split_hz = 750;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.cap_split_hz = 1000; bad.cap_hi_split_hz = 800;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		/* NaN and +-inf in every float key. audio_aec.c builds with
 		 * -ffast-math on the device, where GCC folds a plain range
@@ -1817,9 +1868,20 @@ int main(int argc, char **argv)
 		cur.gate_mid_a = 0.001f;
 		nacc++;
 		acc += audio_aec_tune_set(&cur) == 0;
+		/* top cap band: on with the low split off (any frequency), on
+		 * just above the low split, and off with the low split on */
+		cur = d; cur.cap_split_hz = 0; cur.cap_hi_split_hz = 200;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
+		cur = d; cur.cap_split_hz = 750; cur.cap_hi_split_hz = 751;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
+		cur = d; cur.cap_split_hz = 8000; cur.cap_hi_split_hz = 0;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
 		audio_aec_tune_set(&d);
 		snprintf(buf, sizeof(buf),
-			 "%d/%d accepted (incl. fd_mu 0.05, gate_fast_a/gate_mid_a 0.001)",
+			 "%d/%d accepted (incl. fd_mu 0.05, gate_fast_a/gate_mid_a 0.001, cap_hi_split_hz)",
 			 acc, nacc);
 		check("aec_tune accepts the inclusive bounds", acc == nacc, buf);
 

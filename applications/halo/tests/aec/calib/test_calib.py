@@ -93,6 +93,16 @@ def t_sets():
           "readback: a wrong value is flagged")
     check(C.missing({"gate_band_hz": 1000, "gate_kappa": 0.5}, ["gate_kappa"]) == ["gate_band_hz"],
           "keys a firmware lacks are found")
+    line = C.lua_tune_line(C.apply(d, C.NAMED["B3-15"]), d)
+    check(line == ("frame.microphone.aec_tune('defaults') "
+                   "frame.microphone.aec_tune{cap_hi_gcap=0.15, cap_hi_split_hz=1600}"), f"B3-15 vs B2-15: {line}")
+    defs = C.c_defines(C.apply(d, C.NAMED["B3-10"]), d)
+    check(defs == "#define AEC_SUP_CAP_HI_SPLIT_HZ 1600", f"top band #define: {defs!r}")
+    old = {k: v for k, v in C.apply(tree, C.NAMED["B2-15"]).items()
+           if k not in ("cap_hi_split_hz", "cap_hi_gcap")}
+    ft = C.firmware_table(C.apply(tree, C.NAMED["B3-10"]), old)
+    check(ft["cap_hi_split_hz"] == 0 and not C.diff(ft, d),
+          "a firmware without the top band replays with it off")
 
 
 def _aec_wav(src_text, hdr_dir, tmp, tag, extra=()):
@@ -195,7 +205,19 @@ def t_sim_resume(tmp):
     check("rec − cur" in rep and ("aec_tune{" in rep or "Keep the current defaults" in rep),
           "report has the A/B table and a Lua line or a keep verdict")
     s3 = json.load(open(os.path.join(sd, "results", "step3.json")))
-    check(set(s3["sets"]) >= {"current", "old-gate", "B2-15", "B15", "A15"}, f"compared sets {sorted(s3['sets'])}")
+    check(set(s3["sets"]) >= {"current", "old-gate", "B2-15", "B3-10", "B3-15", "S15", "B15", "A15"},
+          f"compared sets {sorted(s3['sets'])}")
+    cl = [json.loads(ln) for ln in open(os.path.join(sd, "results", "step3_candidates.jsonl"))]
+    check(any(r["tag"].startswith("top band") for r in cl), "the search tries the top cap band")
+    for fam in {r["family"] for r in cl}:
+        fr = [r for r in cl if r["family"] == fam]
+        top = [r for r in fr if r["tag"].startswith("top band") or r["tag"] == "base"]
+        best_top = max(top, key=lambda r: r["J"])["params"]
+        grid = [r for r in fr if r["tag"].startswith("grid")]
+        check(grid and all(r["params"]["cap_hi_split_hz"] == best_top["cap_hi_split_hz"]
+                           and C.same(r["params"]["cap_hi_gcap"], best_top["cap_hi_gcap"]) for r in grid),
+              f"family {fam}: the kappa x floor grid starts from the best set after the top band "
+              f"step ({best_top['cap_hi_split_hz']} / {best_top['cap_hi_gcap']})")
     check(s3["step4_candidate"] and s.get("step4_tune", {}).get("rec"),
           f"step 4 tests a changed set ({s.get('step4_tune', {}).get('rec')})")
     tr = json.load(open(os.path.join(sd, "trials", "2c-dt-A.json")))

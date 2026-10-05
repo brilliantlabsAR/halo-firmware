@@ -46,6 +46,13 @@ release pages and tags are not publicly reachable.
   lighter. New `frame.microphone.aec_tune()` keys `gate_band_hz`,
   `cap_split_hz` and `cap_lo_gcap` control the new behaviour; PROTOCOL.md
   lists the new defaults and how to restore the old ones.
+- With echo cancellation on, the playback ceiling is -20 dB instead of
+  -12 dB from 1.6 kHz up, where most of the echo the canceller leaves
+  behind sits: on two desk units echo removal at 1.6-3.4 kHz rose from
+  14-15 to 21-22 dB. Like the rest of the ceiling it lifts when the wearer
+  is detected, so it only touches a wearer the detector misses, and their
+  voice below 1.6 kHz is not affected. New `frame.microphone.aec_tune()`
+  keys `cap_hi_split_hz` (0 turns it off) and `cap_hi_gcap`.
 
 ### Fixed
 
