@@ -25,6 +25,13 @@ release pages and tags are not publicly reachable.
   refills its reference history (session start, re-anchor) it no longer
   mistakes the not-yet-cancelled echo for the wearer talking, which used to
   let that echo through for about a second.
+- Negative microphone gains (`frame.microphone.gain()`, `start{gain=}`,
+  AICS) now lower the level in steps that mirror the positive ones: -1 is
+  6 dB below 0, -3 is 12 dB below, -10 is 20.8 dB below. They used to drop
+  the level by 31-51 dB, with -1 the quietest and -10 the loudest, so any
+  negative gain made the microphone effectively silent. Gains 0 and above
+  are unchanged. PROTOCOL.md and BLE_SERVICES.md now describe the real
+  step sizes; a step is not 1 dB.
 
 ### Documentation
 

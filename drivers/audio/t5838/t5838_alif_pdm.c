@@ -904,10 +904,17 @@ int dmic_set_gain(const struct device *dev, int8_t gain)
 		gain = 10;
 	}
 
+	/* PDM_CH_GAIN is 8.4 unsigned fixed point (raw 16 = 1.0x). Step g
+	 * scales amplitude by (1 + g) above the g = 0 reference of 22x
+	 * (raw 352) and by 1 / (1 - g) below it, so -g mirrors +g:
+	 * +/-20*log10(1 + |g|) dB, i.e. +/-6.0 dB at 1, +/-12.0 at 3, +/-20.8
+	 * at 10 (rounded to the nearest raw step). Negative steps used to
+	 * write raw 1..10 directly, 31-51 dB below g = 0 and in reverse order.
+	 */
 	if (gain < 0) {
-		raw_gain = -gain;
+		raw_gain = (uint16_t)((352 + (1 - gain) / 2) / (1 - gain));
 	} else {
-		raw_gain = ((gain + 1) * 22) << 4;
+		raw_gain = (uint16_t)((gain + 1) * 352);
 	}
 
 	for (int i = 0; i < MAX_NUM_CHANNELS; i++) {

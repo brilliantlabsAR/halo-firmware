@@ -621,8 +621,11 @@ gain remains available via `frame.microphone.gain()`.
 ```
 MICS Mute: Not Muted / Muted / Disabled (host writable, notifiable)
 AICS Input (optional): "Microphones" (type: Microphone)
-AICS Gain: -10..+10 dB, 1 dB units (matches frame.microphone.gain() range;
-           persisted to the shared "audio/gain" setting)
+AICS Gain: -10..+10, the frame.microphone.gain() steps (persisted to the
+           shared "audio/gain" setting). The characteristic advertises
+           1 dB units, but a step is not 1 dB: step g is
+           +/-20*log10(1 + |g|) dB (1: 6.0 dB, 4: 14.0, 10: 20.8; see
+           frame.microphone.gain() in PROTOCOL.md)
 
 Mute semantics:
     • While muted (MICS mute or AICS input mute), the LE Audio source

@@ -375,8 +375,12 @@ void t5838_aad_sleep(const struct device *dev);
 /**
  * @brief Set gain for DMIC
  *
+ * Steps are not dB: step g scales the signal by (1 + g) relative to
+ * g = 0 for g > 0 and by 1 / (1 - g) for g < 0, i.e.
+ * +/-20*log10(1 + |g|) dB (1: 6.0 dB, 2: 9.5, 3: 12.0, 4: 14.0, 10: 20.8).
+ *
  * @param[in] dev Pointer to the device structure for the driver instance.
- * @param[in] gain Gain value to set
+ * @param[in] gain Gain step, -10..10 (clamped)
  *
  * @retval 0 if successful.
  * @retval negative errno code if othewise.
