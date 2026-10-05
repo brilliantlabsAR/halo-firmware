@@ -14,6 +14,7 @@
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
+#include <errno.h>
 #include <string.h>
 
 #if defined(CONFIG_HALO_AUDIO_AEC_FDAF) && defined(CONFIG_CMSIS_DSP)
@@ -692,14 +693,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * the collapsed Sy. Far SHORTER than the full onset window (~1s vs ~3.5s):
  * only the refill gap needs covering, and resyncs are frequent enough that a
  * full-length re-arm would keep the uplink permanently ducked and kill all
- * barge-in. The default equals the onset ease span, so the duck starts at
- * full ONSET_GCAP strength (ob=1.0) and eases linearly to steady over the
- * window with no flat hold. Armed with MAX (see the resync branch) so a
- * resync mid-reply never shortens the reply's own, longer onset duck.
+ * barge-in. It has its own countdown (sup.resync) and a fixed shape: held
+ * at full strength (ob=1.0) for RESYNC_HOPS - RESYNC_EASE_HOPS, then eased
+ * linearly to steady over the last RESYNC_EASE_HOPS (25 + 25 hops, the
+ * shape the compiled onset ease gave it before aec_tune). The onset_ms /
+ * onset_hold_ms keys do not change it, so onset_ms=0 turns off only the
+ * reply-onset duck; the depth (onset_gcap/beta/floor) is shared. The
+ * ref-unreliable fail-safe uses the same duck. ob is the larger of the two
+ * ducks, so a resync mid-reply never shortens the reply's own onset duck.
  * (Overridable for host A/B; RESYNC_HOPS=0 disables the re-arm.)
  */
 #ifndef AEC_SUP_RESYNC_HOPS
-#define AEC_SUP_RESYNC_HOPS 50   /* ~1s ease from ONSET_GCAP back to steady */
+#define AEC_SUP_RESYNC_HOPS 50   /* ~1s: 0.5s held, 0.5s eased to steady */
+#endif
+#ifndef AEC_SUP_RESYNC_EASE_HOPS
+#define AEC_SUP_RESYNC_EASE_HOPS 25
 #endif
 /* Onset duck re-arm hold-off: the reference rising edge re-arms the duck only
  * after this much continuous reference silence (processed blocks). It used to
@@ -746,7 +754,213 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #if CONFIG_HALO_AUDIO_AEC_TAPS < 704
 #error "AEC_TAPS + one block must cover the FDAF's 1024-sample FFT frame"
 #endif
+
+/* Runtime tuning (frame.microphone.aec_tune): the barge-in tunables above
+ * stay the compile-time defaults; this is the live copy. The Lua thread
+ * publishes a validated set into tune_pub under tune_lock and bumps
+ * tune_gen; the mic thread copies it into tune (its private copy, plus the
+ * derived block counts) at the top of each block when the generation
+ * changed, so every block runs on one consistent set (HOLD vs HOPS, GCAP
+ * vs STEADY). Both live in ordinary RAM, not the ITCM state section.
+ * Compile-time only: the kernel geometry (SUP_D/KLEN), the adaptation band,
+ * FD_N/H/K, the adaptation-gate hangover, ATT/REL/POW_A, LIFT_WARM, the
+ * resync and ref-unreliable ducks and MU_HOT_EXCESS.
+ */
+#define AEC_TUNE_DEFAULTS { \
+	.sup_beta = AEC_SUP_BETA, \
+	.sup_floor = AEC_SUP_FLOOR, \
+	.onset_gcap = AEC_SUP_ONSET_GCAP, \
+	.onset_beta = AEC_SUP_ONSET_BETA, \
+	.onset_floor = AEC_SUP_ONSET_FLOOR, \
+	.onset_ms = AEC_SUP_ONSET_HOPS * 20, \
+	.onset_hold_ms = AEC_SUP_ONSET_HOLD_HOPS * 20, \
+	.rearm_ms = AEC_SUP_ONSET_REARM_MS, \
+	.onset_gate_lift = AEC_SUP_ONSET_GATE_LIFT, \
+	.steady_gcap = AEC_SUP_STEADY_GCAP, \
+	.gate_kappa = AEC_SUP_GATE_KAPPA, \
+	.gate_fast_a = AEC_SUP_GATE_FAST_A, \
+	.gate_floor_a = AEC_SUP_GATE_FLOOR_A, \
+	.gate_ratio = AEC_SUP_GATE_RATIO, \
+	.gate_absfloor = AEC_SUP_GATE_ABSFLOOR, \
+	.gate_hang_ms = AEC_SUP_GATE_HANG * 20, \
+	.gate_mid_a = AEC_SUP_GATE_MID_A, \
+	.gate_edge_abs = AEC_SUP_GATE_EDGE_ABS, \
+	.gate_edge_ratio = AEC_SUP_GATE_EDGE_RATIO, \
+	.gate_pref_min = AEC_SUP_GATE_PREF_MIN, \
+	.playback_hold_ms = AEC_SUP_PLAYBACK_HOLD_MS, \
+	.fd_mu = AEC_FD_MU, \
+}
+
+#define TUNE_KEY(f, ty, lo, hi) \
+	{ #f, offsetof(struct audio_aec_tune, f), AUDIO_AEC_TUNE_##ty, lo, hi }
+/* Ranges are generous but keep every use well-defined: no tunable is a
+ * divisor, the hop counts index nothing, EMA coefficients stay in (0, 1],
+ * and rearm_ms >= one block (0 would re-arm the duck on every active block).
+ */
+static const struct audio_aec_tune_key tune_keys[] = {
+	TUNE_KEY(sup_beta, FLOAT, 0.0f, 20.0f),
+	TUNE_KEY(sup_floor, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(onset_gcap, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(onset_beta, FLOAT, 0.0f, 20.0f),
+	TUNE_KEY(onset_floor, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(onset_ms, U32, 0.0f, 10000.0f),
+	TUNE_KEY(onset_hold_ms, U32, 0.0f, 10000.0f),
+	TUNE_KEY(rearm_ms, U32, 20.0f, 60000.0f),
+	TUNE_KEY(onset_gate_lift, U32, 0.0f, 2.0f),
+	TUNE_KEY(steady_gcap, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(gate_kappa, FLOAT, 0.0f, 4.0f),
+	TUNE_KEY(gate_fast_a, FLOAT, 0.001f, 1.0f),
+	TUNE_KEY(gate_floor_a, FLOAT, 0.0001f, 1.0f),
+	TUNE_KEY(gate_ratio, FLOAT, 1.0f, 100.0f),
+	TUNE_KEY(gate_absfloor, FLOAT, 0.0f, 1e6f),
+	TUNE_KEY(gate_hang_ms, U32, 0.0f, 10000.0f),
+	TUNE_KEY(gate_mid_a, FLOAT, 0.001f, 1.0f),
+	TUNE_KEY(gate_edge_abs, FLOAT, 0.0f, 1e6f),
+	TUNE_KEY(gate_edge_ratio, FLOAT, 1.0f, 100.0f),
+	TUNE_KEY(gate_pref_min, FLOAT, 0.0f, 1e6f),
+	TUNE_KEY(playback_hold_ms, U32, 0.0f, 10000.0f),
+	TUNE_KEY(fd_mu, FLOAT, 0.05f, 1.0f),
+};
+
+/* the mic thread's snapshot: the parameter set plus its block counts */
+struct aec_tune_rt {
+	struct audio_aec_tune p;
+	uint32_t onset_hops;
+	uint32_t onset_hold_hops;
+	uint32_t ease_hops;
+	uint32_t rearm_blocks;
+	uint32_t gate_hang;
+};
+
+static struct audio_aec_tune tune_pub = AEC_TUNE_DEFAULTS;
+static struct aec_tune_rt tune = {
+	.p = AEC_TUNE_DEFAULTS,
+	.onset_hops = AEC_SUP_ONSET_HOPS,
+	.onset_hold_hops = AEC_SUP_ONSET_HOLD_HOPS,
+	.ease_hops = (AEC_SUP_ONSET_HOPS > AEC_SUP_ONSET_HOLD_HOPS)
+			     ? (AEC_SUP_ONSET_HOPS - AEC_SUP_ONSET_HOLD_HOPS)
+			     : 1,
+	.rearm_blocks = AEC_SUP_ONSET_REARM_BLOCKS,
+	.gate_hang = AEC_SUP_GATE_HANG,
+};
+static atomic_t tune_gen = ATOMIC_INIT(1);
+static uint32_t tune_seen = 1;
+static struct k_spinlock tune_lock;
+
+/* Mic thread, top of each block: adopt a newly published set. */
+static void aec_tune_refresh(void)
+{
+	uint32_t gen = (uint32_t)atomic_get(&tune_gen);
+
+	if (gen == tune_seen) {
+		return;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+
+	tune.p = tune_pub;
+	tune_seen = (uint32_t)atomic_get(&tune_gen);
+	k_spin_unlock(&tune_lock, key);
+
+	tune.onset_hops = tune.p.onset_ms / 20;
+	tune.onset_hold_hops = tune.p.onset_hold_ms / 20;
+	tune.ease_hops = (tune.onset_hops > tune.onset_hold_hops)
+				 ? (tune.onset_hops - tune.onset_hold_hops)
+				 : 1;
+	tune.rearm_blocks = tune.p.rearm_ms / 20;
+	tune.gate_hang = tune.p.gate_hang_ms / 20;
+}
 #endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
+
+const struct audio_aec_tune_key *audio_aec_tune_keys(size_t *count)
+{
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	*count = ARRAY_SIZE(tune_keys);
+	return tune_keys;
+#else
+	*count = 0;
+	return NULL;
+#endif
+}
+
+const char *audio_aec_tune_check(const struct audio_aec_tune *t)
+{
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	for (size_t i = 0; i < ARRAY_SIZE(tune_keys); i++) {
+		const struct audio_aec_tune_key *k = &tune_keys[i];
+		const uint8_t *f = (const uint8_t *)t + k->offset;
+		float v;
+		uint32_t u;
+
+		memcpy(&u, f, sizeof(u));
+		if (k->type == AUDIO_AEC_TUNE_U32) {
+			v = (float)u;
+		} else {
+			/* reject NaN and +-inf by bit pattern (exponent all
+			 * ones): this file builds with -ffast-math, which lets
+			 * the compiler assume no NaN and fold the range test
+			 * below so that a NaN passes it
+			 */
+			if ((u & 0x7f800000u) == 0x7f800000u) {
+				return k->name;
+			}
+			memcpy(&v, f, sizeof(v));
+		}
+		if (!(v >= k->min && v <= k->max)) {
+			return k->name;
+		}
+	}
+	if (t->onset_hold_ms > t->onset_ms) {
+		return "onset_hold_ms";
+	}
+	return NULL;
+#else
+	(void)t;
+	return "aec_tune";
+#endif
+}
+
+int audio_aec_tune_set(const struct audio_aec_tune *t)
+{
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	if (audio_aec_tune_check(t) != NULL) {
+		return -EINVAL;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+
+	tune_pub = *t;
+	atomic_inc(&tune_gen);
+	k_spin_unlock(&tune_lock, key);
+	return 0;
+#else
+	(void)t;
+	return -ENOTSUP;
+#endif
+}
+
+void audio_aec_tune_get(struct audio_aec_tune *t)
+{
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+
+	*t = tune_pub;
+	k_spin_unlock(&tune_lock, key);
+#else
+	memset(t, 0, sizeof(*t));
+#endif
+}
+
+void audio_aec_tune_defaults(struct audio_aec_tune *t)
+{
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	static const struct audio_aec_tune defs = AEC_TUNE_DEFAULTS;
+
+	*t = defs;
+#else
+	memset(t, 0, sizeof(*t));
+#endif
+}
 
 static struct {
 	/* reference FIFO: single ISR producer, single thread consumer */
@@ -1004,6 +1218,8 @@ static struct {
 	float kwin[AEC_SUP_KLEN];
 	float gmin;              /* last block's min gain (diagnostics) */
 	uint32_t onset;          /* hops of onset boost remaining (see ONSET_HOPS) */
+	uint32_t resync;         /* hops of resync / ref-unreliable duck remaining
+				  * (see RESYNC_HOPS) */
 	bool kwin_ready;
 	/* envelope release gate (AEC_SUP_GCAP_ENV_GATE): fast/slow EMAs of the
 	 * echo-removed excess residual, and the release hangover. */
@@ -1224,6 +1440,7 @@ static void aec_session_reset(void)
 	 * would mute the wearer at the start of this one
 	 */
 	sup.onset = 0;
+	sup.resync = 0;
 	sup.gate_fast = 0.0f;
 	sup.gate_floor = 0.0f;
 	sup.gate_mid = 0.0f;
@@ -1312,7 +1529,8 @@ void audio_aec_suppress(bool enable)
 		for (size_t j = 0; j < AEC_SUP_NBINS; j++) {
 			sup.g[j] = 1.0f;
 		}
-		sup.onset = AEC_SUP_ONSET_HOPS;   /* boost from this re-enable */
+		sup.onset = tune.onset_hops;   /* boost from this re-enable */
+		sup.resync = 0;
 		/* envelope gate: seed the floor fresh on re-engage */
 		sup.gate_fast = 0.0f;
 		sup.gate_floor = 0.0f;
@@ -1549,11 +1767,11 @@ static size_t ref_consume(float *dst, float *dst_f, size_t n)
 				 * of the momentarily-zero Sy. Only genuine
 				 * resyncs (aec.synced), not the first anchor - a
 				 * first anchor's onset is the reply-gate trigger.
-				 * MAX so a resync mid-reply keeps the reply's own
-				 * longer onset window.
+				 * Its own countdown: the reply's onset duck runs
+				 * on alongside it.
 				 */
-				if (sup.onset < AEC_SUP_RESYNC_HOPS) {
-					sup.onset = AEC_SUP_RESYNC_HOPS;
+				if (sup.resync < AEC_SUP_RESYNC_HOPS) {
+					sup.resync = AEC_SUP_RESYNC_HOPS;
 				}
 #endif
 			}
@@ -1727,6 +1945,10 @@ static size_t ref_consume(float *dst, float *dst_f, size_t n)
  */
 static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 {
+	/* this block's tunables (adopted by aec_tune_refresh at the top of
+	 * audio_aec_process; constant for the whole block)
+	 */
+	const struct audio_aec_tune *tp = &tune.p;
 	/* idempotent; belt-and-braces for hosts without SYS_INIT (the
 	 * harness) - on device sys_init already did it
 	 */
@@ -1884,32 +2106,32 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 	{
 		float re = __builtin_sqrtf(aec.p_err > 0.0f ? aec.p_err : 0.0f);
 		float xr = __builtin_sqrtf(aec.p_ref > 0.0f ? aec.p_ref : 0.0f);
-		float ex = re - AEC_SUP_GATE_KAPPA * xr;
+		float ex = re - tp->gate_kappa * xr;
 
 		if (ex < 0.0f) {
 			ex = 0.0f;
 		}
-		sup.gate_fast += AEC_SUP_GATE_FAST_A * (ex - sup.gate_fast);
+		sup.gate_fast += tp->gate_fast_a * (ex - sup.gate_fast);
 		if (!sup.gate_floor_init) {
 			sup.gate_floor = ex;
 			sup.gate_mid = ex;
 			sup.gate_floor_init = true;
 		}
-		sup.gate_floor += AEC_SUP_GATE_FLOOR_A * (ex - sup.gate_floor);
+		sup.gate_floor += tp->gate_floor_a * (ex - sup.gate_floor);
 
 		/* sustained level test: echo-latency-bound (needs near-end to
 		 * out-power the echo-contaminated floor) - noise-robust hold. */
 		bool level = sup.gate_fast >
-				     AEC_SUP_GATE_RATIO * (sup.gate_floor + 1e-9f) &&
-			     (sup.gate_fast - sup.gate_floor) > AEC_SUP_GATE_ABSFLOOR;
+				     tp->gate_ratio * (sup.gate_floor + 1e-9f) &&
+			     (sup.gate_fast - sup.gate_floor) > tp->gate_absfloor;
 		/* rising-edge test: fires in ~1-3 hops on a voice onset regardless
 		 * of the steady echo level (see AEC_SUP_GATE_EDGE_ABS) - the fast
 		 * near-end release. Read against the PREVIOUS baseline, then fold
 		 * this block into mid below. */
-		bool edge = (sup.gate_fast - sup.gate_mid) > AEC_SUP_GATE_EDGE_ABS &&
+		bool edge = (sup.gate_fast - sup.gate_mid) > tp->gate_edge_abs &&
 			    sup.gate_fast >
-				    AEC_SUP_GATE_EDGE_RATIO * (sup.gate_mid + 1e-9f);
-		sup.gate_mid += AEC_SUP_GATE_MID_A * (ex - sup.gate_mid);
+				    tp->gate_edge_ratio * (sup.gate_mid + 1e-9f);
+		sup.gate_mid += tp->gate_mid_a * (ex - sup.gate_mid);
 		bool active = level || edge;
 
 		/* while the reference history refills after a wipe (enable,
@@ -1923,7 +2145,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		}
 
 		if (active) {
-			sup.gate_hang = AEC_SUP_GATE_HANG;
+			sup.gate_hang = tune.gate_hang;
 		} else if (sup.gate_hang > 0) {
 			sup.gate_hang--;
 		}
@@ -1950,7 +2172,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		 * keep W, so warm re-engages adapt at plain MU from the
 		 * first block.
 		 */
-		float mu = AEC_FD_MU + aec.mu_hot_excess;
+		float mu = tp->fd_mu + aec.mu_hot_excess;
 
 		aec.mu_hot_excess *= AEC_FD_MU_SETTLE;
 
@@ -2082,27 +2304,36 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		 * uncancelled structured echo, so re-arm the deep onset duck
 		 * (like a resync) to scramble it below the VAD. Done before ob
 		 * so the deepening applies this same block. */
-		if (aec.ref_unrel_hops > 0 && sup.onset < AEC_SUP_RESYNC_HOPS) {
-			sup.onset = AEC_SUP_RESYNC_HOPS;
+		if (aec.ref_unrel_hops > 0 && sup.resync < AEC_SUP_RESYNC_HOPS) {
+			sup.resync = AEC_SUP_RESYNC_HOPS;
 		}
 #endif
 
 		/* onset boost weight ob: held at 1.0 for the first
 		 * ONSET_HOLD_HOPS (full duck / boosted beta+floor), then eased
 		 * linearly to 0 (steady) over the remaining tail. sup.onset
-		 * counts down from ONSET_HOPS.
+		 * counts down from ONSET_HOPS. The resync / ref-unreliable
+		 * duck (sup.resync) has its own fixed shape (see
+		 * AEC_SUP_RESYNC_HOPS); the deeper of the two applies.
 		 */
-		uint32_t ease_hops = (AEC_SUP_ONSET_HOPS > AEC_SUP_ONSET_HOLD_HOPS)
-				     ? (AEC_SUP_ONSET_HOPS - AEC_SUP_ONSET_HOLD_HOPS)
-				     : 1;
+		uint32_t ease_hops = tune.ease_hops;
 		float ob = (sup.onset == 0) ? 0.0f
 			   : (sup.onset > ease_hops)
 				 ? 1.0f
 				 : (float)sup.onset / (float)ease_hops;
-		float beta_eff = AEC_SUP_BETA +
-				 ob * (AEC_SUP_ONSET_BETA - AEC_SUP_BETA);
-		float floor_eff = AEC_SUP_FLOOR +
-				  ob * (AEC_SUP_ONSET_FLOOR - AEC_SUP_FLOOR);
+		float ob_rs = (sup.resync == 0) ? 0.0f
+			      : (sup.resync > AEC_SUP_RESYNC_EASE_HOPS)
+				    ? 1.0f
+				    : (float)sup.resync /
+					      (float)AEC_SUP_RESYNC_EASE_HOPS;
+
+		if (ob_rs > ob) {
+			ob = ob_rs;
+		}
+		float beta_eff = tp->sup_beta +
+				 ob * (tp->onset_beta - tp->sup_beta);
+		float floor_eff = tp->sup_floor +
+				  ob * (tp->onset_floor - tp->sup_floor);
 
 		for (uint32_t b = FD_BIN_LO; b <= FD_BIN_HI; b++) {
 			uint32_t j = b - FD_BIN_LO;
@@ -2129,6 +2360,9 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		if (sup.onset > 0) {
 			sup.onset--;
 		}
+		if (sup.resync > 0) {
+			sup.resync--;
+		}
 
 		/* zero-phase gain spectrum -> kernel; rotate to causal
 		 * support [0, 2D] and Hann-taper. The truncation doubles
@@ -2140,7 +2374,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		 * GCAP up to 1.0 (no cap) over the onset window - a hard,
 		 * prediction-independent limit on every in-band gain
 		 */
-		float steady_cap = AEC_SUP_STEADY_GCAP;
+		float steady_cap = tp->steady_gcap;
 #if AEC_SUP_GCAP_ENV_GATE
 		/* lift the sustained ceiling when either there is no real echo to
 		 * scramble (idle: p_ref below the floor - fixes the dither
@@ -2152,10 +2386,10 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		 * echo - hold the ceiling (deepened via the onset re-arm above). */
 		sup.pb_hold = false;
 		if (aec.ref_unrel_hops > 0) {
-			/* keep steady_cap = AEC_SUP_STEADY_GCAP (fail safe) */
+			/* keep steady_cap = steady_gcap (fail safe) */
 		} else if (sup.gate_released) {
 			steady_cap = 1.0f; /* genuine near-end voice: release */
-		} else if (aec.p_ref < AEC_SUP_GATE_PREF_MIN) {
+		} else if (aec.p_ref < tp->gate_pref_min) {
 			/* p_ref below the echo floor. This is genuine idle ONLY if
 			 * the speaker is not actively playing: a live reference
 			 * feed-stall / re-anchor (the barge-flush collapse) also
@@ -2171,7 +2405,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			int32_t rf_age =
 				(int32_t)((uint32_t)k_uptime_get() - rf);
 
-			if (rf == 0 || rf_age > (int32_t)AEC_SUP_PLAYBACK_HOLD_MS) {
+			if (rf == 0 || rf_age > (int32_t)tp->playback_hold_ms) {
 				steady_cap = 1.0f; /* genuinely idle */
 			} else {
 				sup.pb_hold = true; /* collapse guard: hold cap */
@@ -2183,17 +2417,18 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		}
 #endif
 		float ob_cap = ob;
-#if AEC_SUP_GCAP_ENV_GATE && AEC_SUP_ONSET_GATE_LIFT
+#if AEC_SUP_GCAP_ENV_GATE
 		/* near-end release lifts the duck's blanket ceiling too (see
 		 * AEC_SUP_ONSET_GATE_LIFT): the wearer is not cut mid-word */
-		if (sup.gate_released && aec.ref_unrel_hops == 0 &&
-		    (AEC_SUP_ONSET_GATE_LIFT == 1 ||
+		if (tp->onset_gate_lift != 0 &&
+		    sup.gate_released && aec.ref_unrel_hops == 0 &&
+		    (tp->onset_gate_lift == 1 ||
 		     aec.mu_hot_excess < AEC_SUP_ONSET_LIFT_WARM)) {
 			ob_cap = 0.0f;
 		}
 #endif
-		float g_cap = AEC_SUP_ONSET_GCAP +
-			      (steady_cap - AEC_SUP_ONSET_GCAP) * (1.0f - ob_cap);
+		float g_cap = tp->onset_gcap +
+			      (steady_cap - tp->onset_gcap) * (1.0f - ob_cap);
 		for (uint32_t b = 1; b < FD_BINS; b++) {
 			float gj = 1.0f;
 
@@ -2375,6 +2610,12 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 	if (atomic_get(&aec.enabled) == 0 || !aec.ref_format_ok) {
 		return;
 	}
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	/* one consistent tunable set per block, adopted before anything
+	 * (the reset included) reads it
+	 */
+	aec_tune_refresh();
+#endif
 	if (atomic_cas(&reset_req, 1, 0)) {
 		aec_session_reset();
 	}
@@ -2421,6 +2662,7 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 		 * the prior for the re-engage.
 		 */
 		sup.onset = 0;
+		sup.resync = 0;
 		aec.gate_hangover = 0;
 		aec.ref_unrel_hops = 0;
 		aec.ref_quiet = UINT32_MAX;
@@ -2505,8 +2747,8 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			 * but only after AEC_SUP_ONSET_REARM_MS of reference
 			 * silence: a pause inside a reply is not a new reply.
 			 */
-			if (aec.ref_quiet >= AEC_SUP_ONSET_REARM_BLOCKS) {
-				sup.onset = AEC_SUP_ONSET_HOPS;
+			if (aec.ref_quiet >= tune.rearm_blocks) {
+				sup.onset = tune.onset_hops;
 			}
 			aec.ref_quiet = 0;
 #endif
@@ -2801,7 +3043,9 @@ const float *audio_aec_snapshot(struct audio_aec_stats *stats, size_t *taps)
 		stats->sup_se = se;
 		stats->sup_gmean = gsum / (float)AEC_SUP_NBINS;
 	}
-	stats->sup_onset = sup.onset;
+	stats->sup_onset = MAX(sup.onset, sup.resync);
+	stats->tune_gen = tune_seen;
+	stats->ref_quiet = aec.ref_quiet;
 #if AEC_SUP_GCAP_ENV_GATE
 	stats->sup_gate_fast = sup.gate_fast;
 	stats->sup_gate_floor = sup.gate_floor;
@@ -2822,6 +3066,8 @@ const float *audio_aec_snapshot(struct audio_aec_stats *stats, size_t *taps)
 	stats->sup_se = 0.0f;
 	stats->sup_gmean = 1.0f;
 	stats->sup_onset = 0;
+	stats->tune_gen = 0;
+	stats->ref_quiet = 0;
 	stats->sup_gate_fast = 0.0f;
 	stats->sup_gate_floor = 0.0f;
 	stats->sup_gate_mid = 0.0f;

@@ -11,6 +11,17 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `frame.microphone.aec_tune()` reads and sets the echo canceller's
+  barge-in tunables at runtime: the residual suppressor, the onset duck
+  (depth, length, re-arm hold-off), the near-end gate and the filter step
+  size. `aec_tune{key=value}` checks every key and applies all of them or
+  none, and `aec_tune('defaults')` restores the built-in values. Values
+  apply to every session but are not saved: each boot starts from the
+  defaults. PROTOCOL.md lists the keys with their units, ranges and
+  tradeoffs.
+
 ### Fixed
 
 - With echo cancellation on, the microphone is no longer muted for about

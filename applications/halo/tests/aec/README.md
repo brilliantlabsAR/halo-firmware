@@ -14,6 +14,7 @@
 > | `frame.microphone.voice()` / `voice(bool)` | get / set voice-band mode (live); also `start{voice=true}` |
 > | `frame.microphone.diag('stats')` | canceller + PDM/speaker/clock diagnostics table |
 > | `frame.microphone.diag('zero')` | zero the clkmon / PDM / speaker counters |
+| `frame.microphone.aec_tune()` / `aec_tune{k=v}` / `aec_tune('defaults')` | get / set (validated, all or nothing) / reset the barge-in tunables: suppressor, onset duck, near-end gate, `fd_mu`. Keys, units, ranges and tradeoffs: PROTOCOL.md. Device-global, live from the next block, **not persisted** (boot = compiled defaults). `diag('stats').tune_gen` identifies the set |
 >
 > Removed in the cleanup: `aec('sup'/'nosup')` (dead), `aec('pair')` and
 > `aec('dump')` (retired with the `pair_probe.py` / `dump_probe.py` /

@@ -34,9 +34,14 @@ zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_HPF src/audio_eq.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_AEC src/audio_aec.c)
 if(CONFIG_HALO_AUDIO_AEC)
     # the NLMS inner loops need real optimization (Zephyr defaults to -Os);
-    # -ffast-math lets GCC vectorize the float reductions with Helium/MVE
+    # -ffast-math lets GCC vectorize the float reductions with Helium/MVE.
+    # -falign-loops=8: the suppressor's 257-tap kernel convolution runs 82k
+    # iterations of a 4-instruction loop per block; with its head only
+    # halfword-aligned the M55 pays ~1 cycle per iteration fetching the
+    # straddling first instruction (+0.5 ms/block, 11%, measured on the EC),
+    # and which way it falls used to depend on unrelated code size changes.
     set_source_files_properties(src/audio_aec.c PROPERTIES
-        COMPILE_OPTIONS "-O3;-ffast-math")
+        COMPILE_OPTIONS "-O3;-ffast-math;-falign-loops=8")
     # AEC algorithm tuning (margin servo, envelope gate + sustained ceiling,
     # onset duck, ...) lives in the AEC_MARGIN_* / AEC_SUP_* #define defaults in
     # src/audio_aec.c, each with its worn-validation rationale inline. We ship a

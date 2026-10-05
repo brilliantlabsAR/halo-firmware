@@ -4,6 +4,8 @@
  */
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -1181,6 +1183,147 @@ static int lua_microphone_aec(lua_State *L)
 	return 0;
 }
 
+/* push every aec_tune key as a table; floats rounded to float precision
+ * (7 significant digits) so 0.15 reads back as 0.15, not 0.15000000596
+ */
+static void aec_tune_push(lua_State *L, const struct audio_aec_tune *t)
+{
+	size_t nk;
+	const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
+
+	lua_createtable(L, 0, (int)nk);
+	for (size_t i = 0; i < nk; i++) {
+		const uint8_t *f = (const uint8_t *)t + keys[i].offset;
+
+		if (keys[i].type == AUDIO_AEC_TUNE_U32) {
+			uint32_t u;
+
+			memcpy(&u, f, sizeof(u));
+			lua_pushinteger(L, (lua_Integer)u);
+		} else {
+			float v;
+			char num[24];
+
+			memcpy(&v, f, sizeof(v));
+			snprintf(num, sizeof(num), "%.7g", (double)v);
+			lua_pushnumber(L, (lua_Number)strtod(num, NULL));
+		}
+		lua_setfield(L, -2, keys[i].name);
+	}
+}
+
+/**
+ * @brief Lua: frame.microphone.aec_tune([table | 'defaults'])
+ *
+ *   aec_tune()            -> table of every current tunable
+ *   aec_tune{k=v, ...}    -> validate every key, apply all or nothing,
+ *                            return the new table
+ *   aec_tune('defaults')  -> restore the compile-time defaults
+ *
+ * An unknown key, a non-number, a non-integer for a *_ms / switch key or an
+ * out-of-range value raises an error naming the key and its range, and
+ * nothing is applied. Device-global: survives start{} and aec(); reset at
+ * boot (not persisted). Keys and ranges: struct audio_aec_tune / PROTOCOL.md.
+ */
+static int lua_microphone_aec_tune(lua_State *L)
+{
+	struct audio_aec_tune t;
+
+	if (lua_gettop(L) == 0) {
+		audio_aec_tune_get(&t);
+		aec_tune_push(L, &t);
+		return 1;
+	}
+
+	if (lua_type(L, 1) == LUA_TSTRING) {
+		if (strcmp(lua_tostring(L, 1), "defaults") != 0) {
+			return luaL_error(L, "aec_tune: expected a table or 'defaults'");
+		}
+		audio_aec_tune_defaults(&t);
+	} else {
+		luaL_checktype(L, 1, LUA_TTABLE);
+
+		size_t nk;
+		const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
+
+		audio_aec_tune_get(&t);
+		lua_pushnil(L);
+		while (lua_next(L, 1) != 0) {
+			const struct audio_aec_tune_key *k = NULL;
+			const char *name = (lua_type(L, -2) == LUA_TSTRING)
+						   ? lua_tostring(L, -2)
+						   : NULL;
+
+			for (size_t i = 0; name != NULL && i < nk; i++) {
+				if (strcmp(keys[i].name, name) == 0) {
+					k = &keys[i];
+					break;
+				}
+			}
+			if (k == NULL) {
+				return luaL_error(L, "aec_tune: unknown key '%s'",
+						  name ? name : "?");
+			}
+			if (lua_type(L, -1) != LUA_TNUMBER) {
+				return luaL_error(L, "aec_tune: %s must be a number",
+						  k->name);
+			}
+
+			uint8_t *f = (uint8_t *)&t + k->offset;
+
+			if (k->type == AUDIO_AEC_TUNE_U32) {
+				int isint;
+				lua_Integer v = lua_tointegerx(L, -1, &isint);
+
+				if (!isint || v < (lua_Integer)k->min ||
+				    v > (lua_Integer)k->max) {
+					return luaL_error(
+						L, "aec_tune: %s must be an integer in [%d, %d]",
+						k->name, (int)k->min, (int)k->max);
+				}
+				uint32_t u = (uint32_t)v;
+
+				memcpy(f, &u, sizeof(u));
+			} else {
+				/* compare in float, the stored type: widened to
+				 * double, a bound like 0.05f is 0.0500000007
+				 * and the documented 0.05 would fail. Written so
+				 * a NaN fails; audio_aec_tune_check() also
+				 * rejects NaN and inf by bit pattern
+				 */
+				float fv = (float)lua_tonumber(L, -1);
+
+				if (!(fv >= k->min && fv <= k->max)) {
+					/* lua_pushfstring has no %g */
+					char rng[40];
+
+					snprintf(rng, sizeof(rng), "[%g, %g]",
+						 (double)k->min, (double)k->max);
+					return luaL_error(L, "aec_tune: %s must be in %s",
+							  k->name, rng);
+				}
+				memcpy(f, &fv, sizeof(fv));
+			}
+			lua_pop(L, 1);
+		}
+
+		const char *bad = audio_aec_tune_check(&t);
+
+		if (bad != NULL) {
+			if (strcmp(bad, "onset_hold_ms") == 0) {
+				return luaL_error(L, "aec_tune: onset_hold_ms must be <= onset_ms");
+			}
+			return luaL_error(L, "aec_tune: %s out of range", bad);
+		}
+	}
+
+	if (audio_aec_tune_set(&t) != 0) {
+		return luaL_error(L, "aec_tune: not supported in this build");
+	}
+	aec_tune_push(L, &t);
+	return 1;
+}
+
 /**
  * @brief Lua: frame.microphone.voice([enable])
  *
@@ -1277,6 +1420,10 @@ static int lua_microphone_diag(lua_State *L)
 		lua_setfield(L, -2, "sup_gate_rel");
 		lua_pushinteger(L, st.sup_pb_hold);
 		lua_setfield(L, -2, "sup_pb_hold");
+		lua_pushinteger(L, st.tune_gen);
+		lua_setfield(L, -2, "tune_gen");
+		lua_pushinteger(L, st.ref_quiet);
+		lua_setfield(L, -2, "ref_quiet");
 		lua_pushnumber(L, st.p_ref);
 		lua_setfield(L, -2, "p_ref");
 		lua_pushnumber(L, st.p_err);
@@ -1642,6 +1789,7 @@ int lua_open_microphone_library(lua_State *L)
 					     {"aad_callback", lua_microphone_aad_callback},
 #if defined(CONFIG_HALO_AUDIO_AEC)
 					     {"aec", lua_microphone_aec},
+					     {"aec_tune", lua_microphone_aec_tune},
 					     {"voice", lua_microphone_voice},
 					     {"diag", lua_microphone_diag},
 #endif
