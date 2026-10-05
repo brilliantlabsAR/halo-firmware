@@ -145,7 +145,7 @@ async def run_pass(b, aec_on, volume, seconds):
         "print('ok2')",
         await_print=True, timeout=10)
     await b.send_lua(
-        f"frame.microphone.start{{encoder='lc3', sample_rate={SR}, "
+        f"frame.microphone.start{{encoder='lc3', aec={'true' if aec_on else 'false'}, sample_rate={SR}, "
         f"bitrate={BITRATE}, channels=1}} capt={{}} capn=0 "
         f"for i=1,{int(LEAD_S * 100)} do drainf() frame.sleep(0.01) end "
         "print('ok3')",

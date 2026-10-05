@@ -160,7 +160,7 @@ async def run_pass(b: BrilliantBle, lc3_clip: bytes, aec_on: bool,
     # reads keeps the Lua VM from starving other threads.
     loop_started = asyncio.get_event_loop().time()
     asyncio.ensure_future(b.send_lua(
-        f"frame.microphone.start{{encoder='lc3', sample_rate={SR}, "
+        f"frame.microphone.start{{encoder='lc3', aec={'true' if aec_on else 'false'}, sample_rate={SR}, "
         f"bitrate={BITRATE}, channels=1}} "
         "while true do "
         "s=frame.microphone.read(240) "

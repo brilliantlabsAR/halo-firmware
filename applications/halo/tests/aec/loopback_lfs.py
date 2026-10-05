@@ -98,7 +98,7 @@ async def run_pass(b, lc3_clip, aec_on, volume, seconds, out_path):
     # capture mic LC3 to /lfs (single command; frame.sleep yields to BLE;
     # pcall-guarded writes; prints byte count when done)
     capture_fut = asyncio.ensure_future(b.send_lua(
-        f"frame.microphone.start{{encoder='lc3', sample_rate={SR}, "
+        f"frame.microphone.start{{encoder='lc3', aec={'true' if aec_on else 'false'}, sample_rate={SR}, "
         f"bitrate={BITRATE}, channels=1}} "
         f"local f=frame.file.open('cap.lc3','w') local n=0 local buf='' "
         f"while n<{target} do local s=frame.microphone.read(4080) "
