@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.18] - 2026-10-05
+
 ### Added
 
 - `frame.microphone.aec_tune()` reads and sets the echo canceller's
@@ -20,7 +22,7 @@ release pages and tags are not publicly reachable.
   none, and `aec_tune('defaults')` restores the built-in values. Values
   apply to every session but are not saved: each boot starts from the
   defaults. PROTOCOL.md lists the keys with their units, ranges and
-  tradeoffs.
+  tradeoffs (#65).
 - `applications/halo/tests/aec/calib`, a worn echo-cancellation
   calibration: in one sitting of about 11 minutes it records the wearer
   and the glasses' own echo, replays them on the Mac through this tree's
@@ -28,7 +30,7 @@ release pages and tags are not publicly reachable.
   against the defaults, and writes a report with a ready-to-paste
   `frame.microphone.aec_tune{...}` line when the pick holds up there
   (otherwise it says to keep the defaults). See "Worn calibration" in
-  `tests/aec/README.md`.
+  `tests/aec/README.md` (#67).
 
 ### Changed
 
@@ -45,14 +47,18 @@ release pages and tags are not publicly reachable.
   missed while the reply plays. The residual suppressor is slightly
   lighter. New `frame.microphone.aec_tune()` keys `gate_band_hz`,
   `cap_split_hz` and `cap_lo_gcap` control the new behaviour; PROTOCOL.md
-  lists the new defaults and how to restore the old ones.
+  lists the new defaults and how to restore the old ones (#66).
 - With echo cancellation on, the playback ceiling is -20 dB instead of
   -12 dB from 1.6 kHz up, where most of the echo the canceller leaves
   behind sits: on two desk units echo removal at 1.6-3.4 kHz rose from
   14-15 to 21-22 dB. Like the rest of the ceiling it lifts when the wearer
   is detected, so it only touches a wearer the detector misses, and their
   voice below 1.6 kHz is not affected. New `frame.microphone.aec_tune()`
-  keys `cap_hi_split_hz` (0 turns it off) and `cap_hi_gcap`.
+  keys `cap_hi_split_hz` (0 turns it off) and `cap_hi_gcap` (#68).
+- The AEC loopback, ERLE and interleave test scripts pass `aec=true` or
+  `aec=false` to `frame.microphone.start{}` to match the pass under test,
+  and the local ERLE test dumps the full `diag('stats')` table on AEC-on
+  passes (#61).
 
 ### Fixed
 
@@ -67,14 +73,14 @@ release pages and tags are not publicly reachable.
   thread while the microphone thread is using it. While the canceller
   refills its reference history (session start, re-anchor) it no longer
   mistakes the not-yet-cancelled echo for the wearer talking, which used to
-  let that echo through for about a second.
+  let that echo through for about a second (#62).
 - Negative microphone gains (`frame.microphone.gain()`, `start{gain=}`,
   AICS) now lower the level in steps that mirror the positive ones: -1 is
   6 dB below 0, -3 is 12 dB below, -10 is 20.8 dB below. They used to drop
   the level by 31-51 dB, with -1 the quietest and -10 the loudest, so any
   negative gain made the microphone effectively silent. Gains 0 and above
   are unchanged. PROTOCOL.md and BLE_SERVICES.md now describe the real
-  step sizes; a step is not 1 dB.
+  step sizes; a step is not 1 dB (#63).
 - With echo cancellation on, the wearer is no longer cut out after every
   pause in a long reply. The canceller's onset duck (about 34 dB for 0.4 s,
   then easing out) re-armed whenever the speaker audio had been silent for
@@ -82,7 +88,7 @@ release pages and tags are not publicly reachable.
   again. It now re-arms only after 1 s of speaker silence, which is a new
   reply rather than a pause in one, and it no longer holds down a wearer
   who is already talking once the canceller has adapted. Steady-state echo
-  removal is unchanged.
+  removal is unchanged (#64).
 
 ### Documentation
 
