@@ -100,17 +100,31 @@ other side: a new reply after a 1.5s silence-fed gap must still arm the
 duck and stay cancelled (ERLE(0-1s) > 12dB). 22 has the wearer talk
 through a 1.2s reply gap and into the next reply, scored over the duck
 window: fewer than 1 in 10 near blocks cut by more than 15dB (before:
-11/25, median -13.5dB). 19's median out-in sits near -10dB in both
-builds: outside the duck the wearer is still held under the -12dB steady
-cap on most blocks because the envelope gate releases only
-intermittently on a speech-like reference (gate tuning, not the duck).
+11/25, median -13.5dB). With the item-5 gate (KAPPA 0.15, full band)
+19's median out-in sat near -10dB: outside the duck the wearer was held
+under the -12dB steady cap on most blocks. With the 2026-10-04 defaults
+(KAPPA 0.5, gate band below 1kHz, ABSFLOOR 0.9, HANG 60, BETA 1.25,
+FLOOR 0.15, two-band ceiling 750Hz / 0.5) it is -2.0dB (p10 -4.1, 5/370
+cut by more than 15dB).
+
+The gate band (`AEC_SUP_GATE_BAND_HZ`) and the two-band ceiling
+(`AEC_SUP_CAP_SPLIT_HZ`, `AEC_SUP_CAP_LO_GCAP`) were tuned offline by
+replaying AEC-off device captures through this file, then A/B'd on two
+units on the desk. No host check targets them directly: the synthetic echo
+here has no coupling-dependent residual above 1kHz, so check 19 and the
+double-talk check are where they show (19 above; 13 is -1.3dB vs -1.6).
+Setting both to 0 together with KAPPA 0.15, ABSFLOOR 0.5, HANG 50, BETA
+1.5 and FLOOR 0.1 restores the item-5 output byte for byte
+(tune_equiv.sh). The high band's steady cap must stay at 0.25 or above:
+the HF-noise check (8) fails below it (control below).
 
 Check 23 covers runtime tuning (`frame.microphone.aec_tune`, 2026-10-04),
 through the same C API the Lua binding calls (`audio_aec_tune_set/get/
 defaults`): the defaults equal the compile-time constants (mirrored in
 test_aec.c with the same `-D` hooks, so it holds under overrides too) and
 the key table covers the whole struct; out-of-range, NaN, hold > onset,
-`rearm_ms` 0 and `onset_gate_lift` 3, and NaN, +inf and -inf in every
+`rearm_ms` 0, `onset_gate_lift` 3, a `gate_band_hz` under 500 Hz,
+`cap_split_hz` 9000 and `cap_lo_gcap` 1.5, and NaN, +inf and -inf in every
 float key, are rejected with nothing applied; every float key accepts its
 min and its max (the ranges are inclusive; among them `fd_mu` 0.05 and
 `gate_fast_a`/`gate_mid_a` 0.001, which the Lua binding once rejected by
@@ -150,8 +164,9 @@ override and diffs its whole output against the default build run with
 the equivalent `AEC_TUNE` (check 23 excluded, since it reads the
 defaults): `rearm_ms=160` vs `-DAEC_SUP_ONSET_REARM_MS=160` (check 19
 fails identically, 6 re-arms), `gate_kappa=0.3` vs
-`-DAEC_SUP_GATE_KAPPA=0.3f`, a two-key gate set, and an explicit default.
-All must print SAME.
+`-DAEC_SUP_GATE_KAPPA=0.3f`, a two-key gate set, the gate band and the
+two-band ceiling switched off, a different split and low-band cap, the
+whole pre-2026-10-04 set, and an explicit default. All must print SAME.
 
 Both filter cores build from the same file:
 
@@ -218,14 +233,19 @@ Failing controls (prove the checks discriminate):
 - FDAF build, onset stage: `-DAEC_SUP_BETA=0.0f` (suppressor passthrough)
   fails the cold-onset check (5.5 vs 6.8dB); `-DAEC_FD_MU_HOT_EXCESS=0.0f`
   (old soft-start pace) fails it harder (4.2dB); `-DAEC_SUP_BETA=6.0f`
-  (over-aggressive) fails the double-talk check (-4.3dB median vs the
-  -3dB bound; default 1.5 sits at -1.5).
+  (over-aggressive) fails the double-talk check (-4.5dB median vs the
+  -3dB bound; default 1.25 sits at -1.3).
+- FDAF build: `-DAEC_SUP_STEADY_GCAP=0.2f` fails the HF-noise check
+  (4.7dB vs the 5dB bound; 0.25 gives 5.3). Keep the high band's steady
+  cap at 0.25 or above, and use `AEC_SUP_CAP_LO_GCAP` to change the low
+  band.
 
 - FDAF build, onset re-arm: `-DAEC_SUP_ONSET_REARM_MS=160` (the old
-  re-arm after the 160ms adaptation hangover) fails check 19 (6 re-arms,
-  58/370 near blocks < -15dB even with the gate lift);
+  re-arm after the 160ms adaptation hangover) fails check 19 (6 re-arms;
+  7/370 near blocks < -15dB with the gate lift, 58/370 with the item-5
+  gate);
   `-DAEC_SUP_ONSET_GATE_LIFT=0` (the duck caps the wearer too) fails
-  check 22 (11/25, median -13.5dB); `-DAEC_SUP_ONSET_REARM_MS=2000`
+  check 22 (11/25, median -13.4dB); `-DAEC_SUP_ONSET_REARM_MS=2000`
   (longer than check 20's gap) fails checks 20 and 22 (duck not armed).
 
 FDAF-specific regression worth knowing about: the update views (error and

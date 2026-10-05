@@ -487,10 +487,10 @@ static void apply_env_tune(void)
  * audio_aec.c, for the defaults-equal-constants check (23)
  */
 #ifndef AEC_SUP_BETA
-#define AEC_SUP_BETA 1.5f
+#define AEC_SUP_BETA 1.25f
 #endif
 #ifndef AEC_SUP_FLOOR
-#define AEC_SUP_FLOOR 0.1f
+#define AEC_SUP_FLOOR 0.15f
 #endif
 #ifndef AEC_SUP_ONSET_GCAP
 #define AEC_SUP_ONSET_GCAP 0.02f
@@ -520,7 +520,7 @@ static void apply_env_tune(void)
 #define AEC_SUP_STEADY_GCAP 0.25f
 #endif
 #ifndef AEC_SUP_GATE_KAPPA
-#define AEC_SUP_GATE_KAPPA 0.15f
+#define AEC_SUP_GATE_KAPPA 0.5f
 #endif
 #ifndef AEC_SUP_GATE_FAST_A
 #define AEC_SUP_GATE_FAST_A 0.5f
@@ -532,10 +532,10 @@ static void apply_env_tune(void)
 #define AEC_SUP_GATE_RATIO 2.0f
 #endif
 #ifndef AEC_SUP_GATE_ABSFLOOR
-#define AEC_SUP_GATE_ABSFLOOR 0.5f
+#define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 50
+#define AEC_SUP_GATE_HANG 60
 #endif
 #ifndef AEC_SUP_GATE_MID_A
 #define AEC_SUP_GATE_MID_A 0.08f
@@ -554,6 +554,15 @@ static void apply_env_tune(void)
 #endif
 #ifndef AEC_FD_MU
 #define AEC_FD_MU 0.25f
+#endif
+#ifndef AEC_SUP_GATE_BAND_HZ
+#define AEC_SUP_GATE_BAND_HZ 1000
+#endif
+#ifndef AEC_SUP_CAP_SPLIT_HZ
+#define AEC_SUP_CAP_SPLIT_HZ 750
+#endif
+#ifndef AEC_SUP_CAP_LO_GCAP
+#define AEC_SUP_CAP_LO_GCAP 0.5f
 #endif
 
 /* check 19's scenario, shortened: warm speech reply with the wearer over
@@ -1714,6 +1723,9 @@ int main(int argc, char **argv)
 			.gate_pref_min = AEC_SUP_GATE_PREF_MIN,
 			.playback_hold_ms = AEC_SUP_PLAYBACK_HOLD_MS,
 			.fd_mu = AEC_FD_MU,
+			.gate_band_hz = AEC_SUP_GATE_BAND_HZ,
+			.cap_split_hz = AEC_SUP_CAP_SPLIT_HZ,
+			.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP,
 		};
 		size_t nk;
 		const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
@@ -1734,7 +1746,8 @@ int main(int argc, char **argv)
 		check("aec_tune defaults == compile-time constants", same, buf);
 
 		/* validation: out of range, NaN, hold > onset, below-one-block
-		 * rearm; each rejected with nothing applied */
+		 * rearm, a gate band too narrow to hold a voice; each rejected
+		 * with nothing applied */
 		int rej = 0, ntry = 0;
 		audio_aec_tune_set(&d);
 		bad = d; bad.gate_kappa = -0.1f;
@@ -1746,6 +1759,12 @@ int main(int argc, char **argv)
 		bad = d; bad.rearm_ms = 0;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		bad = d; bad.onset_gate_lift = 3;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.gate_band_hz = 300;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.cap_split_hz = 9000;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.cap_lo_gcap = 1.5f;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		/* NaN and +-inf in every float key. audio_aec.c builds with
 		 * -ffast-math on the device, where GCC folds a plain range

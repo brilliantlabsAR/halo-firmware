@@ -22,6 +22,23 @@ release pages and tags are not publicly reachable.
   defaults. PROTOCOL.md lists the keys with their units, ranges and
   tradeoffs.
 
+### Changed
+
+- With echo cancellation on, loud speaker echo no longer opens the
+  microphone's playback ceiling for most of a reply. The detector that
+  lifts the ceiling when the wearer talks mistook the echo of a unit with
+  strong speaker-to-mic coupling for the wearer (80% of a reply on a desk
+  unit), so the echo came through at full strength. It now measures only
+  below 1 kHz, where the canceller works best and most of the voice is,
+  with a larger echo allowance: on that unit it no longer opens on echo,
+  and echo removal rose from 11 to 17 dB. From 312 to 750 Hz the ceiling
+  is now -6 dB instead of -12 dB, so a wearer the detector misses keeps more
+  of their voice; a wearer quieter at the microphone than the echo is
+  missed while the reply plays. The residual suppressor is slightly
+  lighter. New `frame.microphone.aec_tune()` keys `gate_band_hz`,
+  `cap_split_hz` and `cap_lo_gcap` control the new behaviour; PROTOCOL.md
+  lists the new defaults and how to restore the old ones.
+
 ### Fixed
 
 - With echo cancellation on, the microphone is no longer muted for about

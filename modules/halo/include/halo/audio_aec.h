@@ -82,7 +82,8 @@ bool audio_aec_is_suppressed(void);
  * @brief Runtime barge-in tunables (FDAF build).
  *
  * Every field defaults to the matching compile-time AEC_SUP_* / AEC_FD_MU
- * constant in audio_aec.c. Durations are in milliseconds; the hop-counted
+ * constant in audio_aec.c. Durations are in milliseconds and frequencies
+ * in Hz (rounded up to whole 15.625Hz bins when adopted); the hop-counted
  * ones (onset_ms, onset_hold_ms, rearm_ms, gate_hang_ms) are truncated to
  * whole 20ms blocks. Device-global, kept across sessions and enable(),
  * reset to the defaults at boot (not persisted). Exposed to Lua as
@@ -111,6 +112,9 @@ struct audio_aec_tune {
 	float gate_pref_min;       /**< AEC_SUP_GATE_PREF_MIN */
 	uint32_t playback_hold_ms; /**< AEC_SUP_PLAYBACK_HOLD_MS */
 	float fd_mu;               /**< AEC_FD_MU */
+	uint32_t gate_band_hz;     /**< AEC_SUP_GATE_BAND_HZ (0 = full band) */
+	uint32_t cap_split_hz;     /**< AEC_SUP_CAP_SPLIT_HZ (0 = one band) */
+	float cap_lo_gcap;         /**< AEC_SUP_CAP_LO_GCAP */
 };
 
 /** @brief Field type of an audio_aec_tune key. */
