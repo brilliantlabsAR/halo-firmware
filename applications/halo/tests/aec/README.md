@@ -88,7 +88,12 @@ step 4 is skipped there anyway).
 Noa settings throughout: `microphone.start{gain=1, voice=true, aec=...}` and
 `speaker.start{volume=100, gain=6, budget=100}`. The reply is uploaded as LC3
 (32 kbps, 10 ms) and played gap-free from Lua RAM; each recording goes to
-`/lfs/cap.lc3` and is read back; `cap.lc3` is removed at the end. The only
+`/lfs/cap.lc3` and is read back; `cap.lc3` is removed at the end. Before each
+recording a probe writes and removes the recording's size plus 8 KB (35–55 KB)
+to check `/lfs` has room (`frame.file` has no free-space call), and every write
+of the capture is checked. A full `/lfs` stops the session with "device
+storage full: N KB free, need M KB" (free space, then `--resume latest`)
+instead of retrying as if BLE had dropped. The only
 other change is the saved mic gain (`audio/gain`), and only if you let it be
 set for the sitting (below): the old value goes into `session.json` before it
 is changed. At the end the harness calls `aec_tune('defaults')`, restores that

@@ -46,6 +46,10 @@
              units; everything else follows the gain), and the gain-1 keys
              alone at x2.5 (no -g) differ; the scale comes from
              gain_effective, else start{gain=}, else a manifest override
+14 storage   a full /lfs stops the session before the recording with
+             "device storage full: N KB free, need M KB" (free-space probe),
+             and a cap.lc3 write that hits ENOSPC stops it too, both with no
+             BLE retries and nothing marked done; other write errors retry
 """
 import json
 import os
@@ -657,6 +661,56 @@ def t_step4_wins(tmp, src):
           f"levelling hits the target with peaks under full scale ({C.active_rms_db(x):.2f} dBFS)")
 
 
+def t_storage(tmp):
+    print("14 storage")
+    import re
+    import halo_calib as H
+    _, v, err = H.parse_counts(["k", "WR 48000 16000 [string \"x\"]: error writing to file: -28"], "WR", 2)
+    check(v == [48000, 16000] and err.endswith("-28"), f"WR reply parsed ({v}, {err!r})")
+    _, v, err = H.parse_counts(["SP 56000 nil"], "SP", 1)
+    check(v == [56000] and err is None, "SP reply parsed, nil = no error")
+
+    def raises(fn, *args):
+        try:
+            fn(*args)
+        except BaseException as e:      # noqa: BLE001
+            return e
+        return None
+    check(raises(H.check_write, 48000, 48000, None) is None, "a complete write passes")
+    e = raises(H.check_write, 48000, 16000, "error writing to file: -28")
+    check(isinstance(e, H.StorageFull) and "16 KB free, need 55 KB" in str(e),
+          f"ENOSPC on the write -> StorageFull ({e})")
+    e = raises(H.check_write, 48000, 16000, "incomplete write: 100 of 4080 bytes")
+    check(isinstance(e, H.StorageFull), "a short write -> StorageFull")
+    e = raises(H.check_write, 48000, 16000, "error writing to file: -5")
+    check(isinstance(e, RuntimeError), "another write error is an ordinary (retried) failure")
+    check(raises(H.check_space, 56000, 56000, None) is None
+          and isinstance(raises(H.check_space, 12000, 56000, "-28"), H.StorageFull),
+          "the probe passes with room and stops without")
+    # the developer's case: their app had left ~14 KB free
+    r = sim(tmp, "--sim-lfs-free", "14", "--steps", "1")
+    sd = latest(tmp)
+    s = json.load(open(os.path.join(sd, "session.json")))
+    log = open(os.path.join(sd, "log.txt")).read()
+    check(r.returncode == 2 and re.search(r"stopped: device storage full: 12 KB free, need \d+ KB; "
+                                          r"free space or remove files", r.stdout)
+          and "--resume latest" in r.stdout,
+          f"probe: stops with the storage message ({r.returncode}) {r.stdout[-300:]}")
+    check(not any(t["status"] == "done" for t in s["plan"]) and "attempt 2" not in log
+          and "device storage full" in log, "probe: nothing recorded, no BLE retries, logged")
+    r = sim(tmp, "--sim-fail", "write_capture", "--steps", "1")
+    sd = latest(tmp)
+    s = json.load(open(os.path.join(sd, "session.json")))
+    log = open(os.path.join(sd, "log.txt")).read()
+    check(r.returncode == 2 and "stopped: device storage full:" in r.stdout and "-28" in r.stdout
+          and not any(t["status"] == "done" for t in s["plan"]) and "attempt 2" not in log,
+          f"write: ENOSPC on cap.lc3 stops the session, no retries ({r.returncode})")
+    r = sim(tmp, "--sim-lfs-free", "100", "--steps", "1")
+    s = json.load(open(os.path.join(latest(tmp), "session.json")))
+    check(r.returncode == 0 and any(t["status"] == "done" for t in s["plan"]),
+          f"with 100 KB free step 1 records ({r.returncode})")
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="calib_test_")
     try:
@@ -667,6 +721,7 @@ def main():
         t_ctrl_c(tmp)
         t_vs_current(tmp)
         t_gain_scale(tmp)
+        t_storage(tmp)
         if "--quick" not in sys.argv:
             full = t_sim_resume(tmp)
             notune = t_sim_notune(tmp)

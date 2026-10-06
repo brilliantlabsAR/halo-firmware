@@ -14,7 +14,8 @@ diag rows carry capn, p_mic (50 ms raw mic power) and p_ref every 60 ms.
 --sim-abort-after N kills the session after N recordings (resume test).
 --sim-fw overrides the firmware string (a reflash between runs); --sim-fail
 makes device calls fail: set_gain (every call), finish_tune (aec_tune
-('defaults') at the end).
+('defaults') at the end), write_capture (the cap.lc3 write hits ENOSPC);
+--sim-lfs-free KB sets the free space the /lfs probe finds.
 """
 import asyncio
 import os
@@ -113,6 +114,13 @@ class SimDevice:
         self._fail("set_gain")
         self.saved_gain_v = int(g)
 
+    async def space_check(self, need):
+        """As Ble.space_check: (bytes the probe could write, device error)."""
+        free = self.a.sim_lfs_free
+        if free is None or free * 1024 >= need:
+            return int(need + (-need) % 4000), None
+        return int(free * 1024) // 4000 * 4000, "[string \"...\"]: error writing to file: -28"
+
     async def upload(self, cid, blob):
         if self.clip_loaded == cid:
             return
@@ -193,7 +201,12 @@ class SimDevice:
             self.a.sim_abort_after = 0
             raise self.Abort("sim: session killed (resume test)")
         await asyncio.sleep(0)
-        return pcm, raw, diag, dict(target_bytes=len(raw), got_bytes=len(raw), sim=True)
+        # the cap.lc3 write (--sim-fail write_capture: ENOSPC part-way, as a
+        # full /lfs after the probe)
+        write = [len(raw), len(raw), None]
+        if "write_capture" in (self.a.sim_fail or "").split(","):
+            write = [len(raw), len(raw) // 3, "[string \"...\"]: error writing to file: -28"]
+        return pcm, raw, diag, dict(target_bytes=len(raw), got_bytes=len(raw), write=write, sim=True)
 
     async def tune_defaults(self):
         self._fail("finish_tune")

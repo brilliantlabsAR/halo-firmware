@@ -58,6 +58,14 @@ release pages and tags are not publicly reachable.
 - Echo cancellation: `gate_hang_ms` defaults to 1400 (was 1200), which keeps
   more of the wearer between words.
 
+### Fixed
+
+- The worn calibration harness (`tests/aec/calib`) stops with "device
+  storage full: N KB free, need M KB" when `/lfs` cannot hold a recording.
+  Before, a full filesystem silently cut the capture short, and the harness
+  retried it as a Bluetooth drop until its retries ran out. It now checks
+  for room before each recording and checks every write of the capture.
+
 ## [0.8.18] - 2026-10-05
 
 ### Added
