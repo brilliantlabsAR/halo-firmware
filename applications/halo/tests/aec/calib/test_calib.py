@@ -41,10 +41,10 @@
              defaults" (shown as rejected, no paste line); a pick that passes
              gets the paste line; desk phrases are at the desk talker level
 13 gain-scale the replay applies the session's effective mic gain as the
-             firmware does: -g 2.5 == the three gate keys x2.5 (bit-exact
-             here: the g^2-scaled power thresholds do not bite on it),
-             and a capture x2.5 at -g 2.5 gates like it does x1 at gain 1
-             (the defaults alone open the gate on it); the scale comes from
+             firmware does: a capture x2.5 at -g 2.5 gates and cancels like
+             it does x1 with gate_kappa / 2.5 (gate_kappa stays in mic
+             units; everything else follows the gain), and the gain-1 keys
+             alone at x2.5 (no -g) differ; the scale comes from
              gain_effective, else start{gain=}, else a manifest override
 """
 import json
@@ -91,6 +91,16 @@ def t_sets():
     defs = C.c_defines(C.apply(d, dict(gate_hang_ms=1500, gate_kappa=0.3, gate_band_hz=1250)), d)
     check(defs == "#define AEC_SUP_GATE_BAND_HZ 1250\n#define AEC_SUP_GATE_HANG 75\n"
                   "#define AEC_SUP_GATE_KAPPA 0.3f", f"#defines: {defs!r}")
+    defs = C.c_defines(C.apply(d, dict(gate_kappa=1.25, gate_absfloor=1.0)), d, 2.5)
+    check(defs == "#define AEC_SUP_GATE_ABSFLOOR 1.0f\n#define AEC_SUP_GATE_KAPPA 1.25f /* mic units at "
+                  "this sitting's gain (x2.5 over gain 1; not gain-scaled): at gain 1 the same gate "
+                  "is gate_kappa = 0.5 */", f"#defines at gain scale 2.5: {defs!r}")
+    import calib_report as R
+    kn = R.kappa_note(dict(gain_scale=2.5, tune=dict(gate_kappa=1.25)))
+    check(kn is not None and "mic units" in kn and "0.5" in kn
+          and R.kappa_note(dict(gain_scale=1.0, tune=dict(gate_kappa=1.25))) is None
+          and R.kappa_note(dict(gain_scale=2.5, tune=dict(gate_absfloor=1.0))) is None,
+          "report: gate_kappa from a gain != 1 sitting is flagged as mic units")
     check(C.apply(d, {"gate_hang_ms": 1210})["gate_hang_ms"] == 1200, "ms keys truncate to 20 ms")
     check(not C.tune_mismatch({"gate_hang_ms": 1210, "gate_kappa": 0.47},
                               {"gate_hang_ms": 1200.0, "gate_kappa": 0.4699999988079}),
@@ -196,20 +206,18 @@ def t_gain_scale(tmp):
     C.write_wav(m1, mic / 2.5)
     C.write_wav(m25, mic)
     d = O.tree_defaults()
-    x25 = {k: float(np.float32(d[k]) * np.float32(2.5)) for k in ("gate_kappa", "gate_absfloor", "gate_edge_abs")}
     fd = [C.SR, n - C.SR]
+    k1 = dict(d, gate_kappa=float(np.float32(d["gate_kappa"]) / np.float32(2.5)))
     a = O.run(m25, rp, d, feed=fd, dump=True, gain_scale=2.5)
-    b = O.run(m25, rp, dict(d, **x25), feed=fd, dump=True)
     c = O.run(m25, rp, d, feed=fd, dump=True)
-    g1 = O.run(m1, rp, d, feed=fd, dump=True)
+    g1 = O.run(m1, rp, k1, feed=fd, dump=True)
     ga, gc, g1g = a["dump"]["gate_rel"], c["dump"]["gate_rel"], g1["dump"]["gate_rel"]
-    check(np.abs(mic).max() < 0.99 and np.array_equal(a["out"], b["out"]),
-          "-g 2.5 == gate_kappa, gate_absfloor, gate_edge_abs x2.5 (bit-exact, no clipping; "
-          "the g^2 power thresholds do not bite here)")
     err = 10 * np.log10(((a["out"] / 2.5 - g1["out"]) ** 2).sum() / (g1["out"] ** 2).sum())
-    check(np.array_equal(ga, g1g) and gc.sum() > 20 and g1g.sum() == 0 and err < -30,
-          f"x2.5 at -g 2.5 gates as x1 at gain 1 ({int(ga.sum())} vs {int(g1g.sum())} open, output "
-          f"{err:.0f} dB); the defaults alone open the gate on {int(gc.sum())}/{len(gc)} blocks")
+    errc = 10 * np.log10(((c["out"] / 2.5 - g1["out"]) ** 2).sum() / (g1["out"] ** 2).sum())
+    check(np.abs(mic).max() < 0.99 and np.array_equal(ga, g1g) and err < -30 and
+          (not np.array_equal(gc, g1g) or errc > err + 10),
+          f"x2.5 at -g 2.5 gates as x1 with gate_kappa / 2.5 ({int(ga.sum())} vs {int(g1g.sum())} "
+          f"open, output {err:.0f} dB); without -g {int(gc.sum())} open, output {errc:.0f} dB")
     # where the scale comes from
     sd = os.path.join(tmp, "gs_sess")
     rd = os.path.join(sd, "replay")

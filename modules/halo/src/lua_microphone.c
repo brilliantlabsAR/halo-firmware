@@ -1432,6 +1432,12 @@ static int lua_microphone_diag(lua_State *L)
 		lua_setfield(L, -2, "ref_quiet");
 		lua_pushnumber(L, st.mic_gain_scale);
 		lua_setfield(L, -2, "mic_gain_scale");
+		lua_pushnumber(L, st.dtd_thr);
+		lua_setfield(L, -2, "dtd_thr");
+		lua_pushinteger(L, (lua_Integer)st.dtd_escapes);
+		lua_setfield(L, -2, "dtd_escapes");
+		lua_pushnumber(L, st.dtd_coh);
+		lua_setfield(L, -2, "dtd_coh");
 		lua_pushnumber(L, st.p_ref);
 		lua_setfield(L, -2, "p_ref");
 		lua_pushnumber(L, st.p_err);

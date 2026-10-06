@@ -348,7 +348,8 @@ NAMED = {
 }
 # A key the device's firmware lacks behaves as switched off there (it
 # predates the feature): replay it at this value, not at the tree's default.
-OFF = {"gate_band_hz": 0, "cap_split_hz": 0, "cap_hi_split_hz": 0}
+OFF = {"gate_band_hz": 0, "cap_split_hz": 0, "cap_hi_split_hz": 0,
+       "gate_kappa_hf": 0, "dtd_mult": 0}
 REF_SET = "0.8.17"           # the 0.8.17 release source (calib_build.aec_replay_ref)
 
 
@@ -360,8 +361,10 @@ def mic_gain_scale(g):
     """Mic gain step g relative to gain 1, as the firmware hands it to the
     AEC (audio_aec_set_mic_gain_scale): PDM_CH_GAIN raw / raw at gain 1
     (t5838 dmic_gain_raw: 352 (g + 1) for g >= 0, round(352 / (1 - g))
-    below). The AEC scales gate_kappa, gate_absfloor and gate_edge_abs by
-    it, so aec_tune sets are gain-1 values at any gain."""
+    below). The AEC scales gate_absfloor, gate_edge_abs and gate_kappa_hf
+    by it (the double-talk threshold by its square), so those are gain-1
+    values at any gain; gate_kappa stays in mic units (at gain 4 it acts
+    as kappa / 2.5 at gain 1)."""
     g = max(-10, min(10, int(g)))
     raw = (g + 1) * 352 if g >= 0 else (352 + (1 - g) // 2) // (1 - g)
     return raw / 704.0
@@ -439,16 +442,34 @@ def tune_macros():
     return _MACROS
 
 
-def c_defines(table, defaults):
+# keys the firmware leaves in mic units (not scaled by the mic gain scale)
+MIC_UNIT_KEYS = ("gate_kappa",)
+
+
+def mic_unit_note(k, v, gain_scale):
+    """A set searched at mic gain scale f != 1: the gain-1 keys are gain-1
+    values, but gate_kappa is in mic units at that gain (the firmware does
+    not scale it), i.e. right for a unit run at that gain; its gain-1
+    equivalent is v / f. None when nothing needs saying."""
+    if k not in MIC_UNIT_KEYS or abs(float(gain_scale) - 1.0) < 1e-6:
+        return None
+    return (f"mic units at this sitting's gain (x{float(gain_scale):g} over gain 1; not "
+            f"gain-scaled): at gain 1 the same gate is {k} = {float(v) / float(gain_scale):.3g}")
+
+
+def c_defines(table, defaults, gain_scale=1.0):
     out = []
     for k, v in sorted(diff(table, defaults).items()):
         mac, div = tune_macros().get(k, (None, 1))
+        note = mic_unit_note(k, v, gain_scale)
         if mac is None:
             out.append(f"/* {k} = {fmt_val(v)} (no compile-time macro found) */")
         elif div != 1 or float(v) == int(float(v)) and k.endswith(("_ms", "_hz", "_lift")):
             out.append(f"#define {mac} {int(float(v)) // div}")
         else:
             out.append(f"#define {mac} {float(v)!r}f")
+        if note and mac is not None:
+            out[-1] += f" /* {note} */"
     return "\n".join(out)
 
 

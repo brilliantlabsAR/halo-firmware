@@ -1456,13 +1456,17 @@ A gain set here is saved and survives reboots, and a saved gain takes precedence
 `start{gain=}`: the microphone starts at the saved gain whenever one exists.
 
 The gain is digital, so it raises the echo in the mic as much as the wearer's voice.
-The echo canceller's near-end gate thresholds (`gate_kappa`, `gate_absfloor`,
-`gate_edge_abs` in `aec_tune()`) are expressed at gain 1, and the firmware scales them
-by the effective gain over gain 1 (`(g + 1) / 2` for g ≥ 0: ×2.0 at 3, ×2.5 at 4), so the
-gate decides the same at any gain and an app does not retune it when it changes gain.
-The canceller's internal mic-versus-speaker power thresholds (the double-talk test that
-pauses adaptation, the filter divergence guard) scale with the square of that factor, so
-every echo canceller decision is the same at any gain.
+The echo canceller's absolute near-end gate thresholds (`gate_absfloor`,
+`gate_edge_abs` and `gate_kappa_hf` in `aec_tune()`) are expressed at gain 1, and the
+firmware scales them by the effective gain over gain 1 (`(g + 1) / 2` for g ≥ 0: ×2.0 at
+3, ×2.5 at 4), so an app does not retune them when it changes gain. The canceller's
+internal mic-versus-speaker power thresholds (the double-talk test that pauses
+adaptation, the filter divergence guard) scale with the square of that factor.
+`gate_kappa` is **not** scaled: it stays in mic units, so at gain 4 the gate is as
+sensitive to the wearer as `gate_kappa / 2.5` would make it at gain 1 (as in 0.8.18).
+A wearer at a higher gain is detected sooner that way. On a unit with strong echo
+coupling at a high gain it can also release on echo; there, set `gate_kappa` to the
+default × the gain factor (`aec_tune{gate_kappa = 1.25}` at gain 4).
 This follows the gain actually applied (`start{gain=}`, a saved gain, this setter, or
 the LE Audio AICS gain control), and `diag('stats').mic_gain_scale` reports it.
 
@@ -1570,7 +1574,7 @@ Runtime tuning of the echo canceller's barge-in behaviour (residual suppressor, 
 - `aec_tune{key = value, ...}` validates every key, then applies all of them at once, and returns the new table. An unknown key, a non-number, a non-integer for a `*_ms` or switch key, or an out-of-range value raises an error naming the key and its range, and **nothing** is applied. Keys you leave out keep their current values.
 - `aec_tune('defaults')` restores the compiled defaults and returns the table.
 
-The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. **The gate thresholds `gate_kappa`, `gate_absfloor` and `gate_edge_abs` are expressed at mic gain 1**: the firmware multiplies them by the effective mic gain over gain 1 (`diag('stats').mic_gain_scale`, ×2.5 at gain 4; see `gain()`), so one set works at every gain and `aec_tune()` always reads back the gain-1 values. `gate_pref_min` is a reference power and is not scaled. `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks; `gate_band_hz`, `cap_split_hz` and `cap_hi_split_hz` are rounded up to whole 15.625 Hz bins.
+The microphone thread adopts a new set at the start of its next 20 ms block, so a block always runs on one consistent set. **The gate thresholds `gate_absfloor`, `gate_edge_abs` and `gate_kappa_hf` are expressed at mic gain 1**: the firmware multiplies them by the effective mic gain over gain 1 (`diag('stats').mic_gain_scale`, ×2.5 at gain 4; see `gain()`), and `aec_tune()` always reads back the gain-1 values. `gate_kappa` is in mic units and is not scaled (see `gain()`). `gate_pref_min` is a reference power and is not scaled. `dtd_init` takes effect when the canceller restarts (`microphone.start`, or echo cancellation switched on). `diag('stats').tune_gen` counts the sets applied since boot (1 = boot defaults). `onset_ms`, `onset_hold_ms`, `rearm_ms` and `gate_hang_ms` are truncated to whole 20 ms blocks; `gate_band_hz`, `cap_split_hz` and `cap_hi_split_hz` are rounded up to whole 15.625 Hz bins.
 
 | Key | Unit | Default | Range | What it does | Tradeoff |
 |-----|------|---------|-------|--------------|----------|
@@ -1584,12 +1588,12 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
 | `rearm_ms` | ms | 1000 | 20–60000 | Speaker silence needed before the next playback onset re-arms the duck | Shorter re-ducks the wearer after pauses inside one reply (160 was the old behaviour); longer can leave a quick new reply unducked |
 | `onset_gate_lift` | switch | 2 | 0, 1, 2 | Lets the near-end gate lift the duck's blanket ceiling: 0 never, 1 always, 2 once the filter has adapted | 1 lets an early talker through sooner but can leak a cold onset; 0 cuts a talker for the whole duck |
 | `steady_gcap` | gain | 0.25 | 0–1 | Ceiling held during playback while the gate sees no wearer (0.25 = −12 dB); with `cap_split_hz` set, only above the split (and below 312 Hz), and with `cap_hi_split_hz` set, only below that; 1 turns it off | Lower scrambles residual echo more, but caps a wearer the gate misses just as hard |
-| `gate_kappa` | ratio | 0.5 | 0–4 | Echo allowance in the near-end gate: excess = √(residual power) − kappa × √(reference power), both measured below `gate_band_hz`. At gain 1; scaled with the mic gain | Higher gives fewer false releases on echo, but a quiet wearer is detected less often |
+| `gate_kappa` | ratio | 0.5 | 0–4 | Echo allowance in the near-end gate: excess = √(residual power) − kappa × √(reference power), both measured below `gate_band_hz`. In mic units: not scaled with the mic gain, so at gain 4 it acts as kappa / 2.5 at gain 1 | Higher gives fewer false releases on echo, but a quiet wearer is detected less often; on a strongly coupled unit at a high gain, multiply it by the gain factor |
 | `gate_fast_a` | coefficient | 0.5 | 0.001–1 | Fast smoothing of the excess (per block) | Higher reacts sooner and is noisier |
 | `gate_floor_a` | coefficient | 0.01 | 0.0001–1 | Smoothing of the slow ambient floor (~2 s) | Higher follows noise faster, and also follows a long barge-in |
 | `gate_ratio` | ratio | 2.0 | 1–100 | Level release: fast excess above ratio × floor | Lower releases on quieter speech and on noise |
 | `gate_absfloor` | excess units | 0.9 | 0–1e6 | Level release also needs fast − floor above this. At gain 1; scaled with the mic gain | Higher ignores small excesses near silence, and misses a quiet wearer |
-| `gate_hang_ms` | ms | 1200 | 0–10000 | How long a release is held after the last detection | Longer bridges word gaps, but holds the cap open on echo after a false release |
+| `gate_hang_ms` | ms | 1400 | 0–10000 | How long a release is held after the last detection | Longer bridges word gaps, but holds the cap open on echo after a false release |
 | `gate_mid_a` | coefficient | 0.08 | 0.001–1 | Smoothing of the medium (~240 ms) baseline the edge detector rises above | Higher makes the edge test less sensitive to slow onsets |
 | `gate_edge_abs` | excess units | 0.6 | 0–1e6 | Edge release needs fast − mid above this; a very large value turns the edge path off. At gain 1; scaled with the mic gain | Higher is more robust near silence and slower to release |
 | `gate_edge_ratio` | ratio | 1.4 | 1–100 | Edge release: fast excess above ratio × mid | Lower lets a barge-in through faster, with more false releases on echo and noise (1.8 was noise-safe offline) |
@@ -1601,6 +1605,11 @@ The microphone thread adopts a new set at the start of its next 20 ms block, so 
 | `cap_lo_gcap` | gain | 0.5 | 0–1 | Playback ceiling from 312 Hz up to `cap_split_hz` while the gate sees no wearer | Higher keeps more of a missed wearer and lets more low-band echo through |
 | `cap_hi_split_hz` | Hz | 1600 | 0–8000, above `cap_split_hz` when both are set | From this frequency up (and no lower than 312 Hz) the playback ceiling is `cap_hi_gcap` instead of `steady_gcap`; 0 = off | The residual echo is mostly at 1.6–3.4 kHz; a top band caps it harder while the wearer's 0.75–1.6 kHz stays under `steady_gcap` |
 | `cap_hi_gcap` | gain | 0.1 | 0–1 | Playback ceiling from `cap_hi_split_hz` up while the gate sees no wearer (0.1 = −20 dB) | Lower removes more high-band echo, and takes more of the consonants of a wearer the gate misses |
+| `gate_kappa_hf` | ratio | 0.15 | 0–10 | High-band term of the gate's excess: it also subtracts kappa_hf × (√(reference power from `gate_hf_hz` up) − `gate_hf_ratio` × √(gate-band reference power)), when that is positive. Covers speakers that turn a loud sibilant into broadband energy at the mic. At gain 1; scaled with the mic gain. 0 = off | Higher holds the gate on more distortion, and can hold it on a wearer talking over a sibilant |
+| `gate_hf_hz` | Hz | 3000 | 500–7984 | Lower edge of the reference band the high-band term measures (up to 8 kHz). Must be at or above a non-zero `gate_band_hz` (with `gate_band_hz` 0 the two bands overlap above it) | – |
+| `gate_hf_ratio` | ratio | 3 | 0–100 | The high-band term counts only the high-band reference above this many times the gate band's: frames led by a sibilant, not voiced echo | Lower applies it to more of the reply, and costs a wearer more |
+| `dtd_mult` | ratio | 10 | 0–1000 | Double-talk test: the filter adapts only while residual power < threshold × reference power. The threshold is `dtd_mult` × a tracked low quantile of that ratio during playback, between 0.05 and 2 (× the mic gain squared); 0 = fixed at 2. If adaptation stays frozen on a residual the reference explains (the echo path changed: the glasses re-seated, the coupling stepped), the threshold falls back to 2 and tracks back down as the filter re-converges. `diag('stats').dtd_thr` reports it, `dtd_escapes` counts the fall-backs | Lower freezes the filter sooner when the wearer talks (keeps more of them); too low and a filter stops tracking a changing echo path |
+| `dtd_init` | ratio | 0.25 | 0.05–2 | The tracked threshold's starting value after a restart; a strongly coupled unit raises it until its filter adapts | Higher adapts sooner from a cold start, and freezes later on an early wearer |
 
 - **Parameters:** none, a table of keys, or the string `'defaults'`
 - **Returns:** `table` (every key and its value after the call)
@@ -1636,7 +1645,7 @@ Voice-band mode: band-passes the mic output to a speech band (~300–3400 Hz). *
 AEC canceller diagnostics, separate from the `aec()` control surface. **Halo only.** For test/instrumentation use.
 
 - **Parameters:** `cmd: string` — one of:
-  - `"stats"` — returns a table of canceller internals plus PDM/speaker/clock probes (margin, resyncs, loss counters, etc.), among them `mic_gain_scale`, the effective mic gain over gain 1 that the near-end gate thresholds are scaled by (1.0 at gain 1, 2.5 at gain 4). For speaker playback accounting, use `frame.speaker.stats()`.
+  - `"stats"` — returns a table of canceller internals plus PDM/speaker/clock probes (margin, resyncs, loss counters, etc.), among them `mic_gain_scale`, the effective mic gain over gain 1 that the near-end gate thresholds are scaled by (1.0 at gain 1, 2.5 at gain 4), `dtd_thr`, the double-talk threshold in force (at gain 1; see `dtd_mult`), `dtd_escapes`, how often it fell back to the fixed threshold since boot, and `dtd_coh`, the residual's coherence with the reference (0–1) that fall-back tests. For speaker playback accounting, use `frame.speaker.stats()`.
   - `"zero"` — zeroes the clock-rate monitor and PDM/speaker counters
 - **Returns:** `table` for `"stats"`; `nil` for `"zero"`
 - **Errors:** throws `"unknown diag command '<cmd>'"` for any other string

@@ -11,22 +11,52 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- Echo cancellation: the near-end gate also allows for speaker distortion
+  (`gate_kappa_hf`, `gate_hf_hz`, `gate_hf_ratio` in
+  `frame.microphone.aec_tune`). Some speakers turn a loud sibilant into
+  broadband sound at the microphone, and where a reply restarted on one the
+  gate took it for the wearer and let the echo through for over a second. In
+  a replay of a worn unit with such a speaker, at microphone gain 4, the gate
+  was open on echo 2% of the time instead of 27%, and 10.4 dB of echo was
+  removed instead of 6.8.
+- Echo cancellation: the double-talk test that pauses filter adaptation
+  follows each unit's own echo level (`dtd_mult`, `dtd_init`;
+  `diag('stats').dtd_thr`). It used to wait until the wearer was about 50
+  times louder than the echo, so the filter kept adapting to the wearer's
+  voice and the suppressor then removed more of it. Across the worn and desk
+  replays the wearer's voice is kept 0.1 to 0.9 dB better, and real double
+  talk 0.4 to 0.8 dB better on worn units, with no loss of echo removal
+  beyond 0.2 dB. A strongly coupled unit still converges from a cold start,
+  and when the echo path changes mid-reply (the glasses re-seated, a
+  stronger coupling) the threshold falls back to the old one until the
+  filter has re-adapted, within about 2 s (`diag('stats').dtd_escapes`
+  counts these).
+
 ### Changed
 
-- With echo cancellation on, the near-end gate now behaves the same at
-  any microphone gain. Its thresholds `gate_kappa`, `gate_absfloor` and
-  `gate_edge_abs` are expressed at gain 1, and the firmware scales them by
-  the effective gain over gain 1 (x2.5 at gain 4). This follows the gain
-  actually applied (`start{gain=}`, a saved gain, `frame.microphone.gain()`
-  or the LE Audio gain control). Before, gain 4 made the gate open on echo
-  on units with strong coupling (in a replay of one worn unit, echo removed
-  fell from 18 to 6 dB and the gate was open on echo 23% of the time).
-  The canceller's internal mic-versus-speaker power thresholds (the
-  double-talk test that pauses adaptation and the divergence guard) scale
-  with the square of that factor, so a strongly coupled unit still
-  converges at gain 4. `aec_tune()` values stay gain-1 values, so an app
-  does not retune when it changes gain. `diag('stats').mic_gain_scale` reports the factor, and the
-  calibration harness replays each sitting at its effective gain.
+- With echo cancellation on, the near-end gate's absolute thresholds
+  `gate_absfloor`, `gate_edge_abs` and `gate_kappa_hf` are expressed at
+  microphone gain 1, and the firmware scales them by the effective gain over
+  gain 1 (x2.5 at gain 4). This follows the gain actually applied
+  (`start{gain=}`, a saved gain, `frame.microphone.gain()` or the LE Audio
+  gain control). Before, gain 4 made the gate open on echo at the pauses in
+  a reply (in a replay of one worn unit, echo removed fell from 18 to 6 dB
+  and the gate was open on echo 23% of the time; now 18.5 dB and 0%). The
+  canceller's internal mic-versus-speaker power thresholds (the double-talk
+  test and the divergence guard) scale with the square of that factor, so a
+  strongly coupled unit still converges at gain 4. A gain change during
+  playback also carries the echo filter over, so cancellation holds through
+  it instead of dropping by about 10 dB until the filter re-adapted.
+  `gate_kappa` is not scaled: at a higher gain it keeps 0.8.18's more
+  sensitive gate, which the wearer relies on there. On a strongly coupled
+  unit at a high gain, set it to the default times the gain factor
+  (`aec_tune{gate_kappa = 1.25}` at gain 4). `diag('stats').mic_gain_scale`
+  reports the factor, and the calibration harness replays each sitting at
+  its effective gain.
+- Echo cancellation: `gate_hang_ms` defaults to 1400 (was 1200), which keeps
+  more of the wearer between words.
 
 ## [0.8.18] - 2026-10-05
 

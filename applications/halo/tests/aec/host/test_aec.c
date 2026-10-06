@@ -229,6 +229,18 @@ static float g_mic_scale = 1.0f;
 static int16_t step_last_out[BLK]; /* the last processed block's output */
 static float g_echo_gain = 1.0f;
 static long g_clipped;
+/* white noise added to the mic (check 27c: a noise-floor step) */
+static float g_wnoise;
+
+/* check 25: mode 5 is the speech-like reply (mode 4) with a sibilant (a
+ * +12 dB/oct noise burst, mostly above 4 kHz) on the first 80 ms of each
+ * utterance, i.e. where the reply restarts after its 0.5 s pause; with
+ * g_dist > 0 the speaker also turns it into broadband energy at the mic
+ * (white noise under the sibilant's envelope), as Halo 04's does.
+ */
+static float g_dist;
+static float sib_w1, sib_w2;
+static float sib_blk[BLK];
 
 /* defer_tap: hold this block's tap back and deliver it (before the next
  * block's tap) on the following step - models the I2S tap firing late
@@ -253,6 +265,20 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 			v = ref_sample();
 		} else if (mode == 4) {
 			v = speech_sample();
+		} else if (mode == 5) {
+			v = speech_sample();
+			float w = frand();
+			int on = fmodf(sp_t / 16000.0f, 2.0f) < 0.08f;
+			float sib = on ? 0.05f * (w - 2.0f * sib_w1 + sib_w2) : 0.0f;
+
+			if (on) {
+				v = 0.0f; /* the sibilant leads the voicing */
+			}
+
+			sib_w2 = sib_w1;
+			sib_w1 = w;
+			sib_blk[i] = sib;
+			v += sib;
 		} else if (mode == 1) {
 			v = ((int)(rng = rng * 1664525u + 1013904223u) & 1)
 				? (1.0f / 32768.0f) : (-1.0f / 32768.0f);
@@ -310,7 +336,7 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 		rumble_lp2 += 0.012f * (rumble_lp - rumble_lp2);
 		rumble_lp3 += 0.012f * (rumble_lp2 - rumble_lp3);
 		float rumble = 5.0f * rumble_lp3;
-		float noise = 3e-4f * frand(); /* ~-70dBFS */
+		float noise = (3e-4f + g_wnoise) * frand(); /* ~-70dBFS */
 		float hfw = frand();
 		float hfn = hf_noise_amp * (hfw - 2.0f * hfw1 + hfw2);
 
@@ -324,6 +350,10 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 			near += near2_amp * near2_sample();
 		}
 		float d = echo + rumble + hfn + noise + near;
+
+		if (mode == 5 && g_dist > 0.0f) {
+			d += g_dist * fabsf(sib_blk[i]) * frand();
+		}
 
 		pnear += near * near;
 		rum[i] = rumble + hfn;
@@ -552,7 +582,7 @@ static void apply_env_tune(void)
 #define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 60
+#define AEC_SUP_GATE_HANG 70
 #endif
 #ifndef AEC_SUP_GATE_MID_A
 #define AEC_SUP_GATE_MID_A 0.08f
@@ -586,6 +616,21 @@ static void apply_env_tune(void)
 #endif
 #ifndef AEC_SUP_CAP_HI_GCAP
 #define AEC_SUP_CAP_HI_GCAP 0.1f
+#endif
+#ifndef AEC_SUP_GATE_KAPPA_HF
+#define AEC_SUP_GATE_KAPPA_HF 0.15f
+#endif
+#ifndef AEC_SUP_GATE_HF_HZ
+#define AEC_SUP_GATE_HF_HZ 3000
+#endif
+#ifndef AEC_SUP_GATE_HF_RATIO
+#define AEC_SUP_GATE_HF_RATIO 3.0f
+#endif
+#ifndef AEC_DTD_MULT
+#define AEC_DTD_MULT 10.0f
+#endif
+#ifndef AEC_DTD_INIT
+#define AEC_DTD_INIT 0.25f
 #endif
 
 /* check 19's scenario, shortened: warm speech reply with the wearer over
@@ -648,8 +693,20 @@ static const struct gs_cfg gs_hot = {0.3f, 20.0f, 1};
  * filter never converges. Runs in a forked child, so every variant starts
  * from the same AEC and stimulus state.
  */
+/* > 0: the child runs with gate_kappa divided by this (aec_tune) - the
+ * gain-1 equivalent of a mic gain run, since gate_kappa stays in mic units
+ */
+static float gs_kdiv;
+
 static void gs_child(const struct gs_cfg *c, float g, int api, struct gs_run *r)
 {
+	if (gs_kdiv > 0.0f) {
+		struct audio_aec_tune t;
+
+		audio_aec_tune_get(&t);
+		t.gate_kappa /= gs_kdiv;
+		audio_aec_tune_set(&t);
+	}
 	g_mic_scale = c->base * g;
 	g_echo_gain = c->echo;
 	g_clipped = 0;
@@ -1889,6 +1946,11 @@ int main(int argc, char **argv)
 			.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP,
 			.cap_hi_split_hz = AEC_SUP_CAP_HI_SPLIT_HZ,
 			.cap_hi_gcap = AEC_SUP_CAP_HI_GCAP,
+			.gate_kappa_hf = AEC_SUP_GATE_KAPPA_HF,
+			.gate_hf_hz = AEC_SUP_GATE_HF_HZ,
+			.gate_hf_ratio = AEC_SUP_GATE_HF_RATIO,
+			.dtd_mult = AEC_DTD_MULT,
+			.dtd_init = AEC_DTD_INIT,
 		};
 		size_t nk;
 		const struct audio_aec_tune_key *keys = audio_aec_tune_keys(&nk);
@@ -1937,6 +1999,23 @@ int main(int argc, char **argv)
 		bad = d; bad.cap_split_hz = 750; bad.cap_hi_split_hz = 750;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		bad = d; bad.cap_split_hz = 1000; bad.cap_hi_split_hz = 800;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		/* the high-band term and the tracked double-talk threshold */
+		bad = d; bad.gate_hf_hz = 300;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		/* the high band needs a bin below Nyquist (7984 Hz max) and
+		 * starts at or above a non-zero gate band's top */
+		bad = d; bad.gate_hf_hz = 7985;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.gate_band_hz = 1000; bad.gate_hf_hz = 900;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.gate_kappa_hf = 11.0f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.dtd_init = 0.01f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.dtd_init = 3.0f;
+		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
+		bad = d; bad.dtd_mult = -1.0f;
 		ntry++; rej += audio_aec_tune_set(&bad) == -EINVAL;
 		/* NaN and +-inf in every float key. audio_aec.c builds with
 		 * -ffast-math on the device, where GCC folds a plain range
@@ -2000,9 +2079,21 @@ int main(int argc, char **argv)
 		cur = d; cur.cap_split_hz = 8000; cur.cap_hi_split_hz = 0;
 		nacc++;
 		acc += audio_aec_tune_set(&cur) == 0;
+		/* high band: at its max, at the gate band's top, and below it
+		 * with the full-band gate (gate_band_hz 0) */
+		cur = d; cur.gate_hf_hz = 7984;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
+		cur = d; cur.gate_band_hz = 1000; cur.gate_hf_hz = 1000;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
+		cur = d; cur.gate_band_hz = 0; cur.gate_hf_hz = 500;
+		nacc++;
+		acc += audio_aec_tune_set(&cur) == 0;
 		audio_aec_tune_set(&d);
 		snprintf(buf, sizeof(buf),
-			 "%d/%d accepted (incl. fd_mu 0.05, gate_fast_a/gate_mid_a 0.001, cap_hi_split_hz)",
+			 "%d/%d accepted (incl. fd_mu 0.05, gate_fast_a/gate_mid_a 0.001, cap_hi_split_hz, "
+			 "gate_hf_hz)",
 			 acc, nacc);
 		check("aec_tune accepts the inclusive bounds", acc == nacc, buf);
 
@@ -2133,29 +2224,37 @@ int main(int argc, char **argv)
 		audio_aec_tune_set(&saved);
 	}
 
-	/* --- 24. mic gain scale: gate thresholds follow the mic gain ---- */
+	/* --- 24. mic gain scale: thresholds follow the mic gain ---------- */
 	{
 		/* the same run with the mic x2.5 in float (gain 4 over gain 1,
 		 * no clipping) and audio_aec_set_mic_gain_scale(2.5) must make
-		 * the same gate decisions and the same output up to x2.5;
-		 * without the scale (the control) the gate opens on the echo.
-		 * AEC_GS_NOAPI=1 leaves the scale unset in the first run too:
-		 * the check must then FAIL.
+		 * the same decisions and the same output (up to x2.5) as x1 with
+		 * gate_kappa / 2.5: everything follows the gain except
+		 * gate_kappa, which deliberately stays in mic units (at gain 4 it
+		 * acts as kappa / 2.5 at gain 1, as in 0.8.18). Without the scale
+		 * (the control) gate_absfloor, gate_edge_abs, gate_kappa_hf and
+		 * the double-talk threshold stay at their gain-1 values and the
+		 * run differs. AEC_GS_NOAPI=1 leaves the scale unset in the
+		 * scaled run too: the check must then FAIL.
 		 */
 		struct gs_run *r;
 		const float g = 2.5f;
 		const int api = getenv("AEC_GS_NOAPI") == NULL;
 
-		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
+		r = mmap(NULL, 4 * sizeof(*r), PROT_READ | PROT_WRITE,
 			 MAP_SHARED | MAP_ANON, -1, 0);
-		int ok = r != MAP_FAILED && gs_fork(&gs_hot, 1.0f, 0, &r[0]) &&
-			 gs_fork(&gs_hot, g, api, &r[1]) && gs_fork(&gs_hot, g, 0, &r[2]);
-		int m1 = 0, m2 = 0, rel0 = 0, rel1 = 0, rel2 = 0;
+		gs_kdiv = g;
+		int ok = r != MAP_FAILED && gs_fork(&gs_hot, 1.0f, 0, &r[0]);
+		gs_kdiv = 0.0f;
+		ok = ok && gs_fork(&gs_hot, g, api, &r[1]) && gs_fork(&gs_hot, g, 0, &r[2]) &&
+		     gs_fork(&gs_hot, 1.0f, 0, &r[3]);
+		int m1 = 0, m2 = 0, rel0 = 0, rel1 = 0, rel2 = 0, rel3 = 0;
 		double e1 = 0, e2 = 0, dummy;
 		int dm;
 
 		if (ok) {
 			gs_compare(&r[0], &r[0], 1.0f, &dm, &rel0, &dummy);
+			gs_compare(&r[3], &r[3], 1.0f, &dm, &rel3, &dummy);
 			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
 			gs_compare(&r[2], &r[0], g, &m2, &rel2, &e2);
 		}
@@ -2185,51 +2284,684 @@ int main(int argc, char **argv)
 		ok &= set_ok;
 
 		snprintf(buf, sizeof(buf),
-			 "x2.5+scale: %d/%d gate diffs, out %.1f dB, echo-only open %d/%d; "
-			 "no scale: %d diffs, %.1f dB, open %d; x1 open %d; clipped %ld%s",
-			 m1, GS_BLOCKS, e1, rel1, GS_WARM, m2, e2, rel2, rel0, clipped,
+			 "x2.5+scale vs x1 kappa/2.5: %d/%d diffs, out %.1f dB, echo-only open %d (%d); "
+			 "no scale: %d diffs, %.1f dB; x1 defaults open %d; clipped %ld%s",
+			 m1, GS_BLOCKS, e1, rel1, rel0, m2, e2, rel3, clipped,
 			 set_ok ? "" : "; SETTER WRONG");
-		check("mic gain scale keeps gain-1 gate decisions",
-		      ok && clipped == 0 && rel0 == 0 && m1 == 0 && e1 < -40.0 &&
-			      m2 > GS_BLOCKS / 10 && rel2 > GS_WARM / 2,
+		check("mic gain scale: decisions follow the gain",
+		      ok && clipped == 0 && rel3 == 0 && m1 == 0 && e1 < -40.0 &&
+			      m2 > GS_BLOCKS / 20,
 		      buf);
 		if (r != MAP_FAILED) {
-			munmap(r, 3 * sizeof(*r));
+			munmap(r, 4 * sizeof(*r));
 		}
 
 		/* (b) cold start on a strong-coupled unit: the double-talk
-		 * threshold and the divergence guard scale by g^2, so x2.5 +
-		 * scale converges as x1 does; without the scale p_err stays
-		 * above 2 p_ref, adaptation freezes and nothing is removed */
+		 * threshold (tracked, and its bounds) and the divergence guard
+		 * scale by g^2, so x2.5 + scale converges as x1 does; without
+		 * the scale p_err stays above the gain-1 threshold ceiling,
+		 * adaptation freezes and nothing is removed. At x1 the tracked
+		 * threshold starts low (dtd_init) and has to rise before this
+		 * unit adapts: -DAEC_DTD_COLD_RISE=0 (no rise while the gate
+		 * is open on the cold residual) must FAIL here */
 		/* echo x8.25 overall on a x0.15 mic: no clipping at x2.5 */
 		const struct gs_cfg cold = {0.15f, 55.0f, 0};
 
-		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
+		r = mmap(NULL, 4 * sizeof(*r), PROT_READ | PROT_WRITE,
 			 MAP_SHARED | MAP_ANON, -1, 0);
 		ok = r != MAP_FAILED && gs_fork(&cold, 1.0f, 0, &r[0]) &&
 		     gs_fork(&cold, g, api, &r[1]) && gs_fork(&cold, g, 0, &r[2]);
-		double erle[3] = {0, 0, 0};
+		gs_kdiv = g;
+		ok = ok && gs_fork(&cold, 1.0f, 0, &r[3]);
+		gs_kdiv = 0.0f;
+		double erle[4] = {0, 0, 0, 0};
 
 		m1 = m2 = 0;
 		e1 = e2 = 0;
 		if (ok) {
-			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
-			gs_compare(&r[2], &r[0], g, &m2, &rel2, &e2);
-			for (int k = 0; k < 3; k++) {
+			gs_compare(&r[1], &r[3], g, &m1, &rel1, &e1);
+			for (int k = 0; k < 4; k++) {
 				erle[k] = 10 * log10(r[k].pin / (r[k].pout + 1e-30) + 1e-30);
 			}
 		}
 		clipped = ok ? r[1].clipped + r[2].clipped : -1L;
 		snprintf(buf, sizeof(buf),
-			 "ERLE x1 %.1f, x2.5+scale %.1f (%d gate diffs, out %.1f dB), "
+			 "ERLE x1 %.1f, x2.5+scale %.1f (vs x1 kappa/2.5 %.1f: %d diffs, out %.1f dB), "
 			 "no scale %.1f dB; clipped %ld",
-			 erle[0], erle[1], m1, e1, erle[2], clipped);
+			 erle[0], erle[1], erle[3], m1, e1, erle[2], clipped);
 		check("mic gain scale: hot cold start converges",
-		      ok && clipped == 0 && erle[0] > 10.0 && m1 == 0 && e1 < -40.0 &&
-			      erle[2] < erle[0] - 6.0,
+		      ok && clipped == 0 && erle[0] > 10.0 && erle[1] > 10.0 && m1 == 0 &&
+			      e1 < -40.0 && erle[2] < erle[0] - 6.0,
 		      buf);
 		if (r != MAP_FAILED) {
-			munmap(r, 3 * sizeof(*r));
+			munmap(r, 4 * sizeof(*r));
+		}
+	}
+
+	/* --- 25. gate: high-band reference term vs speaker distortion ---- */
+	{
+		/* a reply restarting on a sibilant after each pause, through a
+		 * speaker that turns the sibilant into broadband mic energy
+		 * (Halo 04): with the term the gate holds on the echo; with
+		 * gate_kappa_hf 0 it releases at every restart and the hangover
+		 * holds it open. The wearer over the reply, and a clean speaker,
+		 * must come out the same with and without the term. Runs with
+		 * the shipped tracked double-talk threshold pinned (dtd_mult 10,
+		 * dtd_init 0.25), so it tests the term alone.
+		 * -DAEC_SUP_GATE_KAPPA_HF=0.0f must FAIL.
+		 */
+		struct hf_run {
+			int rel_echo;
+			float near_med;
+			int done;
+		} *h = mmap(NULL, 4 * sizeof(struct hf_run), PROT_READ | PROT_WRITE,
+			    MAP_SHARED | MAP_ANON, -1, 0);
+		/* runs: distortion on / off x the term on (defaults) / off */
+		int ok = h != MAP_FAILED;
+
+		for (int k = 0; ok && k < 4; k++) {
+			fflush(stdout);
+			h[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_tune t;
+
+				audio_aec_tune_get(&t);
+				if (k & 1) {
+					t.gate_kappa_hf = 0.0f;
+				}
+				/* the shipped tracked double-talk threshold, whatever
+				 * the build's: with the fixed one the filter adapts on
+				 * the distortion bursts and the gate opens on 143/300
+				 * echo-only blocks even with the term (232 without) */
+				t.dtd_mult = 10.0f;
+				t.dtd_init = 0.25f;
+				audio_aec_tune_set(&t);
+				g_dist = (k & 2) ? 0.0f : 1.0f;
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) step(5);
+				int rel = 0;
+
+				for (int b = 0; b < 300; b++) {
+					struct audio_aec_stats st;
+					size_t nt;
+
+					step(5);
+					audio_aec_snapshot(&st, &nt);
+					rel += st.sup_gate_rel != 0;
+				}
+				float exc[300];
+				int nexc = 0;
+
+				near2_amp = 0.6f;
+				for (int b = 0; b < 300; b++) {
+					struct blkstat bs = step(5);
+
+					if (b >= 3 && bs.near_rms > -40.0f) {
+						exc[nexc++] = bs.out_rms - bs.in_rms;
+					}
+				}
+				near2_amp = 0.0f;
+				for (int i = 1; i < nexc; i++) {
+					float v = exc[i];
+					int j = i - 1;
+
+					while (j >= 0 && exc[j] > v) {
+						exc[j + 1] = exc[j];
+						j--;
+					}
+					exc[j + 1] = v;
+				}
+				h[k].rel_echo = rel;
+				h[k].near_med = nexc ? exc[nexc / 2] : -1000.0f;
+				h[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && h[k].done;
+		}
+		if (ok) {
+			snprintf(buf, sizeof(buf),
+				 "distorting speaker: echo-only open %d/300 (term off %d), wearer %.1f "
+				 "(%.1f) dB; clean: open %d (%d), wearer %.1f (%.1f) dB",
+				 h[0].rel_echo, h[1].rel_echo, h[0].near_med, h[1].near_med,
+				 h[2].rel_echo, h[3].rel_echo, h[2].near_med, h[3].near_med);
+		} else {
+			snprintf(buf, sizeof(buf), "fork failed");
+		}
+		check("gate holds on speaker distortion bursts",
+		      ok && h[1].rel_echo >= 30 && h[0].rel_echo * 4 <= h[1].rel_echo &&
+			      fabsf(h[0].near_med - h[1].near_med) < 1.0f &&
+			      fabsf(h[2].near_med - h[3].near_med) < 0.5f &&
+			      h[2].rel_echo <= h[3].rel_echo,
+		      buf);
+		if (h != MAP_FAILED) {
+			munmap(h, 4 * sizeof(struct hf_run));
+		}
+	}
+
+	/* --- 26. tracked double-talk threshold --------------------------- */
+	{
+		/* (a) check 13's double talk, tracked threshold (defaults) vs
+		 * the fixed p_err < 2 p_ref (dtd_mult 0): after convergence the
+		 * tracked threshold sits far below 2 (the unit's echo-only ratio
+		 * x dtd_mult), so the filter freezes on the wearer and the
+		 * suppressor keeps more of them; cancellation right after the
+		 * double talk holds. -DAEC_DTD_MULT=0.0f must FAIL.
+		 */
+		struct dtd_run {
+			float thr, med, erle;
+			int done;
+		} *dr = mmap(NULL, 2 * sizeof(struct dtd_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+		int ok = dr != MAP_FAILED;
+
+		for (int k = 0; ok && k < 2; k++) {
+			fflush(stdout);
+			dr[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_tune t;
+				struct audio_aec_stats st;
+				size_t nt;
+
+				audio_aec_tune_get(&t);
+				if (k == 1) {
+					t.dtd_mult = 0.0f;
+				}
+				audio_aec_tune_set(&t);
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) step(3);
+				audio_aec_snapshot(&st, &nt);
+				dr[k].thr = st.dtd_thr;
+				near_amp = 0.6f;
+				float exc[300];
+				int nexc = 0;
+
+				for (int b = 0; b < 300; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 3 && bs.near_rms > -35.0f) {
+						exc[nexc++] = bs.out_rms - bs.in_rms;
+					}
+				}
+				near_amp = 0.0f;
+				for (int i = 1; i < nexc; i++) {
+					float v = exc[i];
+					int j = i - 1;
+
+					while (j >= 0 && exc[j] > v) {
+						exc[j + 1] = exc[j];
+						j--;
+					}
+					exc[j + 1] = v;
+				}
+				dr[k].med = nexc ? exc[nexc / 2] : -1000.0f;
+				double pin = 0, pout = 0;
+
+				for (int b = 0; b < 100; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 5) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				dr[k].erle = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				dr[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && dr[k].done;
+		}
+		if (ok) {
+			snprintf(buf, sizeof(buf),
+				 "threshold %.3f (fixed %.2f), double talk %.1f (%.1f) dB, ERLE after "
+				 "%.1f (%.1f) dB",
+				 dr[0].thr, dr[1].thr, dr[0].med, dr[1].med, dr[0].erle, dr[1].erle);
+		} else {
+			snprintf(buf, sizeof(buf), "fork failed");
+		}
+		check("tracked double-talk threshold",
+		      ok && dr[0].thr < 0.5f && dr[1].thr == 2.0f &&
+			      dr[0].med >= dr[1].med + 0.3f && dr[0].erle >= dr[1].erle - 1.0f,
+		      buf);
+		if (dr != MAP_FAILED) {
+			munmap(dr, 2 * sizeof(struct dtd_run));
+		}
+
+		/* (b) a x2.5 gain change (mic and scale) mid-reply on check
+		 * 24b's strong-coupling unit: the filter and the power trackers
+		 * are carried over (aec_state_rescale), so cancellation holds
+		 * through the change, and the tracked ratio is carried over
+		 * (aec_dtd_rescale), so the threshold in gain-1 units stays put.
+		 * Run at the defaults (threshold at its floor), and at dtd_mult
+		 * 100, which puts the converged threshold well above the floor
+		 * where a missing ratio rescale shows. -DAEC_GAIN_RESCALE=0
+		 * (filter not rescaled: the residual reads as double talk and
+		 * adaptation freezes) must FAIL, and so must an empty
+		 * aec_dtd_rescale.
+		 */
+		struct gc_run {
+			float thr0, thr1, erle0, erle1;
+			int done;
+		} *gr = mmap(NULL, 2 * sizeof(struct gc_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+
+		ok = gr != MAP_FAILED;
+		for (int k = 0; ok && k < 2; k++) {
+			fflush(stdout);
+			gr[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_tune t;
+				struct audio_aec_stats st;
+				size_t nt;
+				double pin = 0, pout = 0;
+
+				audio_aec_tune_get(&t);
+				if (k == 1) {
+					t.dtd_mult = 100.0f;
+				}
+				audio_aec_tune_set(&t);
+				g_mic_scale = 0.15f;
+				g_echo_gain = 55.0f;
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 250) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				gr[k].erle0 = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				audio_aec_snapshot(&st, &nt);
+				gr[k].thr0 = st.dtd_thr;
+				g_mic_scale *= 2.5f;
+				audio_aec_set_mic_gain_scale(2.5f);
+				pin = pout = 0;
+				for (int b = 0; b < 50; b++) {
+					struct blkstat bs = step(3);
+
+					if (b == 2) {
+						audio_aec_snapshot(&st, &nt);
+						gr[k].thr1 = st.dtd_thr;
+					}
+					if (b >= 3) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				gr[k].erle1 = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				gr[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && gr[k].done;
+		}
+		if (ok) {
+			snprintf(buf, sizeof(buf),
+				 "ERLE before/after %.1f/%.1f dB; dtd_mult 100: %.1f/%.1f dB, threshold "
+				 "%.3f -> %.3f",
+				 gr[0].erle0, gr[0].erle1, gr[1].erle0, gr[1].erle1, gr[1].thr0,
+				 gr[1].thr1);
+		} else {
+			snprintf(buf, sizeof(buf), "fork failed");
+		}
+		check("gain change mid-reply: cancellation and threshold carried over",
+		      ok && gr[0].erle0 > 15.0f && gr[0].erle1 >= gr[0].erle0 - 2.0f &&
+			      gr[1].erle1 >= gr[1].erle0 - 2.0f && gr[1].thr0 > 2.0f * 0.05f &&
+			      fabsf(gr[1].thr1 / gr[1].thr0 - 1.0f) < 0.05f,
+		      buf);
+		if (gr != MAP_FAILED) {
+			munmap(gr, 2 * sizeof(struct gc_run));
+		}
+	}
+
+	/* --- 27. echo-path change: the tracked threshold recovers -------- */
+	{
+		/* a converged unit whose echo path changes mid-reply (re-seat:
+		 * a new impulse response; or the coupling x3), on check 24b's
+		 * strong-coupling unit and on check 24a's hot unit. The
+		 * residual jumps far above the tracked threshold (which sits at
+		 * its floor) and adaptation freezes; the divergence escape
+		 * (frozen on a residual coherent with the reference) falls
+		 * back to the fixed threshold. Cancellation 2-4 s after the
+		 * change must be within 3 dB of the fixed threshold's (before:
+		 * new path ~-6 dB, x3 ~+0.6 dB in the linear stage for 12+ s).
+		 * -DAEC_DTD_ESCAPE_BLOCKS=0 must FAIL.
+		 */
+		struct ep_run {
+			float erle, erle_pre;
+			unsigned esc;
+			int done;
+		} *er = mmap(NULL, 8 * sizeof(struct ep_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+		static const float unit[2][2] = {{0.15f, 55.0f}, {0.3f, 20.0f}};
+		int ok = er != MAP_FAILED;
+
+		for (int k = 0; ok && k < 8; k++) {
+			/* k: bit 0 fixed threshold, bit 1 coupling x3 (else new
+			 * path), bit 2 hot unit (else strong coupling) */
+			fflush(stdout);
+			er[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_tune t;
+				struct audio_aec_stats st;
+				size_t nt;
+				double pin = 0, pout = 0;
+
+				audio_aec_tune_get(&t);
+				if (k & 1) {
+					t.dtd_mult = 0.0f;
+				}
+				audio_aec_tune_set(&t);
+				g_mic_scale = unit[k >> 2][0];
+				g_echo_gain = unit[k >> 2][1];
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 250) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				er[k].erle_pre = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				if (k & 2) {
+					g_echo_gain *= 3.0f;
+				} else {
+					make_ir();
+				}
+				pin = pout = 0;
+				for (int b = 0; b < 200; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 100) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				er[k].erle = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				audio_aec_snapshot(&st, &nt);
+				er[k].esc = st.dtd_escapes;
+				er[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && er[k].done;
+		}
+		int pass = ok;
+
+		for (int k = 0; ok && k < 8; k += 2) {
+			pass &= er[k].erle >= er[k + 1].erle - 3.0f && er[k].erle_pre > 15.0f;
+		}
+		if (ok) {
+			snprintf(buf, sizeof(buf),
+				 "ERLE 2-4 s after, tracked (fixed): strong new path %.1f (%.1f), x3 %.1f "
+				 "(%.1f); hot %.1f (%.1f), %.1f (%.1f) dB; escapes %u %u %u %u",
+				 er[0].erle, er[1].erle, er[2].erle, er[3].erle, er[4].erle, er[5].erle,
+				 er[6].erle, er[7].erle, er[0].esc, er[2].esc, er[4].esc, er[6].esc);
+		} else {
+			snprintf(buf, sizeof(buf), "fork failed");
+		}
+		check("echo-path change: adaptation recovers", pass, buf);
+		if (er != MAP_FAILED) {
+			munmap(er, 8 * sizeof(struct ep_run));
+		}
+
+		/* (c) anti-windup: a linear unit converged for 60 s (its ratio
+		 * far under the floor), then the mic noise floor steps up to
+		 * ~-4 dB under the reference (incoherent: the escape cannot
+		 * help). The tracker must climb from its clamp at the floor,
+		 * so adaptation resumes within ~15 s (unclamped it starts from
+		 * ~50x lower and stays frozen ~30 s longer).
+		 * -DAEC_DTD_CLAMP=0 must FAIL.
+		 */
+		struct nf_run {
+			int frozen, n;
+			int done;
+		} *nr = mmap(NULL, sizeof(struct nf_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+
+		ok = nr != MAP_FAILED;
+		if (ok) {
+			fflush(stdout);
+			nr->done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_stats st;
+				size_t nt;
+
+				audio_aec_enable(true);
+				for (int b = 0; b < 3000; b++) step(3);
+				g_wnoise = 0.1f;
+				nr->frozen = nr->n = 0;
+				for (int b = 0; b < 1150; b++) {
+					step(3);
+					if (b >= 900) {
+						float g2;
+
+						audio_aec_snapshot(&st, &nt);
+						g2 = st.mic_gain_scale * st.mic_gain_scale;
+						nr->frozen += st.p_err >= st.dtd_thr * g2 * st.p_ref;
+						nr->n++;
+					}
+				}
+				g_wnoise = 0.0f;
+				nr->done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && nr->done;
+		}
+		snprintf(buf, sizeof(buf), "noise step after 60 s: frozen %d/%d blocks 18-23 s after",
+			 ok ? nr->frozen : -1, ok ? nr->n : 0);
+		check("double-talk tracker: no windup", ok && nr->frozen * 4 < nr->n, buf);
+		if (nr != MAP_FAILED) {
+			munmap(nr, sizeof(struct nf_run));
+		}
+	}
+
+	/* --- 27d. a frozen run does not carry into the next reply -------- */
+	{
+		/* the strong-coupling unit converged, then its coupling goes
+		 * x3: A 30 blocks before the reply ends (a frozen-coherent run
+		 * short of the escape), B at the end. After 0.6 s of speaker
+		 * idle (bypass) the next reply re-engages with a wiped
+		 * reference history: the escape run must restart (never longer
+		 * than reply 2 so far) and so must the coherence accumulators
+		 * (A's reply-2 coherence equals B's, which had no run).
+		 */
+		struct cr_run {
+			unsigned run1, esc1, run2_over;
+			float coh[40];
+			int done;
+		} *cr = mmap(NULL, 2 * sizeof(struct cr_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+		int ok = cr != MAP_FAILED;
+
+		for (int k = 0; ok && k < 2; k++) {
+			fflush(stdout);
+			cr[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_stats st;
+				size_t nt;
+
+				g_mic_scale = 0.15f;
+				g_echo_gain = 55.0f;
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) step(3);
+				if (k == 0) {
+					g_echo_gain *= 3.0f;
+				}
+				for (int b = 0; b < 30; b++) step(3);
+				audio_aec_snapshot(&st, &nt);
+				cr[k].run1 = st.dtd_run;
+				cr[k].esc1 = st.dtd_escapes;
+				if (k == 1) {
+					g_echo_gain *= 3.0f;
+				}
+				for (int b = 0; b < 30; b++) step(0);
+				cr[k].run2_over = 0;
+				for (int b = 0; b < 40; b++) {
+					step(3);
+					audio_aec_snapshot(&st, &nt);
+					/* block 0 is the engage hold-back (not
+					 * processed); the history is wiped on
+					 * block 1, so by block b the run is <= b */
+					if (b > 0 && st.dtd_run > (unsigned)b &&
+					    st.dtd_run > cr[k].run2_over) {
+						cr[k].run2_over = st.dtd_run;
+					}
+					cr[k].coh[b] = st.dtd_coh;
+				}
+				cr[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && cr[k].done;
+		}
+		float dc = 0.0f;
+
+		for (int b = 1; ok && b < 40; b++) {
+			if (fabsf(cr[0].coh[b] - cr[1].coh[b]) > dc) {
+				dc = fabsf(cr[0].coh[b] - cr[1].coh[b]);
+			}
+		}
+		snprintf(buf, sizeof(buf),
+			 "reply 1 ends on a run of %u (escapes %u); reply 2: run longer than the "
+			 "reply %u, coherence vs no run max diff %.3f",
+			 ok ? cr[0].run1 : 0, ok ? cr[0].esc1 + cr[1].esc1 : 0,
+			 ok ? cr[0].run2_over : 0, dc);
+		check("frozen run does not carry across replies",
+		      ok && cr[0].run1 >= 15 && cr[0].esc1 == 0 && cr[1].run1 == 0 &&
+			      cr[0].run2_over == 0 && dc < 0.02f,
+		      buf);
+		if (cr != MAP_FAILED) {
+			munmap(cr, 2 * sizeof(struct cr_run));
+		}
+	}
+
+	/* --- 28. long double talk does not trip the escape --------------- */
+	{
+		/* the wearer talking over a reply for 12 s without a pause (a
+		 * continuous utterance, 250 ms syllables / 100 ms gaps), at two
+		 * levels, on the strong-coupling, hot and linear units. The
+		 * residual is the wearer, incoherent with the reference, so
+		 * the divergence escape must not fire, and the frozen filter
+		 * must still cancel right after (vs before). -DAEC_DTD_ESC_COH=
+		 * 0.0f (escape on frozen alone) must FAIL.
+		 */
+		struct ldt_run {
+			float erle0, erle1;
+			int frz, n;
+			unsigned esc;
+			int done;
+		} *lr = mmap(NULL, 6 * sizeof(struct ldt_run), PROT_READ | PROT_WRITE,
+			     MAP_SHARED | MAP_ANON, -1, 0);
+		static const float unit[3][2] = {{0.15f, 55.0f}, {0.3f, 20.0f}, {1.0f, 1.0f}};
+		int ok = lr != MAP_FAILED;
+
+		for (int k = 0; ok && k < 6; k++) {
+			fflush(stdout);
+			lr[k].done = 0;
+			pid_t pid = fork();
+
+			if (pid == 0) {
+				struct audio_aec_stats st;
+				size_t nt;
+				double pin = 0, pout = 0;
+				unsigned esc0;
+
+				g_mic_scale = unit[k >> 1][0];
+				g_echo_gain = unit[k >> 1][1];
+				audio_aec_enable(true);
+				for (int b = 0; b < 300; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 200) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				lr[k].erle0 = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				audio_aec_snapshot(&st, &nt);
+				esc0 = st.dtd_escapes;
+				near2_amp = (k & 1) ? 1.5f : 0.6f;
+				lr[k].frz = lr[k].n = 0;
+				for (int b = 0; b < 600; b++) {
+					float g2;
+
+					step(3);
+					audio_aec_snapshot(&st, &nt);
+					g2 = st.mic_gain_scale * st.mic_gain_scale;
+					lr[k].frz += st.p_err >= st.dtd_thr * g2 * st.p_ref;
+					lr[k].n++;
+				}
+				near2_amp = 0.0f;
+				pin = pout = 0;
+				for (int b = 0; b < 100; b++) {
+					struct blkstat bs = step(3);
+
+					if (b >= 5) {
+						pin += pow(10, bs.in_rms / 10);
+						pout += pow(10, bs.out_rms / 10);
+					}
+				}
+				lr[k].erle1 = 10 * log10(pin / (pout + 1e-30) + 1e-30);
+				audio_aec_snapshot(&st, &nt);
+				lr[k].esc = st.dtd_escapes - esc0;
+				lr[k].done = 1;
+				_exit(0);
+			}
+			int status;
+
+			ok = pid > 0 && waitpid(pid, &status, 0) == pid && lr[k].done;
+		}
+		int pass = ok;
+		unsigned esc = 0;
+		float worst = 1000.0f;
+		char *o = buf;
+		size_t left = sizeof(buf);
+
+		for (int k = 0; ok && k < 6; k++) {
+			esc += lr[k].esc;
+			if (lr[k].erle1 - lr[k].erle0 < worst) {
+				worst = lr[k].erle1 - lr[k].erle0;
+			}
+			pass &= lr[k].esc == 0 && lr[k].erle1 >= lr[k].erle0 - 3.0f;
+		}
+		if (ok) {
+			int w = snprintf(o, left, "escapes %u; ERLE after vs before worst %+.1f dB; frozen",
+					 esc, worst);
+
+			for (int k = 0; k < 6 && w > 0 && (size_t)w < left; k++) {
+				o += w;
+				left -= w;
+				w = snprintf(o, left, " %d%%", 100 * lr[k].frz / lr[k].n);
+			}
+		} else {
+			snprintf(buf, sizeof(buf), "fork failed");
+		}
+		check("12 s double talk: no escape, filter kept", pass, buf);
+		if (lr != MAP_FAILED) {
+			munmap(lr, 6 * sizeof(struct ldt_run));
 		}
 	}
 #endif

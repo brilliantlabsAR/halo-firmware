@@ -971,8 +971,10 @@ def step3(sess_dir, budget=90.0, log=print, guards=None):
         log("  no wearer captures, so near end is unscored: keeping the current defaults")
         rec = cands[0]
     name, p, Sx, j = rec
+    gs = session_gain_scale(data, man)
     res["recommended"] = dict(source=name, params=p, S=Sx, J=j, keep_current=(name == "current"),
-                              lua=C.lua_tune_line(p, defaults), defines=C.c_defines(p, defaults),
+                              lua=C.lua_tune_line(p, defaults),
+                              defines=C.c_defines(p, defaults, gs), gain_scale=gs,
                               tune=C.diff(p, defaults),
                               applicable=dev_keys is not None and not C.missing(C.diff(p, defaults), dev_keys))
     # what step 4 tests against the defaults: the recommendation, or, when

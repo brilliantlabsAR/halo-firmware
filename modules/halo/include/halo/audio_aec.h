@@ -117,6 +117,11 @@ struct audio_aec_tune {
 	float cap_lo_gcap;         /**< AEC_SUP_CAP_LO_GCAP */
 	uint32_t cap_hi_split_hz;  /**< AEC_SUP_CAP_HI_SPLIT_HZ (0 = off) */
 	float cap_hi_gcap;         /**< AEC_SUP_CAP_HI_GCAP */
+	float gate_kappa_hf;       /**< AEC_SUP_GATE_KAPPA_HF (0 = off) */
+	uint32_t gate_hf_hz;       /**< AEC_SUP_GATE_HF_HZ */
+	float gate_hf_ratio;       /**< AEC_SUP_GATE_HF_RATIO */
+	float dtd_mult;            /**< AEC_DTD_MULT (0 = fixed threshold) */
+	float dtd_init;            /**< AEC_DTD_INIT */
 };
 
 /** @brief Field type of an audio_aec_tune key. */
@@ -170,16 +175,16 @@ void audio_aec_tune_defaults(struct audio_aec_tune *t);
 /**
  * @brief Tell the canceller the effective mic gain, relative to gain 1.
  *
- * The near-end gate's absolute keys (gate_kappa, gate_absfloor,
- * gate_edge_abs) are expressed at mic gain 1; the mic thread multiplies
+ * The near-end gate's absolute keys (gate_absfloor, gate_edge_abs,
+ * gate_kappa_hf) are expressed at mic gain 1; the mic thread multiplies
  * them by this factor when it adopts a block's tunable set, and the
  * mic-vs-reference power thresholds (double-talk adaptation freeze,
- * divergence guard) by its square, so every decision is the same at any
- * gain. audio_aec_tune_get() and aec_tune() keep
- * returning the gain-1 values. A change mid-session also carries the
- * filter and the mic-side power trackers over by the ratio of the new
- * factor to the old (and its square), so a converged filter keeps
- * cancelling. Called by the mic stream wherever it writes
+ * divergence guard) by its square, so those decisions are the same at any
+ * gain. gate_kappa stays in mic units (not scaled). audio_aec_tune_get()
+ * and aec_tune() keep returning the gain-1 values. A change mid-session
+ * also carries the filter and the mic-side power trackers over by the
+ * ratio of the new factor to the old (and its square), so a converged
+ * filter keeps cancelling. Called by the mic stream wherever it writes
  * the PDM gain: scale = PDM_CH_GAIN raw / raw at gain 1 (704), i.e.
  * (g + 1) / 2 for g >= 0. Published like audio_aec_tune_set (spinlock +
  * generation, adopted at the next block); safe from any thread context.
@@ -293,6 +298,18 @@ struct audio_aec_stats {
 	float mic_gain_scale; /**< effective mic gain relative to gain 1, as
 			       *   last published (audio_aec_set_mic_gain_scale);
 			       *   the gate's absolute keys run scaled by it */
+	float dtd_thr;      /**< double-talk threshold in force (p_err vs
+			     *   dtd_thr * p_ref freezes adaptation), in gain-1
+			     *   units (FDAF: the tracked one, see AEC_DTD_MULT) */
+	uint32_t dtd_escapes; /**< FDAF: divergence escapes since boot (the
+			       *   tracked threshold reset to the fixed one
+			       *   after adaptation stayed frozen on a residual coherent with the
+			       *   reference, see AEC_DTD_ESCAPE_BLOCKS) */
+	float dtd_coh;      /**< FDAF: residual-reference coherence (0..1) of
+			     *   the last playback block (the escape's test) */
+	uint32_t dtd_run;   /**< FDAF: the escape's current run of frozen
+			     *   coherent playback blocks (restarts with the
+			     *   reference history) */
 	float p_ref;        /**< smoothed high-passed reference power */
 	float p_err;        /**< smoothed high-passed error power */
 	float p_mic;        /**< smoothed high-passed mic power */

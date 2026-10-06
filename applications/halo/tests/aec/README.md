@@ -14,7 +14,7 @@
 > | `frame.microphone.voice()` / `voice(bool)` | get / set voice-band mode (live); also `start{voice=true}` |
 > | `frame.microphone.diag('stats')` | canceller + PDM/speaker/clock diagnostics table |
 > | `frame.microphone.diag('zero')` | zero the clkmon / PDM / speaker counters |
-> | `frame.microphone.aec_tune()` / `aec_tune{k=v}` / `aec_tune('defaults')` | get / set (validated, all or nothing) / reset the barge-in tunables: suppressor, onset duck, near-end gate and its band, two-band playback ceiling, `fd_mu`. Keys, units, ranges and tradeoffs: PROTOCOL.md. Device-global, live from the next block, **not persisted** (boot = compiled defaults). `diag('stats').tune_gen` identifies the set. The gate's `gate_kappa`, `gate_absfloor` and `gate_edge_abs` are gain-1 values, scaled by the effective mic gain (`diag('stats').mic_gain_scale`) |
+> | `frame.microphone.aec_tune()` / `aec_tune{k=v}` / `aec_tune('defaults')` | get / set (validated, all or nothing) / reset the barge-in tunables: suppressor, onset duck, near-end gate and its band, two-band playback ceiling, `fd_mu`. Keys, units, ranges and tradeoffs: PROTOCOL.md. Device-global, live from the next block, **not persisted** (boot = compiled defaults). `diag('stats').tune_gen` identifies the set. The gate's `gate_absfloor`, `gate_edge_abs` and `gate_kappa_hf` are gain-1 values, scaled by the effective mic gain (`diag('stats').mic_gain_scale`); `gate_kappa` is in mic units (not scaled) |
 >
 > Removed in the cleanup: `aec('sup'/'nosup')` (dead), `aec('pair')` and
 > `aec('dump')` (retired with the `pair_probe.py` / `dump_probe.py` /
@@ -104,10 +104,15 @@ same level means a saved 0 overrides it (the report says so; `gain(1)` fixes it
 and persists). Any other saved value: the worn run asks whether to set 1 for
 the sitting and restores the old value at the end. A `--resume` reuses the
 choice made at the start and never asks again. The replays apply the
-sitting's effective gain as the firmware does (`aec_replay -g`, the gate's
-absolute keys x the gain over gain 1, `gain_effective` in `session.json`, or
+sitting's effective gain as the firmware does (`aec_replay -g`: the gate's
+absolute keys and `gate_kappa_hf` x the gain over gain 1, the double-talk
+threshold x its square; `gain_effective` in `session.json`, or
 `start{gain=}` when the probe could not tell), so the recommended set is in
-gain-1 values like every `aec_tune` set.
+gain-1 values like every `aec_tune` set, except `gate_kappa`, which the
+firmware leaves in mic units (at gain 4 it acts as kappa / 2.5 at gain 1).
+So a `gate_kappa` recommended from a sitting at a gain other than 1 holds
+for that unit at that gain: the report says so next to the paste line, and
+its `#define` carries the gain-1 equivalent (kappa / f) in a comment.
 
 **Step 3.** The AEC-off captures become replay pairs: the reference is the
 exact LC3 bytes played, decoded and passed through the production
