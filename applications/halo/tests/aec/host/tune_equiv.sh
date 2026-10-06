@@ -33,7 +33,7 @@ for c in \
 	"gate_kappa_hf=0.3,gate_hf_hz=3800,gate_hf_ratio=4|-DAEC_SUP_GATE_KAPPA_HF=0.3f -DAEC_SUP_GATE_HF_HZ=3800 -DAEC_SUP_GATE_HF_RATIO=4.0f" \
 	"dtd_mult=0|-DAEC_DTD_MULT=0.0f" \
 	"dtd_mult=20,dtd_init=0.5|-DAEC_DTD_MULT=20.0f -DAEC_DTD_INIT=0.5f" \
-	"sup_beta=1.25|" ; do
+	"sup_beta=1.0|" ; do
 	rt=${c%%|*}
 	d=${c#*|}
 	# shellcheck disable=SC2086

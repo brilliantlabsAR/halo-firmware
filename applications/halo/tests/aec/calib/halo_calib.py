@@ -422,6 +422,25 @@ class Ble:
         ls = await self.lines("print('G '..tostring(frame.microphone.gain())) print('GEND')", "GEND")
         return int(float([x for x in ls if x.startswith("G ")][-1][2:]))
 
+    async def gain_scale_probe(self, g):
+        """start{gain=g}: the effective mic gain scale the AEC was handed
+        (diag('stats').mic_gain_scale), or None on firmware without it or if
+        the mic would not start. A saved gain overrides start{gain=}, so
+        this tells "nothing saved" from a saved gain equal to the default."""
+        ls = await self.lines(
+            "local m=frame.microphone pcall(m.stop) "
+            f"local ok,e=pcall(m.start,{{sample_rate={C.SR}, bit_depth=16, channels=1, gain={int(g)}}}) "
+            "local s=nil if ok and m.diag then local o,t=pcall(m.diag,'stats') "
+            "if o and type(t)=='table' then s=t.mic_gain_scale end end pcall(m.stop) "
+            "print('GS '..tostring(s)..' '..tostring(ok and '' or e)) print('GSEND')", "GSEND")
+        r = [x for x in ls if x.startswith("GS ")]
+        v = r[-1].split(" ", 2) if r else ["GS", "nil", "no reply"]
+        if v[1] == "nil":
+            if len(v) > 2 and v[2]:
+                self.log(f"gain scale probe: mic start failed: {v[2]}")
+            return None
+        return float(v[1])
+
     async def set_gain(self, g):
         """gain() persists (audio/gain) and needs a started mic."""
         await self.lua(f"frame.microphone.start{{sample_rate={C.SR}, bit_depth=16, channels=1}} "
@@ -799,18 +818,37 @@ async def resolve_gain(a, S, ui, dev, g, restore_gain):
     prev_eff = dv.get("gain_effective")
     prev_pol = dv.get("gain_policy")
     eff = None
+    # gain() reads the firmware's default when nothing is saved (0 up to
+    # 0.8.18, 1 from the gain-1 rebaseline on), so a reading other than
+    # start{gain=} is a saved gain or no saved gain at all. Firmware with
+    # diag('stats').mic_gain_scale answers directly: start{gain=} and read
+    # the scale the AEC was handed (a saved gain overrides start{gain=}).
+    # Read on every run: it also marks firmware with the readback for the
+    # offline replay (calib_common.mic_unit_keys).
+    scale = await dev.gain_scale_probe(st_gain(S))
+    dv["gain_scale_probe"] = scale
     if g == st_gain(S):
         eff = g
         ui.info(f"saved mic gain {g}: start{{gain={st_gain(S)}}} is in effect")
-    elif g == 0:
-        # gain() reads 0 both when nothing is saved and when 0 is saved:
-        # step 2a repeats one reply at start{gain=0} and compares levels
+    elif scale is not None and C.same(scale, C.mic_gain_scale(st_gain(S))):
+        eff = st_gain(S)
+        ui.info(f"no saved mic gain (gain() reads the firmware default, {g}): "
+                f"start{{gain={eff}}} is in effect (AEC gain scale {scale:g})")
+    elif scale is None and g == 0:
+        # firmware without the scale readback (0.8.18 and earlier): gain()
+        # reads its default 0 both when nothing is saved and when 0 is
+        # saved: step 2a repeats one reply at start{gain=0} and compares
+        # levels
         if dv.get("gain_probe") is None:
             dv["gain_effective"] = f"{st_gain(S)} or 0"
             add_gain_probe(S)
             ui.info(f"gain() reads 0: no saved gain, or a saved 0. Step 2a checks which "
                     f"(one extra reply at start{{gain=0}}).")
     else:
+        if scale is not None and not C.same(scale, C.mic_gain_scale(g)):
+            ui.warn(f"the AEC gain scale reads {scale:g} at start{{gain={st_gain(S)}}}, neither gain "
+                    f"{st_gain(S)} ({C.mic_gain_scale(st_gain(S)):g}) nor the saved {g} "
+                    f"({C.mic_gain_scale(g):g}); treating {g} as saved")
         ui.warn(f"a saved mic gain {g} overrides start{{gain={st_gain(S)}}} (audio/gain setting)")
         rec = recorded_steps(S)
         if prev_pol and a.gain_policy_explicit and a.gain_policy != prev_pol and rec:
@@ -1100,7 +1138,12 @@ def main():
     ap.add_argument("--sim-no-tune", action="store_true", help="--sim: firmware without aec_tune")
     ap.add_argument("--sim-old-gate", action="store_true",
                     help="--sim: aec_tune without the gate band and two-band cap keys")
-    ap.add_argument("--sim-saved-gain", type=int, default=0)
+    ap.add_argument("--sim-saved-gain", type=int, default=None,
+                    help="--sim: saved gain() (default: nothing saved)")
+    ap.add_argument("--sim-gain-gen", choices=("old", "scale", "new"), default="old",
+                    help="--sim: firmware gain reporting: old (0.8.18, gain() reads 0 with nothing "
+                         "saved, no mic_gain_scale), scale (readback, default 0), new (readback, "
+                         "default 1)")
     ap.add_argument("--sim-fw", help="--sim: firmware version string (default sim-0.8.18)")
     ap.add_argument("--sim-fail", help="--sim: device calls that fail: set_gain,finish_tune,"
                     "write_capture (the cap.lc3 write hits ENOSPC)")

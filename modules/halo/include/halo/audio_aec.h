@@ -175,12 +175,12 @@ void audio_aec_tune_defaults(struct audio_aec_tune *t);
 /**
  * @brief Tell the canceller the effective mic gain, relative to gain 1.
  *
- * The near-end gate's absolute keys (gate_absfloor, gate_edge_abs,
- * gate_kappa_hf) are expressed at mic gain 1; the mic thread multiplies
- * them by this factor when it adopts a block's tunable set, and the
- * mic-vs-reference power thresholds (double-talk adaptation freeze,
- * divergence guard) by its square, so those decisions are the same at any
- * gain. gate_kappa stays in mic units (not scaled). audio_aec_tune_get()
+ * The near-end gate's thresholds (gate_kappa, gate_kappa_hf,
+ * gate_absfloor, gate_edge_abs) are expressed at mic gain 1; the mic
+ * thread multiplies them by this factor when it adopts a block's tunable
+ * set, and the mic-vs-reference power thresholds (double-talk adaptation
+ * freeze, divergence guard) by its square, so every decision is the same
+ * at any gain (the gain only matters through clipping). audio_aec_tune_get()
  * and aec_tune() keep returning the gain-1 values. A change mid-session
  * also carries the filter and the mic-side power trackers over by the
  * ratio of the new factor to the old (and its square), so a converged

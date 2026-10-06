@@ -785,7 +785,7 @@ static int lua_microphone_start(lua_State *L)
 	int sample_rate = 8000;
 	int bit_depth = 16;
 	int channels = 1;
-	int gain = 0;
+	int gain = AUDIO_MIC_DEFAULT_GAIN;
 	int lc3_duration = 1000;
 	int lc3_bitrate = 16000;
 

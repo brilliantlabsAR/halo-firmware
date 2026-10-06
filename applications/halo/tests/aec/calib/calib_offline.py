@@ -27,8 +27,11 @@ Scoring (all on the wearer's own device and head):
         echo replay of the same capture), within 0.8 s; onsets from the
         wearer-only capture; median over all onsets with a miss counted as
         0.8 s (ttfp), plus the missed fraction. 'Full pass' (shadow gain
-        within 6 dB) is reported too: it is the gate release time, since a
-        closed gate caps the talker at about -6..-8 dB (cap_lo_gcap 0.5).
+        within 6 dB) is reported too: it was the gate release time while a
+        closed gate capped the talker at about -6..-8 dB (cap_lo_gcap 0.5);
+        with cap_lo_gcap 0.6 (-4.4 dB) and voice energy mostly below the
+        750 Hz split, a talker under a closed gate can already read within
+        6 dB, so it now reads early (ttfp is the onset measure).
   rdt   real wearer-over-echo captures (step 2c): energy method against the
         same clip's echo-only capture (kept)
 
@@ -881,9 +884,22 @@ def step3(sess_dir, budget=90.0, log=print, guards=None):
                         f"(it has the onset fixes the firmware lacks); `git fetch --tags` for the "
                         f"{CB.REF_TAG} reference")
         sets["current"] = C.apply(defaults, C.NAMED["old-gate"])
+    # what the device ran: firmware older than this tree's gain-1 convention
+    # applied some gate keys in mic units, so at gain != 1 its sets replay
+    # with them divided by the gain scale (the replay multiplies them back)
+    gs = session_gain_scale(data)
+    mu = C.mic_unit_keys(S.s.get("device", {})) if dev_def is not None and not C.same(gs, 1.0) else []
+    if mu:
+        sets["current"] = C.to_gain1(sets["current"], mu, gs)
+        live = C.to_gain1(live, mu, gs) if live else live
+        mnote = (f"firmware {S.s.get('device', {}).get('fw', '?')} ran {', '.join(mu)} in mic units at "
+                 f"mic gain scale {gs:g}: 'current' (and 'live') replay them / {gs:g} in this tree's "
+                 f"gain-1 units ({', '.join(f'{k} {sets['current'][k]:.4g}' for k in mu)}), as the "
+                 "device ran them; the other sets are gain-1 values for this tree's firmware")
+        current_note = f"{current_note}; {mnote}" if current_note else mnote
     if current_note:
         log("  " + current_note)
-    if live and C.diff(live, defaults):
+    if live and C.diff(live, sets["current"] if mu else defaults):
         sets["live"] = live
         log(f"  note: the device ran a non-default tune at step 1: {C.diff(live, defaults)}")
     if has_ref:
@@ -971,10 +987,8 @@ def step3(sess_dir, budget=90.0, log=print, guards=None):
         log("  no wearer captures, so near end is unscored: keeping the current defaults")
         rec = cands[0]
     name, p, Sx, j = rec
-    gs = session_gain_scale(data, man)
     res["recommended"] = dict(source=name, params=p, S=Sx, J=j, keep_current=(name == "current"),
-                              lua=C.lua_tune_line(p, defaults),
-                              defines=C.c_defines(p, defaults, gs), gain_scale=gs,
+                              lua=C.lua_tune_line(p, defaults), defines=C.c_defines(p, defaults),
                               tune=C.diff(p, defaults),
                               applicable=dev_keys is not None and not C.missing(C.diff(p, defaults), dev_keys))
     # what step 4 tests against the defaults: the recommendation, or, when

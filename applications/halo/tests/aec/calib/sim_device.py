@@ -16,6 +16,10 @@ diag rows carry capn, p_mic (50 ms raw mic power) and p_ref every 60 ms.
 makes device calls fail: set_gain (every call), finish_tune (aec_tune
 ('defaults') at the end), write_capture (the cap.lc3 write hits ENOSPC);
 --sim-lfs-free KB sets the free space the /lfs probe finds.
+--sim-saved-gain G is the saved gain() (default: nothing saved); --sim-gain-gen
+picks how the firmware reports it: old (0.8.18: gain() reads 0 with nothing
+saved, no diag mic_gain_scale), scale (mic_gain_scale readback, default 0) or
+new (readback, default gain 1).
 """
 import asyncio
 import os
@@ -107,8 +111,18 @@ class SimDevice:
             self.tune[k] = (int(v) // 20) * 20 if k.endswith("_ms") else v
         return dict(self.tune)
 
+    def _default_gain(self):
+        return 1 if self.a.sim_gain_gen == "new" else 0
+
     async def saved_gain(self):
-        return self.saved_gain_v
+        """gain(): the saved gain, else the firmware's default."""
+        return self.saved_gain_v if self.saved_gain_v is not None else self._default_gain()
+
+    async def gain_scale_probe(self, g):
+        """As Ble.gain_scale_probe: diag mic_gain_scale after start{gain=g}."""
+        if self.a.sim_gain_gen == "old":
+            return None
+        return C.mic_gain_scale(self.saved_gain_v if self.saved_gain_v is not None else g)
 
     async def set_gain(self, g):
         self._fail("set_gain")
@@ -175,8 +189,8 @@ class SimDevice:
             m = max(0, min(len(v), n - s))
             x[s:s + m] += v[:m]
         self._maybe_drop("readback")
-        # PDM gain: a saved gain overrides start{gain=} (sim: 0 = nothing saved)
-        g = self.saved_gain_v if self.saved_gain_v else st["mic_gain"]
+        # PDM gain: a saved gain overrides start{gain=}
+        g = self.saved_gain_v if self.saved_gain_v is not None else st["mic_gain"]
         x = x * C.mic_gain_scale(g)
         mic = C.bandpass(x, 300, 3400)
         out = self._aec(mic, np.roll(ref_placed, -24), feed, C.mic_gain_scale(g)) if aec else mic

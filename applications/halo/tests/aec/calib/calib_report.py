@@ -335,20 +335,6 @@ def run_silero(S):
 # --------------------------------------------------------------- report
 
 
-def kappa_note(rec):
-    """A set searched at a mic gain other than 1 that changes gate_kappa:
-    that key is in mic units at the sitting's gain (the firmware does not
-    scale it), unlike every other key."""
-    gs = float(rec.get("gain_scale") or 1.0)
-    k = (rec.get("tune") or {}).get("gate_kappa")
-    if k is None or abs(gs - 1.0) < 1e-6:
-        return None
-    return (f"`gate_kappa` {C.fmt_val(k)} is in mic units at this sitting's mic gain (x{gs:g} over "
-            f"gain 1): the firmware does not scale it, so it holds for this unit at this gain. At "
-            f"another gain multiply it by f_new / {gs:g} (f = (g + 1) / 2 for gain g >= 0; gain 1: "
-            f"{float(k) / gs:.3g}). The other keys are gain-1 values the firmware scales itself.")
-
-
 def write_report(root, silero=False):
     silero_on = silero
     S = C.Session(root)
@@ -366,9 +352,8 @@ def write_report(root, silero=False):
     rp = os.path.join(root, "replay")
     gs = O.session_gain_scale(rp) if os.path.exists(os.path.join(rp, "manifest.json")) else 1.0
     if gs != 1.0:
-        P(f"\nThe replays scale the gate's absolute keys by {gs:g} (the effective mic gain over gain 1), "
-          "as the firmware does; every aec_tune value in this report is a gain-1 value, except "
-          "gate_kappa, which the firmware leaves in mic units.")
+        P(f"\nThe replays scale the gate's thresholds by {gs:g} (the effective mic gain over gain 1), "
+          "as the firmware does; every aec_tune value in this report is a gain-1 value.")
     tab = dv.get("aec_tune")
     P(f"\n`frame.microphone.aec_tune`: " + (f"present, {len(tab)} keys." if tab else
                                             "absent (step 4 skipped)."))
@@ -419,9 +404,6 @@ def write_report(root, silero=False):
           "paste as one REPL line (back to the defaults, then the keys that differ from them; not "
           "persisted, so it applies until the next reboot):\n")
         P("```lua\n" + rec["lua"] + "\n```")
-        kn = kappa_note(rec)
-        if kn:
-            P("\n" + kn)
         P("\nAs compile-time defaults (`modules/halo/src/audio_aec.c`):\n")
         P("```c\n" + (rec["defines"] or "/* no change */") + "\n```")
     elif v == "rejected":

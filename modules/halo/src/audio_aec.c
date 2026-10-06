@@ -453,9 +453,15 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * below and the two-band ceiling, the lighter suppressor keeps more of a
  * wearer the gate misses; the ceiling now holds on echo, so the echo
  * removal still rose (desk Halo 28 at -31dBFS echo, 11.4 -> 17.1dB).
+ * BETA 1.0 (2026-10-07, with the gain-1 re-baseline: see
+ * AEC_SUP_GATE_KAPPA): the lighter suppressor keeps more of a wearer the
+ * gate misses (vs 1.25 with the rest of the re-baseline: Halo 04 worn at
+ * gain 3/4 talker kept -3.67 -> -3.43dB, the developer's earlier Halo 04
+ * capture -1.73 -> -1.56dB, for 0.2-0.3dB of echo); the lower STEADY_GCAP
+ * pays that echo back (0.25 -> 0.15: +0.4-0.5dB on every worn sitting).
  */
 #ifndef AEC_SUP_BETA
-#define AEC_SUP_BETA  1.25f
+#define AEC_SUP_BETA  1.0f
 #endif
 #ifndef AEC_SUP_FLOOR
 #define AEC_SUP_FLOOR 0.15f
@@ -529,15 +535,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * so it also caps the wearer's near-end voice by the same amount (option A
  * gates this on the double-talk detector to spare near-end). */
 #ifndef AEC_SUP_STEADY_GCAP
-#define AEC_SUP_STEADY_GCAP 0.25f /* device default (worn-validated): sustain a
-				   * -12dB spectrally-flat ceiling past onset so
+#define AEC_SUP_STEADY_GCAP 0.15f /* device default (worn-validated): sustain a
+				   * -16.5dB spectrally-flat ceiling past onset so
 				   * the mid-reply echo structure stays scrambled
 				   * below the server VAD. Prediction-blind, so it
 				   * would also cap near-end - the envelope gate
 				   * (AEC_SUP_GCAP_ENV_GATE) releases it on genuine
 				   * near-end voice. 1.0 = cap lifts after onset
 				   * (echo residual regains speech structure and
-				   * can re-trip the VAD mid-reply). */
+				   * can re-trip the VAD mid-reply). With the
+				   * two- and three-band ceiling it covers
+				   * 750-1600Hz and below 312Hz only. 0.15 (was
+				   * 0.25 = -12dB until the 2026-10-07 gain-1
+				   * re-baseline, see AEC_SUP_GATE_KAPPA): echo
+				   * removed +0.4-0.5dB on every worn sitting,
+				   * paying for BETA 1.0 and CAP_LO_GCAP 0.6. */
 #endif
 /* Option A: gate the sustained ceiling on the double-talk detector. The
  * blanket cap is prediction-blind, so with B alone it also caps the wearer's
@@ -595,9 +607,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * AEC_SUP_GATE_BAND_HZ) holds it on echo there: desk Halo 28, false
  * release 80% -> 0% of the reply. The cost: a wearer whose voice is below
  * the echo at the mic is not detected while the reply plays (desk talker
- * at -36dBFS under -31dBFS echo); the two-band ceiling limits the damage. */
+ * at -36dBFS under -31dBFS echo); the two-band ceiling limits the damage.
+ * KAPPA is a mic / reference amplitude ratio at mic gain 1, scaled by the
+ * effective mic gain (aec_tune_refresh) like every gate threshold.
+ * 0.46 (2026-10-07, the gain-1 re-baseline for the main app's likely
+ * production setting: mic gain 3 or 4 on units between Halo 04 and Halo 28,
+ * weighted towards Halo 04): with kappa scaled, Halo 04 worn needs ~0.2 for
+ * its near end and the strongly coupled desk Halo 28 >= ~0.45 to hold the
+ * gate on echo. 0.46 holds it there (gate open on echo 0) and, with
+ * BETA 1.0, CAP_LO_GCAP 0.6, STEADY_GCAP 0.15 and a 1.8 s hangover, keeps
+ * Halo 04's wearer: replays at gain 3 and 4 vs release 0.8.18 there, Halo 04
+ * worn echo removed 7.4/6.7 -> 10.3dB, gate open on echo 0.24/0.30 -> 0,
+ * talker kept -3.80/-3.36 -> -3.43dB; Halo 28 worn 13.2dB, kept -2.88
+ * (0.8.18 at gain 1: 13.8, -3.78). */
 #ifndef AEC_SUP_GATE_KAPPA
-#define AEC_SUP_GATE_KAPPA 0.5f
+#define AEC_SUP_GATE_KAPPA 0.46f
 #endif
 /* Fast-envelope smoothing of the excess (~0.5 = 2-block attack). */
 #ifndef AEC_SUP_GATE_FAST_A
@@ -615,14 +639,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_GATE_ABSFLOOR
 #define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
-/* Release hangover (blocks) to hold through brief near-end dips (~1.4s).
+/* Release hangover (blocks) to hold through brief near-end dips (~1.8s).
  * 70 (was 60, 2026-10-06): with the high-band term (AEC_SUP_GATE_KAPPA_HF)
  * holding the gate shut through Halo 04's restart bursts, the longer hold
  * keeps more of the wearer between syllables on every worn and desk
  * replay (worn Halo 28 talker kept -3.57 -> -3.49 dB, Halo 04 at gain 4
- * talker frames cut > 10 dB 12.7% -> 12.0%), at no echo cost. */
+ * talker frames cut > 10 dB 12.7% -> 12.0%), at no echo cost.
+ * 90 (2026-10-07, gain-1 re-baseline, see AEC_SUP_GATE_KAPPA): with the
+ * gate holding on echo everywhere at kappa 0.46, the longer hold keeps the
+ * wearer between words (vs 70 with the rest of the re-baseline: Halo 04
+ * worn talker kept -3.59 -> -3.43dB, crushed 0.114 -> 0.096, onsets
+ * missed 6% -> 3%; no echo cost on any sitting). Not longer: the replays
+ * do not score the echo let through after a genuine release, which the
+ * hangover prolongs. */
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 70
+#define AEC_SUP_GATE_HANG 90
 #endif
 /* Rising-edge (transient) release path (worn latency lever, 2026-07-14).
  *
@@ -786,13 +817,16 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * ONSET_GCAP stays one band. 750Hz / 0.5 (-6dB): desk talker under the
  * echo (the gate misses it), talker frames cut by more than 10dB 52% ->
  * 11% on Halo 28 and 21% -> 1% on the EC, for ~1dB less echo removal.
+ * 0.6 (-4.4dB, 2026-10-07, gain-1 re-baseline, see AEC_SUP_GATE_KAPPA):
+ * Halo 04 worn talker kept -3.83 -> -3.43dB at gain 3/4 (crushed 0.129 ->
+ * 0.096) for 0.3-1.1dB of echo, which STEADY_GCAP 0.15 pays back.
  * Above the split STEADY_GCAP applies, up to CAP_HI_SPLIT_HZ (below).
  */
 #ifndef AEC_SUP_CAP_SPLIT_HZ
 #define AEC_SUP_CAP_SPLIT_HZ 750
 #endif
 #ifndef AEC_SUP_CAP_LO_GCAP
-#define AEC_SUP_CAP_LO_GCAP 0.5f
+#define AEC_SUP_CAP_LO_GCAP 0.6f
 #endif
 /* Third (top) band of the steady ceiling: adaptation bins at or above
  * CAP_HI_SPLIT_HZ take CAP_HI_GCAP instead of STEADY_GCAP while the
@@ -1186,21 +1220,16 @@ static void aec_tune_refresh(void)
 	/* The gate runs on ex = sqrt(p_err) - kappa * sqrt(p_ref) - the
 	 * high-band term, and on fast, floor and mid envelopes of ex, all
 	 * amplitudes: a mic gain g scales sqrt(p_err) by g and leaves the
-	 * reference alone. absfloor and edge_abs (amplitudes in sqrt(p_err)
-	 * units) and kappa_hf (a mic / reference amplitude ratio) are
-	 * expressed at mic gain 1 and scale by g. gate_kappa does NOT: it
-	 * stays a ratio in mic units, so at gain 4 it acts as kappa / 2.5
-	 * would at gain 1, as in 0.8.18. The wearer at a higher gain relies on
-	 * that more sensitive gate (Halo 04 worn at gain 4, replayed: talker
-	 * kept -3.2 vs -4.5 dB with kappa scaled, gate release 40 vs 280 ms), and
-	 * the absolute keys plus the high-band term hold it shut on that
-	 * unit's echo. The cost: a unit with strong echo coupling run at a high
-	 * gain releases on echo much as it did in 0.8.18 (desk Halo 28 at gain
-	 * 4: gate open on echo 42%, 0.8.18 50%); gate_kappa x the gain factor
-	 * (aec_tune{gate_kappa = 1.25} at gain 4) holds it there (0%).
-	 * gate_ratio / gate_edge_ratio / gate_hf_ratio are ratios of like
-	 * quantities and gate_pref_min is a reference power: unaffected.
+	 * reference alone. kappa and kappa_hf (mic / reference amplitude
+	 * ratios) and absfloor and edge_abs (amplitudes in sqrt(p_err) units)
+	 * are all expressed at mic gain 1 and scale by g, so ex and its
+	 * envelopes scale exactly by g and the gate decides as it would at
+	 * gain 1: an aec_tune set means the same at any gain, and the gain
+	 * only matters through clipping. gate_ratio / gate_edge_ratio /
+	 * gate_hf_ratio are ratios of like quantities and gate_pref_min is a
+	 * reference power: unaffected.
 	 */
+	tune.p.gate_kappa *= g;
 	tune.p.gate_absfloor *= g;
 	tune.p.gate_edge_abs *= g;
 	tune.p.gate_kappa_hf *= g;

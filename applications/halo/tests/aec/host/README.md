@@ -168,32 +168,29 @@ half (it stayed flat when that duck borrowed the onset ease and `onset_ms`
 
 Check 24 covers the mic gain scale (`audio_aec_set_mic_gain_scale`,
 2026-10-06), which the mic stream publishes wherever it writes the PDM
-gain: f = the effective mic gain over gain 1. The near-end gate's absolute
-amplitude keys (`gate_absfloor`, `gate_edge_abs`, `gate_kappa_hf`, gain-1
-values) scale by f, and the mic-vs-reference power thresholds by f^2: the
+gain: f = the effective mic gain over gain 1. Every near-end gate threshold
+(`gate_kappa`, `gate_kappa_hf`, `gate_absfloor`, `gate_edge_abs`, gain-1
+values) scales by f, and the mic-vs-reference power thresholds by f^2: the
 adaptation-freeze double-talk threshold (tracked, its start value and its
 bounds), the divergence guard on the filter energy (the filter is a mic /
-reference ratio) and the dead-end option A release. `gate_kappa`
-deliberately stays in mic units (at gain 4 it acts as kappa / 2.5 at
-gain 1, as in 0.8.18; see audio_aec.c). So a run at x2.5 with the scale
-must match x1 with `gate_kappa / 2.5`. Each case runs one scenario from the
-same state (forked children): x1 with kappa / 2.5, the mic x2.5 in float
-(gain 4, no clipping) with the scale set to 2.5, x2.5 without it, and x1 at
-the defaults. (a) A hot unit (echo x20 on a x0.3 mic) through a warm-up
-reply, an echo-only reply and the wearer over a reply: with the scale every
-gate decision matches x1 with kappa / 2.5 and the output matches it x2.5 to
--64 dB (int16 rounding); without it 156/900 decisions differ. The
-gate is open on 210/300 echo-only blocks at x2.5 (0 at x1 defaults): the
-price of the unscaled kappa on such a hot unit, reported, not failed.
+reference ratio) and the dead-end option A release. So a run at x2.5 with
+the scale must match x1 at the same set in every decision. Each case runs
+one scenario from the same state (forked children): x1, the mic x2.5 in
+float (gain 4, no clipping) with the scale set to 2.5, and x2.5 without it.
+(a) A hot unit (echo x20 on a x0.3 mic) through a warm-up reply, an
+echo-only reply and the wearer over a reply: with the scale every gate
+decision matches x1 and the output matches it x2.5 to -64 dB (int16
+rounding); without it 585/900 decisions differ and the gate is open on
+300/300 echo-only blocks (`gate_kappa` then acts as kappa / 2.5; 0 at x1).
 (b) A cold start on a stronger-coupled unit (echo x55 on a x0.15 mic), echo
-only: x1 converges to 14.5 dB and x2.5 with the scale to 13.9 with every
-decision equal to x1 with kappa / 2.5; without the scale the echo-only
-p_err stays above the threshold ceiling (2 p_ref at gain-1 values),
-adaptation freezes and nothing is removed (0.0 dB). This unit's echo-only
-ratio starts above `dtd_init`: the tracked threshold has to rise before it
-adapts, which it may while the gate is open on the cold residual (the
-filter's hot-mu excess, which decays only when it adapts), and the
-divergence escape (check 27) also catches it. `-DAEC_DTD_COLD_RISE=0
+only: x1 converges to 14.5 dB and x2.5 with the scale to 14.6 with every
+decision equal to x1; without the scale the echo-only p_err stays above the
+threshold ceiling (2 p_ref at gain-1 values), adaptation freezes and
+nothing is removed (0.0 dB). This unit's echo-only ratio starts above
+`dtd_init`: the tracked threshold has to rise before it adapts, which it
+may while the gate is open on the cold residual (the filter's hot-mu
+excess, which decays only when it adapts), and the divergence escape
+(check 27) also catches it. `-DAEC_DTD_COLD_RISE=0
 -DAEC_DTD_ESCAPE_BLOCKS=0` (no rise while the gate is open, no escape) must
 FAIL (b): the gate opens on the cold residual, the tracker stays frozen and
 x1 stays at 0.0 dB. `AEC_GS_NOAPI=1 ./test_aec_fd` leaves the scale unset
@@ -209,29 +206,29 @@ envelope at the mic. Four forked runs (distortion on / off x the term on /
 off), each warm-up, echo-only reply, then the wearer over the reply. With
 the term the gate stays shut on the echo (0/300 open); with
 `gate_kappa_hf` 0 it releases at every restart and the hangover holds it
-(222/300). The wearer's median out-in is within 1 dB with and without the
-term (-1.4 / -1.6), and within 0.5 dB on a clean speaker (-1.4 / -1.4).
+(282/300). The wearer's median out-in is within 1 dB with and without the
+term (-1.1 / -1.4), and within 0.5 dB on a clean speaker (-1.2 / -1.2).
 `-DAEC_SUP_GATE_KAPPA_HF=0.0f` must FAIL. The runs pin the shipped tracked
 double-talk threshold (`dtd_mult` 10, `dtd_init` 0.25), so the check tests
 the term alone: with the fixed threshold the filter adapts on the
 distortion bursts and the gate opens on 143/300 echo-only blocks even with
-the term (232 without).
+the term (232 without; measured at the 2026-10-06 defaults).
 
 Check 26 covers the tracked double-talk threshold (`dtd_mult`,
 `dtd_init`): check 13's double talk with the tracked threshold (defaults)
 and with the fixed `p_err < 2 p_ref` (`dtd_mult` 0), forked. After the
 convergence phase the tracked threshold sits at its 0.05 floor (this
 synthetic echo is almost perfectly linear), the wearer's median out-in is
--0.5 vs -1.5 dB, and right after the double talk the tracked run still
-cancels 19.3 dB vs 6.1 for the fixed one, whose filter adapted to the
+-0.5 vs -1.2 dB, and right after the double talk the tracked run still
+cancels 18.9 dB vs 5.4 for the fixed one, whose filter adapted to the
 wearer. `-DAEC_DTD_MULT=0.0f` must FAIL. (b) A x2.5 gain change (mic and
 scale) mid-reply on check 24b's strong-coupling unit, at the defaults (the
 threshold at its floor) and at `dtd_mult` 100 (threshold ~0.25, above the
 floor, where a lost ratio shows): cancellation over the 1 s after the change
-must stay within 2 dB of the second before it (23.0 -> 24.5 dB), and
+must stay within 2 dB of the second before it (23.1 -> 24.7 dB), and
 `diag('stats').dtd_thr` (gain-1 units) within 5% (0.250 -> 0.252).
 `-DAEC_GAIN_RESCALE=0` (filter and power trackers not carried over) must
-FAIL (23.0 -> 11.4 dB: the residual reads as double talk and adaptation
+FAIL (23.1 -> 13.1 dB: the residual reads as double talk and adaptation
 freezes), and so must an empty `aec_dtd_rescale` (threshold 0.250 ->
 0.050).
 
@@ -239,14 +236,14 @@ Check 27 covers an echo-path change after convergence, on check 24b's
 strong-coupling unit and check 24a's hot unit: a new impulse response (the
 glasses re-seated) and the coupling x3. Forked runs with the tracked and
 the fixed (`dtd_mult` 0) threshold; cancellation 2-4 s after the change
-must be within 3 dB of the fixed threshold's (17.2 vs 17.5, 24.0 vs 24.6,
-16.8 vs 17.1, 24.0 vs 24.5 dB). The residual jumps far above the tracked
+must be within 3 dB of the fixed threshold's (17.7 vs 18.0, 23.8 vs 24.3,
+17.2 vs 17.5, 23.7 vs 24.5 dB). The residual jumps far above the tracked
 threshold (at its floor) and adaptation freezes; the divergence escape
 (`AEC_DTD_ESCAPE_BLOCKS` 40 frozen playback blocks (0.8 s) with the
 residual coherent with the reference, coherence >= 0.15) falls back to the
 fixed threshold and the tracker decays back as the filter re-converges.
 Before the fix the review measured -6 dB (new path) and +0.6 dB (x3, linear
-stage) for 12+ s. `-DAEC_DTD_ESCAPE_BLOCKS=0` must FAIL (9.7 / 8.5 dB).
+stage) for 12+ s. `-DAEC_DTD_ESCAPE_BLOCKS=0` must FAIL (11.9 / 6.9 dB).
 (c) Anti-windup: a linear unit converged for 60 s (its ratio ~50x under the
 floor), then the mic noise floor steps to ~-4 dB under the reference
 (incoherent, so the escape cannot fire): adaptation must resume within ~15
@@ -267,13 +264,13 @@ Check 28 guards the escape against the wearer: 12 s of continuous double
 talk (`near2_sample`, 250 ms syllables / 100 ms gaps, no pause) at two
 levels on the strong-coupling, hot and linear units. The residual is the
 wearer, incoherent with the reference (0.01-0.07), so no escape may fire,
-and cancellation right after must be within 3 dB of before (worst -0.6 dB;
+and cancellation right after must be within 3 dB of before (worst -1.0 dB;
 the filter is frozen on 0-99% of the double-talk blocks by level). The
 residual coherence on frozen blocks is the discriminator: an echo-path
 change reads 0.27-0.40. Before choosing it, a gate-shut test was tried:
 the gate itself lets go of a loud continuous talker after ~3.5 s, so it
 fired there. `-DAEC_DTD_ESC_COH=0.0f` (escape on frozen alone) must FAIL
-(10 escapes, -14.4 dB after).
+(10 escapes, -15.1 dB after).
 
 The device builds audio_aec.c with `-O3 -ffast-math`, under which GCC
 assumes no NaN and folds a plain `!(v >= min && v <= max)` so that NaN

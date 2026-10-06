@@ -912,9 +912,9 @@ int audio_microphone_get_gain(audio_microphone_t *mic)
 		return mic->gain;
 	} else {
 		/* If no microphone provided, get from settings */
-		int gain = 0; /* default */
+		int gain = AUDIO_MIC_DEFAULT_GAIN;
 		if (halo_settings_get("audio/gain", &gain, sizeof(gain)) != 0) {
-			gain = 0;
+			gain = AUDIO_MIC_DEFAULT_GAIN;
 		}
 		return gain;
 	}

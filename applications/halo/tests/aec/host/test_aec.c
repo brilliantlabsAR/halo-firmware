@@ -534,7 +534,7 @@ static void apply_env_tune(void)
  * audio_aec.c, for the defaults-equal-constants check (23)
  */
 #ifndef AEC_SUP_BETA
-#define AEC_SUP_BETA 1.25f
+#define AEC_SUP_BETA 1.0f
 #endif
 #ifndef AEC_SUP_FLOOR
 #define AEC_SUP_FLOOR 0.15f
@@ -564,10 +564,10 @@ static void apply_env_tune(void)
 #define AEC_SUP_ONSET_GATE_LIFT 2
 #endif
 #ifndef AEC_SUP_STEADY_GCAP
-#define AEC_SUP_STEADY_GCAP 0.25f
+#define AEC_SUP_STEADY_GCAP 0.15f
 #endif
 #ifndef AEC_SUP_GATE_KAPPA
-#define AEC_SUP_GATE_KAPPA 0.5f
+#define AEC_SUP_GATE_KAPPA 0.46f
 #endif
 #ifndef AEC_SUP_GATE_FAST_A
 #define AEC_SUP_GATE_FAST_A 0.5f
@@ -582,7 +582,7 @@ static void apply_env_tune(void)
 #define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 70
+#define AEC_SUP_GATE_HANG 90
 #endif
 #ifndef AEC_SUP_GATE_MID_A
 #define AEC_SUP_GATE_MID_A 0.08f
@@ -609,7 +609,7 @@ static void apply_env_tune(void)
 #define AEC_SUP_CAP_SPLIT_HZ 750
 #endif
 #ifndef AEC_SUP_CAP_LO_GCAP
-#define AEC_SUP_CAP_LO_GCAP 0.5f
+#define AEC_SUP_CAP_LO_GCAP 0.6f
 #endif
 #ifndef AEC_SUP_CAP_HI_SPLIT_HZ
 #define AEC_SUP_CAP_HI_SPLIT_HZ 1600
@@ -693,20 +693,8 @@ static const struct gs_cfg gs_hot = {0.3f, 20.0f, 1};
  * filter never converges. Runs in a forked child, so every variant starts
  * from the same AEC and stimulus state.
  */
-/* > 0: the child runs with gate_kappa divided by this (aec_tune) - the
- * gain-1 equivalent of a mic gain run, since gate_kappa stays in mic units
- */
-static float gs_kdiv;
-
 static void gs_child(const struct gs_cfg *c, float g, int api, struct gs_run *r)
 {
-	if (gs_kdiv > 0.0f) {
-		struct audio_aec_tune t;
-
-		audio_aec_tune_get(&t);
-		t.gate_kappa /= gs_kdiv;
-		audio_aec_tune_set(&t);
-	}
 	g_mic_scale = c->base * g;
 	g_echo_gain = c->echo;
 	g_clipped = 0;
@@ -2228,33 +2216,29 @@ int main(int argc, char **argv)
 	{
 		/* the same run with the mic x2.5 in float (gain 4 over gain 1,
 		 * no clipping) and audio_aec_set_mic_gain_scale(2.5) must make
-		 * the same decisions and the same output (up to x2.5) as x1 with
-		 * gate_kappa / 2.5: everything follows the gain except
-		 * gate_kappa, which deliberately stays in mic units (at gain 4 it
-		 * acts as kappa / 2.5 at gain 1, as in 0.8.18). Without the scale
-		 * (the control) gate_absfloor, gate_edge_abs, gate_kappa_hf and
-		 * the double-talk threshold stay at their gain-1 values and the
-		 * run differs. AEC_GS_NOAPI=1 leaves the scale unset in the
-		 * scaled run too: the check must then FAIL.
+		 * the same decisions and the same output (up to x2.5) as x1:
+		 * every gate threshold (gate_kappa, gate_kappa_hf, gate_absfloor,
+		 * gate_edge_abs) follows the gain, and the double-talk threshold
+		 * and the divergence guard its square. Without the scale (the
+		 * control) they stay at their gain-1 values: gate_kappa then acts
+		 * as kappa / 2.5 and the gate opens on the echo. AEC_GS_NOAPI=1
+		 * leaves the scale unset in the scaled run too: the check must
+		 * then FAIL.
 		 */
 		struct gs_run *r;
 		const float g = 2.5f;
 		const int api = getenv("AEC_GS_NOAPI") == NULL;
 
-		r = mmap(NULL, 4 * sizeof(*r), PROT_READ | PROT_WRITE,
+		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
 			 MAP_SHARED | MAP_ANON, -1, 0);
-		gs_kdiv = g;
-		int ok = r != MAP_FAILED && gs_fork(&gs_hot, 1.0f, 0, &r[0]);
-		gs_kdiv = 0.0f;
-		ok = ok && gs_fork(&gs_hot, g, api, &r[1]) && gs_fork(&gs_hot, g, 0, &r[2]) &&
-		     gs_fork(&gs_hot, 1.0f, 0, &r[3]);
-		int m1 = 0, m2 = 0, rel0 = 0, rel1 = 0, rel2 = 0, rel3 = 0;
+		int ok = r != MAP_FAILED && gs_fork(&gs_hot, 1.0f, 0, &r[0]) &&
+			 gs_fork(&gs_hot, g, api, &r[1]) && gs_fork(&gs_hot, g, 0, &r[2]);
+		int m1 = 0, m2 = 0, rel0 = 0, rel1 = 0, rel2 = 0;
 		double e1 = 0, e2 = 0, dummy;
 		int dm;
 
 		if (ok) {
 			gs_compare(&r[0], &r[0], 1.0f, &dm, &rel0, &dummy);
-			gs_compare(&r[3], &r[3], 1.0f, &dm, &rel3, &dummy);
 			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
 			gs_compare(&r[2], &r[0], g, &m2, &rel2, &e2);
 		}
@@ -2284,16 +2268,16 @@ int main(int argc, char **argv)
 		ok &= set_ok;
 
 		snprintf(buf, sizeof(buf),
-			 "x2.5+scale vs x1 kappa/2.5: %d/%d diffs, out %.1f dB, echo-only open %d (%d); "
-			 "no scale: %d diffs, %.1f dB; x1 defaults open %d; clipped %ld%s",
-			 m1, GS_BLOCKS, e1, rel1, rel0, m2, e2, rel3, clipped,
+			 "x2.5+scale vs x1: %d/%d diffs, out %.1f dB, echo-only open %d/%d (x1 %d); "
+			 "no scale: %d diffs, %.1f dB, open %d; clipped %ld%s",
+			 m1, GS_BLOCKS, e1, rel1, GS_WARM, rel0, m2, e2, rel2, clipped,
 			 set_ok ? "" : "; SETTER WRONG");
 		check("mic gain scale: decisions follow the gain",
-		      ok && clipped == 0 && rel3 == 0 && m1 == 0 && e1 < -40.0 &&
-			      m2 > GS_BLOCKS / 20,
+		      ok && clipped == 0 && rel0 == 0 && m1 == 0 && e1 < -40.0 &&
+			      m2 > GS_BLOCKS / 10 && rel2 > GS_WARM / 2,
 		      buf);
 		if (r != MAP_FAILED) {
-			munmap(r, 4 * sizeof(*r));
+			munmap(r, 3 * sizeof(*r));
 		}
 
 		/* (b) cold start on a strong-coupled unit: the double-talk
@@ -2307,34 +2291,31 @@ int main(int argc, char **argv)
 		/* echo x8.25 overall on a x0.15 mic: no clipping at x2.5 */
 		const struct gs_cfg cold = {0.15f, 55.0f, 0};
 
-		r = mmap(NULL, 4 * sizeof(*r), PROT_READ | PROT_WRITE,
+		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
 			 MAP_SHARED | MAP_ANON, -1, 0);
 		ok = r != MAP_FAILED && gs_fork(&cold, 1.0f, 0, &r[0]) &&
 		     gs_fork(&cold, g, api, &r[1]) && gs_fork(&cold, g, 0, &r[2]);
-		gs_kdiv = g;
-		ok = ok && gs_fork(&cold, 1.0f, 0, &r[3]);
-		gs_kdiv = 0.0f;
-		double erle[4] = {0, 0, 0, 0};
+		double erle[3] = {0, 0, 0};
 
 		m1 = m2 = 0;
 		e1 = e2 = 0;
 		if (ok) {
-			gs_compare(&r[1], &r[3], g, &m1, &rel1, &e1);
-			for (int k = 0; k < 4; k++) {
+			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
+			for (int k = 0; k < 3; k++) {
 				erle[k] = 10 * log10(r[k].pin / (r[k].pout + 1e-30) + 1e-30);
 			}
 		}
 		clipped = ok ? r[1].clipped + r[2].clipped : -1L;
 		snprintf(buf, sizeof(buf),
-			 "ERLE x1 %.1f, x2.5+scale %.1f (vs x1 kappa/2.5 %.1f: %d diffs, out %.1f dB), "
+			 "ERLE x1 %.1f, x2.5+scale %.1f (%d diffs, out %.1f dB), "
 			 "no scale %.1f dB; clipped %ld",
-			 erle[0], erle[1], erle[3], m1, e1, erle[2], clipped);
+			 erle[0], erle[1], m1, e1, erle[2], clipped);
 		check("mic gain scale: hot cold start converges",
 		      ok && clipped == 0 && erle[0] > 10.0 && erle[1] > 10.0 && m1 == 0 &&
 			      e1 < -40.0 && erle[2] < erle[0] - 6.0,
 		      buf);
 		if (r != MAP_FAILED) {
-			munmap(r, 4 * sizeof(*r));
+			munmap(r, 3 * sizeof(*r));
 		}
 	}
 
