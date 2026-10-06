@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.19] - 2026-10-07
+
 ### Added
 
 - Echo cancellation: the near-end gate also allows for speaker distortion
@@ -20,7 +22,7 @@ release pages and tags are not publicly reachable.
   gate took it for the wearer and let the echo through for over a second. In
   a replay of a worn unit with such a speaker, at microphone gain 4, the gate
   was open on echo 2% of the time instead of 27%, and 10.4 dB of echo was
-  removed instead of 6.8.
+  removed instead of 6.8 (#70).
 - Echo cancellation: the double-talk test that pauses filter adaptation
   follows each unit's own echo level (`dtd_mult`, `dtd_init`;
   `diag('stats').dtd_thr`). It used to wait until the wearer was about 50
@@ -32,14 +34,14 @@ release pages and tags are not publicly reachable.
   and when the echo path changes mid-reply (the glasses re-seated, a
   stronger coupling) the threshold falls back to the old one until the
   filter has re-adapted, within about 2 s (`diag('stats').dtd_escapes`
-  counts these).
+  counts these) (#70).
 
 ### Changed
 
 - The microphone's default gain is 1 (was 0): `frame.microphone.start{}`
   without `gain=`, the LE Audio source and the AICS gain's initial value. A
   saved gain (`frame.microphone.gain()` or AICS) still takes precedence.
-  Gain 1 is the echo canceller's reference gain.
+  Gain 1 is the echo canceller's reference gain (#70).
 - With echo cancellation on, every near-end gate threshold
   (`gate_kappa`, `gate_kappa_hf`, `gate_absfloor`, `gate_edge_abs` in
   `frame.microphone.aec_tune`) is expressed at microphone gain 1, and the
@@ -56,7 +58,7 @@ release pages and tags are not publicly reachable.
   time). A gain change during playback also carries the echo filter over,
   so cancellation holds through it instead of dropping by about 10 dB until
   the filter re-adapted. The calibration harness replays each sitting at
-  its effective gain.
+  its effective gain (#70).
 - Migrating `aec_tune` lines: on 0.8.18 the gate values (`gate_kappa`,
   `gate_absfloor`, `gate_edge_abs`) were in the units of whatever
   microphone gain was in use. A value tuned at gain g must be divided by
@@ -67,7 +69,7 @@ release pages and tags are not publicly reachable.
   becomes 0.5 / 0.9 / 0.6, the 0.8.18 defaults: drop it and use the new
   defaults. Also note the default microphone gain is now 1 (above): an
   app that called `start{}` without `gain=` and relied on gain 0 records
-  about 6 dB louder; pass `gain=0` to keep the old level.
+  about 6 dB louder; pass `gain=0` to keep the old level (#70).
 - Echo cancellation defaults re-tuned for microphone gain 3 to 4 on worn
   units: `gate_kappa` 0.46 (was 0.5, and now a gain-1 value), `sup_beta`
   1.0 (was 1.25), `cap_lo_gcap` 0.6 (was 0.5), `steady_gcap` 0.15 (was
@@ -79,7 +81,7 @@ release pages and tags are not publicly reachable.
   wearer's voice kept within 0.15 dB of 0.8.18 or better; on the other unit, 13.2 dB removed
   (0.8.18 at its gain 1: 13.8) with the wearer kept 0.9 dB better. Desk
   sittings: echo removed within 0.7 dB of 0.8.18 or better, the gate never
-  open on echo.
+  open on echo (#70).
 
 ### Fixed
 
@@ -87,7 +89,7 @@ release pages and tags are not publicly reachable.
   storage full: N KB free, need M KB" when `/lfs` cannot hold a recording.
   Before, a full filesystem silently cut the capture short, and the harness
   retried it as a Bluetooth drop until its retries ran out. It now checks
-  for room before each recording and checks every write of the capture.
+  for room before each recording and checks every write of the capture (#70).
 
 ## [0.8.18] - 2026-10-05
 
