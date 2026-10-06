@@ -11,6 +11,84 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- Echo cancellation: the near-end gate also allows for speaker distortion
+  (`gate_kappa_hf`, `gate_hf_hz`, `gate_hf_ratio` in
+  `frame.microphone.aec_tune`). Some speakers turn a loud sibilant into
+  broadband sound at the microphone, and where a reply restarted on one the
+  gate took it for the wearer and let the echo through for over a second. In
+  a replay of a worn unit with such a speaker, at microphone gain 4, the gate
+  was open on echo 2% of the time instead of 27%, and 10.4 dB of echo was
+  removed instead of 6.8.
+- Echo cancellation: the double-talk test that pauses filter adaptation
+  follows each unit's own echo level (`dtd_mult`, `dtd_init`;
+  `diag('stats').dtd_thr`). It used to wait until the wearer was about 50
+  times louder than the echo, so the filter kept adapting to the wearer's
+  voice and the suppressor then removed more of it. Across the worn and desk
+  replays the wearer's voice is kept 0.1 to 0.9 dB better, and real double
+  talk 0.4 to 0.8 dB better on worn units, with no loss of echo removal
+  beyond 0.2 dB. A strongly coupled unit still converges from a cold start,
+  and when the echo path changes mid-reply (the glasses re-seated, a
+  stronger coupling) the threshold falls back to the old one until the
+  filter has re-adapted, within about 2 s (`diag('stats').dtd_escapes`
+  counts these).
+
+### Changed
+
+- The microphone's default gain is 1 (was 0): `frame.microphone.start{}`
+  without `gain=`, the LE Audio source and the AICS gain's initial value. A
+  saved gain (`frame.microphone.gain()` or AICS) still takes precedence.
+  Gain 1 is the echo canceller's reference gain.
+- With echo cancellation on, every near-end gate threshold
+  (`gate_kappa`, `gate_kappa_hf`, `gate_absfloor`, `gate_edge_abs` in
+  `frame.microphone.aec_tune`) is expressed at microphone gain 1, and the
+  firmware scales it by the effective gain over gain 1 (x2.0 at gain 3,
+  x2.5 at gain 4). The canceller's internal mic-versus-speaker power
+  thresholds (the double-talk test and the divergence guard) scale with the
+  square of that factor. So the canceller decides the same at any gain, a
+  value set with `aec_tune` means the same at every gain, and the gain only
+  matters through clipping. This follows the gain actually applied
+  (`start{gain=}`, a saved gain, `frame.microphone.gain()` or the LE Audio
+  gain control), and `diag('stats').mic_gain_scale` reports the factor.
+  Before, gain 4 made the gate open on echo (in a replay of one worn unit,
+  echo removed fell from 18 to 6 dB and the gate was open on echo 23% of the
+  time). A gain change during playback also carries the echo filter over,
+  so cancellation holds through it instead of dropping by about 10 dB until
+  the filter re-adapted. The calibration harness replays each sitting at
+  its effective gain.
+- Migrating `aec_tune` lines: on 0.8.18 the gate values (`gate_kappa`,
+  `gate_absfloor`, `gate_edge_abs`) were in the units of whatever
+  microphone gain was in use. A value tuned at gain g must be divided by
+  f = (g + 1) / 2 for g >= 0 (0.5 at gain 0, 1 at gain 1, 2.0 at gain 3,
+  2.5 at gain 4) to give the gain-1 value; values tuned at gain 1 carry
+  over unchanged. For example the interim gain-4 line
+  `aec_tune{gate_kappa=1.25, gate_absfloor=2.25, gate_edge_abs=1.5}`
+  becomes 0.5 / 0.9 / 0.6, the 0.8.18 defaults: drop it and use the new
+  defaults. Also note the default microphone gain is now 1 (above): an
+  app that called `start{}` without `gain=` and relied on gain 0 records
+  about 6 dB louder; pass `gain=0` to keep the old level.
+- Echo cancellation defaults re-tuned for microphone gain 3 to 4 on worn
+  units: `gate_kappa` 0.46 (was 0.5, and now a gain-1 value), `sup_beta`
+  1.0 (was 1.25), `cap_lo_gcap` 0.6 (was 0.5), `steady_gcap` 0.15 (was
+  0.25), `gate_hang_ms` 1800 (was 1200). In replays of three worn sittings
+  of two units at gain 3 and 4 against 0.8.18 at the same gain: on the unit
+  whose echo is hard to cancel (two sittings), 10.3 dB of echo removed
+  instead of 6.7 to 7.4 and the gate never open on echo (was 24 to 30% of
+  the time) on one, 18.4 dB instead of 5.7 at gain 4 on the other, with the
+  wearer's voice kept within 0.15 dB of 0.8.18 or better; on the other unit, 13.2 dB removed
+  (0.8.18 at its gain 1: 13.8) with the wearer kept 0.9 dB better. Desk
+  sittings: echo removed within 0.7 dB of 0.8.18 or better, the gate never
+  open on echo.
+
+### Fixed
+
+- The worn calibration harness (`tests/aec/calib`) stops with "device
+  storage full: N KB free, need M KB" when `/lfs` cannot hold a recording.
+  Before, a full filesystem silently cut the capture short, and the harness
+  retried it as a Bluetooth drop until its retries ran out. It now checks
+  for room before each recording and checks every write of the capture.
+
 ## [0.8.18] - 2026-10-05
 
 ### Added

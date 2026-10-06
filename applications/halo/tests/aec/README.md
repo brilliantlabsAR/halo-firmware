@@ -14,7 +14,7 @@
 > | `frame.microphone.voice()` / `voice(bool)` | get / set voice-band mode (live); also `start{voice=true}` |
 > | `frame.microphone.diag('stats')` | canceller + PDM/speaker/clock diagnostics table |
 > | `frame.microphone.diag('zero')` | zero the clkmon / PDM / speaker counters |
-> | `frame.microphone.aec_tune()` / `aec_tune{k=v}` / `aec_tune('defaults')` | get / set (validated, all or nothing) / reset the barge-in tunables: suppressor, onset duck, near-end gate and its band, two-band playback ceiling, `fd_mu`. Keys, units, ranges and tradeoffs: PROTOCOL.md. Device-global, live from the next block, **not persisted** (boot = compiled defaults). `diag('stats').tune_gen` identifies the set |
+> | `frame.microphone.aec_tune()` / `aec_tune{k=v}` / `aec_tune('defaults')` | get / set (validated, all or nothing) / reset the barge-in tunables: suppressor, onset duck, near-end gate and its band, two-band playback ceiling, `fd_mu`. Keys, units, ranges and tradeoffs: PROTOCOL.md. Device-global, live from the next block, **not persisted** (boot = compiled defaults). `diag('stats').tune_gen` identifies the set. The gate's `gate_kappa`, `gate_kappa_hf`, `gate_absfloor` and `gate_edge_abs` are gain-1 values, scaled by the effective mic gain (`diag('stats').mic_gain_scale`) |
 >
 > Removed in the cleanup: `aec('sup'/'nosup')` (dead), `aec('pair')` and
 > `aec('dump')` (retired with the `pair_probe.py` / `dump_probe.py` /
@@ -88,7 +88,12 @@ step 4 is skipped there anyway).
 Noa settings throughout: `microphone.start{gain=1, voice=true, aec=...}` and
 `speaker.start{volume=100, gain=6, budget=100}`. The reply is uploaded as LC3
 (32 kbps, 10 ms) and played gap-free from Lua RAM; each recording goes to
-`/lfs/cap.lc3` and is read back; `cap.lc3` is removed at the end. The only
+`/lfs/cap.lc3` and is read back; `cap.lc3` is removed at the end. Before each
+recording a probe writes and removes the recording's size plus 8 KB (35–55 KB)
+to check `/lfs` has room (`frame.file` has no free-space call), and every write
+of the capture is checked. A full `/lfs` stops the session with "device
+storage full: N KB free, need M KB" (free space, then `--resume latest`)
+instead of retrying as if BLE had dropped. The only
 other change is the saved mic gain (`audio/gain`), and only if you let it be
 set for the sitting (below): the old value goes into `session.json` before it
 is changed. At the end the harness calls `aec_tune('defaults')`, restores that
@@ -97,13 +102,29 @@ it could not put back is listed with the command that fixes it. The report
 is `calib/sessions/<stamp>-<name>/report.md`.
 
 **Saved mic gain.** A gain saved with `frame.microphone.gain(x)` (or over
-AICS) overrides `start{gain=1}`, and `gain()` reads 0 both when nothing is
-saved and when 0 is saved. If it reads 0, step 2a plays reply A once more at
-`start{gain=0}`: about 6 dB lower means nothing is saved (gain 1 applies), the
-same level means a saved 0 overrides it (the report says so; `gain(1)` fixes it
-and persists). Any other saved value: the worn run asks whether to set 1 for
-the sitting and restores the old value at the end. A `--resume` reuses the
-choice made at the start and never asks again.
+AICS) overrides `start{gain=1}`. With nothing saved `gain()` reads the
+firmware's default (0 on 0.8.18 and earlier, 1 from the gain-1 rebaseline
+on), so a reading other than the session's `--mic-gain` may still mean
+nothing is saved. Firmware with `diag('stats').mic_gain_scale` settles it
+at once: step 1 runs `start{gain=<--mic-gain>}` and reads the scale the AEC
+was handed (`gain_scale_probe` in `session.json`): the `--mic-gain` scale
+means nothing is saved. On 0.8.18, if `gain()` reads 0, step 2a plays reply
+A once more at `start{gain=0}`: about 6 dB lower means nothing is saved
+(the `--mic-gain` applies), the same level means a saved 0 overrides it (the
+report says so; `gain(1)` fixes it and persists). Any other saved value: the
+worn run asks whether to set the `--mic-gain` for the sitting and restores
+the old value at the end. A `--resume` reuses the
+choice made at the start and never asks again. The replays apply the
+sitting's effective gain as the firmware does (`aec_replay -g`: the gate's
+thresholds `gate_kappa`, `gate_kappa_hf`, `gate_absfloor` and
+`gate_edge_abs` x the gain over gain 1, the double-talk threshold x its
+square; `gain_effective` in `session.json`, or `start{gain=}` when the probe
+could not tell), so the recommended set is in gain-1 values like every
+`aec_tune` set, and holds at any gain. A sitting recorded at a gain other than 1 on older
+firmware ran some gate keys in microphone units (0.8.18: `gate_kappa`,
+`gate_absfloor`, `gate_edge_abs`): step 3 replays `current` (and `live`)
+with them divided by the gain scale, as the device ran them, and the report
+notes it.
 
 **Step 3.** The AEC-off captures become replay pairs: the reference is the
 exact LC3 bytes played, decoded and passed through the production

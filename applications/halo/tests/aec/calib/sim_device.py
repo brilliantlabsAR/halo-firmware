@@ -14,7 +14,12 @@ diag rows carry capn, p_mic (50 ms raw mic power) and p_ref every 60 ms.
 --sim-abort-after N kills the session after N recordings (resume test).
 --sim-fw overrides the firmware string (a reflash between runs); --sim-fail
 makes device calls fail: set_gain (every call), finish_tune (aec_tune
-('defaults') at the end).
+('defaults') at the end), write_capture (the cap.lc3 write hits ENOSPC);
+--sim-lfs-free KB sets the free space the /lfs probe finds.
+--sim-saved-gain G is the saved gain() (default: nothing saved); --sim-gain-gen
+picks how the firmware reports it: old (0.8.18: gain() reads 0 with nothing
+saved, no diag mic_gain_scale), scale (mic_gain_scale readback, default 0) or
+new (readback, default gain 1).
 """
 import asyncio
 import os
@@ -106,12 +111,29 @@ class SimDevice:
             self.tune[k] = (int(v) // 20) * 20 if k.endswith("_ms") else v
         return dict(self.tune)
 
+    def _default_gain(self):
+        return 1 if self.a.sim_gain_gen == "new" else 0
+
     async def saved_gain(self):
-        return self.saved_gain_v
+        """gain(): the saved gain, else the firmware's default."""
+        return self.saved_gain_v if self.saved_gain_v is not None else self._default_gain()
+
+    async def gain_scale_probe(self, g):
+        """As Ble.gain_scale_probe: diag mic_gain_scale after start{gain=g}."""
+        if self.a.sim_gain_gen == "old":
+            return None
+        return C.mic_gain_scale(self.saved_gain_v if self.saved_gain_v is not None else g)
 
     async def set_gain(self, g):
         self._fail("set_gain")
         self.saved_gain_v = int(g)
+
+    async def space_check(self, need):
+        """As Ble.space_check: (bytes the probe could write, device error)."""
+        free = self.a.sim_lfs_free
+        if free is None or free * 1024 >= need:
+            return int(need + (-need) % 4000), None
+        return int(free * 1024) // 4000 * 4000, "[string \"...\"]: error writing to file: -28"
 
     async def upload(self, cid, blob):
         if self.clip_loaded == cid:
@@ -127,14 +149,15 @@ class SimDevice:
                                            st["budget"], td, cid)
         return self.refs[cid]
 
-    def _aec(self, mic, ref_placed, feed):
+    def _aec(self, mic, ref_placed, feed, gain_scale=1.0):
         # old-gate firmware: the missing keys at their old values (off)
         table = C.apply(O.tree_defaults(), dict(C.NAMED["old-gate"], **self.tune)
                         if self.a.sim_old_gate else self.tune)
         with tempfile.TemporaryDirectory() as td:
             C.write_wav(os.path.join(td, "m.wav"), mic)
             C.write_wav(os.path.join(td, "r.wav"), ref_placed)
-            out = O.run(os.path.join(td, "m.wav"), os.path.join(td, "r.wav"), table, feed=feed)["out"]
+            out = O.run(os.path.join(td, "m.wav"), os.path.join(td, "r.wav"), table, feed=feed,
+                        gain_scale=gain_scale)["out"]
             # O.run re-aligns; the device output carries the AEC delay
             return C.shift(out, -C.AEC_DELAY)
 
@@ -166,11 +189,11 @@ class SimDevice:
             m = max(0, min(len(v), n - s))
             x[s:s + m] += v[:m]
         self._maybe_drop("readback")
-        # PDM gain: a saved gain overrides start{gain=} (sim: 0 = nothing saved)
-        g = self.saved_gain_v if self.saved_gain_v else st["mic_gain"]
-        x = x * 10 ** ((g - 1) * 6.0 / 20)
+        # PDM gain: a saved gain overrides start{gain=}
+        g = self.saved_gain_v if self.saved_gain_v is not None else st["mic_gain"]
+        x = x * C.mic_gain_scale(g)
         mic = C.bandpass(x, 300, 3400)
-        out = self._aec(mic, np.roll(ref_placed, -24), feed) if aec else mic
+        out = self._aec(mic, np.roll(ref_placed, -24), feed, C.mic_gain_scale(g)) if aec else mic
         raw = C.lc3_encode(out)
         pcm = C.lc3_decode(raw)
         diag = []
@@ -192,7 +215,12 @@ class SimDevice:
             self.a.sim_abort_after = 0
             raise self.Abort("sim: session killed (resume test)")
         await asyncio.sleep(0)
-        return pcm, raw, diag, dict(target_bytes=len(raw), got_bytes=len(raw), sim=True)
+        # the cap.lc3 write (--sim-fail write_capture: ENOSPC part-way, as a
+        # full /lfs after the probe)
+        write = [len(raw), len(raw), None]
+        if "write_capture" in (self.a.sim_fail or "").split(","):
+            write = [len(raw), len(raw) // 3, "[string \"...\"]: error writing to file: -28"]
+        return pcm, raw, diag, dict(target_bytes=len(raw), got_bytes=len(raw), write=write, sim=True)
 
     async def tune_defaults(self):
         self._fail("finish_tune")

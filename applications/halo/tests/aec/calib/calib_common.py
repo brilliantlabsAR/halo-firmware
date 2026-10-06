@@ -348,12 +348,25 @@ NAMED = {
 }
 # A key the device's firmware lacks behaves as switched off there (it
 # predates the feature): replay it at this value, not at the tree's default.
-OFF = {"gate_band_hz": 0, "cap_split_hz": 0, "cap_hi_split_hz": 0}
+OFF = {"gate_band_hz": 0, "cap_split_hz": 0, "cap_hi_split_hz": 0,
+       "gate_kappa_hf": 0, "dtd_mult": 0}
 REF_SET = "0.8.17"           # the 0.8.17 release source (calib_build.aec_replay_ref)
 
 
 def norm(v):
     return round(float(v), 6)
+
+
+def mic_gain_scale(g):
+    """Mic gain step g relative to gain 1, as the firmware hands it to the
+    AEC (audio_aec_set_mic_gain_scale): PDM_CH_GAIN raw / raw at gain 1
+    (t5838 dmic_gain_raw: 352 (g + 1) for g >= 0, round(352 / (1 - g))
+    below). The AEC scales gate_kappa, gate_kappa_hf, gate_absfloor and
+    gate_edge_abs by it (the double-talk threshold by its square), so
+    aec_tune sets are gain-1 values at any gain."""
+    g = max(-10, min(10, int(g)))
+    raw = (g + 1) * 352 if g >= 0 else (352 + (1 - g) // 2) // (1 - g)
+    return raw / 704.0
 
 
 def same(a, b):
@@ -386,6 +399,38 @@ def firmware_table(tree, dev):
         if k in t and k not in dev:
             t[k] = v
     return apply(t, dev)
+
+
+# gate keys 0.8.18 ran in mic units (the AEC did not follow the mic gain)
+MIC_UNIT_KEYS_0818 = ["gate_absfloor", "gate_edge_abs", "gate_kappa"]
+
+
+def mic_unit_keys(dv):
+    """aec_tune keys the session's firmware applied in mic units, unscaled by
+    the mic gain (this tree scales every gate threshold by it: gain-1
+    units). 0.8.18 (no gate_kappa_hf, no mic_gain_scale readback): kappa,
+    absfloor and edge_abs; the local builds with the high-band term but
+    gate_kappa still unscaled (their defaults: gate_kappa 0.5, sup_beta
+    1.25): gate_kappa; later firmware: none. dv is session.json's device."""
+    d = dv.get("aec_defaults")
+    if not d:
+        return []
+    if "gate_kappa_hf" not in d:
+        # the first gain-scale build already scaled them (it has the readback)
+        return [] if dv.get("gain_scale_probe") is not None else list(MIC_UNIT_KEYS_0818)
+    if same(d.get("gate_kappa", 0), 0.5) and same(d.get("sup_beta", 0), 1.25):
+        return ["gate_kappa"]
+    return []
+
+
+def to_gain1(table, keys, f):
+    """A table the device ran with `keys` in mic units, in this tree's gain-1
+    units at mic gain scale f (the replay multiplies them by f again)."""
+    t = dict(table)
+    for k in keys:
+        if k in t:
+            t[k] = float(t[k]) / f
+    return t
 
 
 def missing(over, keys):

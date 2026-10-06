@@ -129,6 +129,12 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_MU
 #define AEC_MU            0.5f
 #endif
+/* Adaptation-freeze double-talk test: adapt only while p_err <
+ * threshold * p_ref. AEC_DTD_THRESHOLD is the fixed threshold (the
+ * time-domain build, and the FDAF build with dtd_mult 0) and the ceiling
+ * of the FDAF build's tracked one (AEC_DTD_MULT below); both scale by the
+ * mic gain squared (audio_aec_set_mic_gain_scale).
+ */
 #define AEC_DTD_THRESHOLD 2.0f
 /* one-pole smoothing over ~50ms at 16kHz */
 #define AEC_POW_ALPHA     (1.0f / (0.05f * AEC_SAMPLE_RATE))
@@ -447,9 +453,15 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * below and the two-band ceiling, the lighter suppressor keeps more of a
  * wearer the gate misses; the ceiling now holds on echo, so the echo
  * removal still rose (desk Halo 28 at -31dBFS echo, 11.4 -> 17.1dB).
+ * BETA 1.0 (2026-10-07, with the gain-1 re-baseline: see
+ * AEC_SUP_GATE_KAPPA): the lighter suppressor keeps more of a wearer the
+ * gate misses (vs 1.25 with the rest of the re-baseline: Halo 04 worn at
+ * gain 3/4 talker kept -3.67 -> -3.43dB, the developer's earlier Halo 04
+ * capture -1.73 -> -1.56dB, for 0.2-0.3dB of echo); the lower STEADY_GCAP
+ * pays that echo back (0.25 -> 0.15: +0.4-0.5dB on every worn sitting).
  */
 #ifndef AEC_SUP_BETA
-#define AEC_SUP_BETA  1.25f
+#define AEC_SUP_BETA  1.0f
 #endif
 #ifndef AEC_SUP_FLOOR
 #define AEC_SUP_FLOOR 0.15f
@@ -523,15 +535,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * so it also caps the wearer's near-end voice by the same amount (option A
  * gates this on the double-talk detector to spare near-end). */
 #ifndef AEC_SUP_STEADY_GCAP
-#define AEC_SUP_STEADY_GCAP 0.25f /* device default (worn-validated): sustain a
-				   * -12dB spectrally-flat ceiling past onset so
+#define AEC_SUP_STEADY_GCAP 0.15f /* device default (worn-validated): sustain a
+				   * -16.5dB spectrally-flat ceiling past onset so
 				   * the mid-reply echo structure stays scrambled
 				   * below the server VAD. Prediction-blind, so it
 				   * would also cap near-end - the envelope gate
 				   * (AEC_SUP_GCAP_ENV_GATE) releases it on genuine
 				   * near-end voice. 1.0 = cap lifts after onset
 				   * (echo residual regains speech structure and
-				   * can re-trip the VAD mid-reply). */
+				   * can re-trip the VAD mid-reply). With the
+				   * two- and three-band ceiling it covers
+				   * 750-1600Hz and below 312Hz only. 0.15 (was
+				   * 0.25 = -12dB until the 2026-10-07 gain-1
+				   * re-baseline, see AEC_SUP_GATE_KAPPA): echo
+				   * removed +0.4-0.5dB on every worn sitting,
+				   * paying for BETA 1.0 and CAP_LO_GCAP 0.6. */
 #endif
 /* Option A: gate the sustained ceiling on the double-talk detector. The
  * blanket cap is prediction-blind, so with B alone it also caps the wearer's
@@ -589,9 +607,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * AEC_SUP_GATE_BAND_HZ) holds it on echo there: desk Halo 28, false
  * release 80% -> 0% of the reply. The cost: a wearer whose voice is below
  * the echo at the mic is not detected while the reply plays (desk talker
- * at -36dBFS under -31dBFS echo); the two-band ceiling limits the damage. */
+ * at -36dBFS under -31dBFS echo); the two-band ceiling limits the damage.
+ * KAPPA is a mic / reference amplitude ratio at mic gain 1, scaled by the
+ * effective mic gain (aec_tune_refresh) like every gate threshold.
+ * 0.46 (2026-10-07, the gain-1 re-baseline for the main app's likely
+ * production setting: mic gain 3 or 4 on units between Halo 04 and Halo 28,
+ * weighted towards Halo 04): with kappa scaled, Halo 04 worn needs ~0.2 for
+ * its near end and the strongly coupled desk Halo 28 >= ~0.45 to hold the
+ * gate on echo. 0.46 holds it there (gate open on echo 0) and, with
+ * BETA 1.0, CAP_LO_GCAP 0.6, STEADY_GCAP 0.15 and a 1.8 s hangover, keeps
+ * Halo 04's wearer: replays at gain 3 and 4 vs release 0.8.18 there, Halo 04
+ * worn echo removed 7.4/6.7 -> 10.3dB, gate open on echo 0.24/0.30 -> 0,
+ * talker kept -3.80/-3.36 -> -3.43dB; Halo 28 worn 13.2dB, kept -2.88
+ * (0.8.18 at gain 1: 13.8, -3.78). */
 #ifndef AEC_SUP_GATE_KAPPA
-#define AEC_SUP_GATE_KAPPA 0.5f
+#define AEC_SUP_GATE_KAPPA 0.46f
 #endif
 /* Fast-envelope smoothing of the excess (~0.5 = 2-block attack). */
 #ifndef AEC_SUP_GATE_FAST_A
@@ -609,9 +639,21 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_GATE_ABSFLOOR
 #define AEC_SUP_GATE_ABSFLOOR 0.9f
 #endif
-/* Release hangover (blocks) to hold through brief near-end dips (~1.2s). */
+/* Release hangover (blocks) to hold through brief near-end dips (~1.8s).
+ * 70 (was 60, 2026-10-06): with the high-band term (AEC_SUP_GATE_KAPPA_HF)
+ * holding the gate shut through Halo 04's restart bursts, the longer hold
+ * keeps more of the wearer between syllables on every worn and desk
+ * replay (worn Halo 28 talker kept -3.57 -> -3.49 dB, Halo 04 at gain 4
+ * talker frames cut > 10 dB 12.7% -> 12.0%), at no echo cost.
+ * 90 (2026-10-07, gain-1 re-baseline, see AEC_SUP_GATE_KAPPA): with the
+ * gate holding on echo everywhere at kappa 0.46, the longer hold keeps the
+ * wearer between words (vs 70 with the rest of the re-baseline: Halo 04
+ * worn talker kept -3.59 -> -3.43dB, crushed 0.114 -> 0.096, onsets
+ * missed 6% -> 3%; no echo cost on any sitting). Not longer: the replays
+ * do not score the echo let through after a genuine release, which the
+ * hangover prolongs. */
 #ifndef AEC_SUP_GATE_HANG
-#define AEC_SUP_GATE_HANG 60
+#define AEC_SUP_GATE_HANG 90
 #endif
 /* Rising-edge (transient) release path (worn latency lever, 2026-07-14).
  *
@@ -775,13 +817,16 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
  * ONSET_GCAP stays one band. 750Hz / 0.5 (-6dB): desk talker under the
  * echo (the gate misses it), talker frames cut by more than 10dB 52% ->
  * 11% on Halo 28 and 21% -> 1% on the EC, for ~1dB less echo removal.
+ * 0.6 (-4.4dB, 2026-10-07, gain-1 re-baseline, see AEC_SUP_GATE_KAPPA):
+ * Halo 04 worn talker kept -3.83 -> -3.43dB at gain 3/4 (crushed 0.129 ->
+ * 0.096) for 0.3-1.1dB of echo, which STEADY_GCAP 0.15 pays back.
  * Above the split STEADY_GCAP applies, up to CAP_HI_SPLIT_HZ (below).
  */
 #ifndef AEC_SUP_CAP_SPLIT_HZ
 #define AEC_SUP_CAP_SPLIT_HZ 750
 #endif
 #ifndef AEC_SUP_CAP_LO_GCAP
-#define AEC_SUP_CAP_LO_GCAP 0.5f
+#define AEC_SUP_CAP_LO_GCAP 0.6f
 #endif
 /* Third (top) band of the steady ceiling: adaptation bins at or above
  * CAP_HI_SPLIT_HZ take CAP_HI_GCAP instead of STEADY_GCAP while the
@@ -804,6 +849,127 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 #ifndef AEC_SUP_CAP_HI_GCAP
 #define AEC_SUP_CAP_HI_GCAP 0.1f
 #endif
+/* High-band reference term of the near-end gate: the gate's excess also
+ * subtracts KAPPA_HF x (the reference amplitude from GATE_HF_HZ up to
+ * 8kHz, minus GATE_HF_RATIO x the gate band's reference amplitude, when
+ * positive):
+ *   ex = re - kappa * xr - kappa_hf * max(0, xh - ratio * xr)
+ * Some speakers turn a loud sibilant into broadband energy at the mic:
+ * Halo 04 (worn, 2026-10-06), where a reply restarts after a pause on a
+ * sibilant (reference 3.4-8kHz ~25dB over the gate band), puts the gate
+ * band +30dB over its usual echo coupling for 60-100ms. The gate band's
+ * own reference predicts none of it, so the gate released on echo and
+ * the hangover held the cap open for over a second (gate open on echo
+ * 30% of the reply, 3 of 6 captures). The term covers only frames whose
+ * reference is dominated by the high band, so voiced echo (and a wearer
+ * talking over it) is unaffected. Replays: Halo 04 worn at gain 4 echo
+ * removed 6.8 -> 10.4dB, gate open on echo 0.27 -> 0.02; Halo 28 worn
+ * (no such bursts) unchanged; desk sittings talker kept 0.2-0.35dB lower.
+ * KAPPA_HF is a mic / reference amplitude ratio and scales with the mic
+ * gain; 0 turns the term off.
+ */
+#ifndef AEC_SUP_GATE_KAPPA_HF
+#define AEC_SUP_GATE_KAPPA_HF 0.15f
+#endif
+#ifndef AEC_SUP_GATE_HF_HZ
+#define AEC_SUP_GATE_HF_HZ 3000
+#endif
+#ifndef AEC_SUP_GATE_HF_RATIO
+#define AEC_SUP_GATE_HF_RATIO 3.0f
+#endif
+#define AEC_SUP_GATE_HF_MIN_HZ 500
+/* the high band must keep at least one bin below Nyquist (bin 511 starts
+ * at 7984.4Hz); it starts at or above a non-zero gate band's top
+ * (audio_aec_tune_check). With the full-band gate (gate_band_hz 0, up to
+ * FD_BIN_HI = 3.8kHz) the two overlap from gate_hf_hz up: the term then
+ * still measures how far the reference above gate_hf_hz exceeds
+ * gate_hf_ratio x the gate band's. */
+#define AEC_SUP_GATE_HF_MAX_HZ 7984
+/* Tracked double-talk threshold (FDAF build). With p_err < 2 p_ref
+ * (AEC_DTD_THRESHOLD) the filter froze only once the near end was about
+ * 50x the echo: echo-only p_err / p_ref sits at 0.006-0.04 (median) on
+ * every worn and desk sitting, so the filter kept adapting on most of a
+ * wearer's speech, and the misadapted prediction then made the suppressor
+ * take more of the wearer. The threshold is now MULT x a tracked low
+ * quantile (0.3) of the in-band p_err / p_ref ratio, clamped to
+ * [AEC_DTD_MIN, AEC_DTD_THRESHOLD] (x the mic gain squared): about 10x
+ * the unit's own echo-only ratio. The tracker starts at DTD_INIT (cold
+ * start; below the old fixed value, as a converged unit needs) and moves
+ * by a factor per block (AEC_DTD_UP / AEC_DTD_DOWN: ~0.15 nepers/s up,
+ * ~0.35 down), only while the reference gate is open
+ * (playback) and the history is clean, and not while the near-end gate
+ * is released, except while the filter is still cold (the hot-mu excess
+ * decays only when the filter adapts): a strongly coupled unit whose
+ * echo-only ratio starts above DTD_INIT would otherwise never adapt, its
+ * residual would hold the gate open and the tracker frozen. So such a unit
+ * raises its threshold until it adapts, up to the old fixed value, and a
+ * long double talk can at worst bring back the old threshold. The tracker
+ * is clamped to the threshold's bounds (AEC_DTD_CLAMP), so it never winds
+ * down below the floor and a rising residual lifts the threshold at once,
+ * and an echo-path change has a divergence escape (AEC_DTD_ESCAPE_BLOCKS):
+ * the rise is slow (~0.15 nepers/s) and paused while the gate is released,
+ * so a re-seated unit (new echo path, residual ~-6dB) or a coupling step
+ * froze adaptation for 12+ s. A gain change carries the ratio over (and
+ * aec_gain_adopt the filter). Reset with
+ * the filter (enable). Replays vs the fixed threshold: talker kept
+ * +0.1..+0.9dB on every worn and desk sitting (Halo 04 at gain 4
+ * -4.0 -> -3.2dB), real double talk kept +0.4..+0.8dB worn, echo within
+ * 0.2dB (the developer's earlier Halo 04 capture at gain 4: 12.8 ->
+ * 18.5dB, the fixed one let the filter misadapt). Host check 26: right
+ * after double talk 19.3 vs 6.1dB cancelled; check 24b's hot cold start
+ * converges (14.5dB, was 14.1); checks 27/28: an echo-path change recovers
+ * as fast as with the fixed threshold, 12 s of double talk does not escape.
+ * dtd_mult 0 = the fixed AEC_DTD_THRESHOLD.
+ */
+#ifndef AEC_DTD_MULT
+#define AEC_DTD_MULT 10.0f
+#endif
+#ifndef AEC_DTD_INIT
+#define AEC_DTD_INIT 0.25f
+#endif
+#define AEC_DTD_MIN  0.05f
+/* 0 = the tracker also stays frozen while the gate is released on a cold
+ * filter (host check 24b's control, with the escape off: the hot cold
+ * start never adapts) */
+#ifndef AEC_DTD_COLD_RISE
+#define AEC_DTD_COLD_RISE 1
+#endif
+/* 0 = the tracker is not clamped to the threshold's bounds (host check
+ * 27c's control: after a minute, a noise-floor step stays frozen ~30 s
+ * longer) */
+#ifndef AEC_DTD_CLAMP
+#define AEC_DTD_CLAMP 1
+#endif
+/* Divergence escape: a run of AEC_DTD_ESCAPE_BLOCKS playback blocks with
+ * adaptation frozen (p_err over the threshold) AND the residual coherent
+ * with the reference (coherence >= AEC_DTD_ESC_COH) resets the tracker to
+ * the fixed threshold. Frozen on a residual the reference explains means
+ * the echo path changed (re-seat, coupling step), not that the wearer
+ * talks: the wearer's speech is incoherent with the reference. A frozen
+ * incoherent block restarts the run, a block that adapts takes one off
+ * it. Host: an echo-path change or a x3 coupling step on a converged unit
+ * reads 0.27-0.40 and adapts again ~1 s later; 12 s of continuous double
+ * talk reads 0.01-0.07 (0.22 for a block at its onset). Replays of every
+ * worn and desk sitting (echo only, synthetic and real double talk): no
+ * escape, the run peaked at 16 blocks (a cold filter under an early
+ * wearer). The coherence is sum |Sxe|^2 / sum Sxx See over every
+ * AEC_DTD_COH_STEP-th adaptation bin (FD_COH_N bins) of the newest
+ * reference frame and the error, smoothed by AEC_DTD_COH_A per block.
+ * AEC_DTD_ESCAPE_BLOCKS 0 = off (host check control).
+ */
+#ifndef AEC_DTD_ESCAPE_BLOCKS
+#define AEC_DTD_ESCAPE_BLOCKS 40
+#endif
+#ifndef AEC_DTD_ESC_COH
+#define AEC_DTD_ESC_COH 0.15f
+#endif
+#define AEC_DTD_COH_A    0.05f
+#define AEC_DTD_COH_STEP 4u
+#define FD_COH_N         ((FD_BIN_HI - FD_BIN_LO) / AEC_DTD_COH_STEP + 1)
+/* the tracker's per-block factors: a 0.3-quantile tracker with log step
+ * 0.01, up exp(0.01 * 0.3), down exp(-0.01 * 0.7) */
+#define AEC_DTD_UP   1.0030045f
+#define AEC_DTD_DOWN 0.9930244f
 /* first bin at or above hz (bins are 15.625Hz = 1000/64) */
 #define AEC_HZ_TO_BIN(hz) ((uint32_t)(((hz) * 64u + 999u) / 1000u))
 #define AEC_SUP_GATE_BAND_MIN_HZ 500
@@ -868,6 +1034,11 @@ LOG_MODULE_REGISTER(audio_aec, CONFIG_HALO_LOG_LEVEL);
 	.cap_lo_gcap = AEC_SUP_CAP_LO_GCAP, \
 	.cap_hi_split_hz = AEC_SUP_CAP_HI_SPLIT_HZ, \
 	.cap_hi_gcap = AEC_SUP_CAP_HI_GCAP, \
+	.gate_kappa_hf = AEC_SUP_GATE_KAPPA_HF, \
+	.gate_hf_hz = AEC_SUP_GATE_HF_HZ, \
+	.gate_hf_ratio = AEC_SUP_GATE_HF_RATIO, \
+	.dtd_mult = AEC_DTD_MULT, \
+	.dtd_init = AEC_DTD_INIT, \
 }
 
 #define TUNE_KEY(f, ty, lo, hi) \
@@ -904,6 +1075,11 @@ static const struct audio_aec_tune_key tune_keys[] = {
 	TUNE_KEY(cap_lo_gcap, FLOAT, 0.0f, 1.0f),
 	TUNE_KEY(cap_hi_split_hz, U32, 0.0f, 8000.0f),
 	TUNE_KEY(cap_hi_gcap, FLOAT, 0.0f, 1.0f),
+	TUNE_KEY(gate_kappa_hf, FLOAT, 0.0f, 10.0f),
+	TUNE_KEY(gate_hf_hz, U32, (float)AEC_SUP_GATE_HF_MIN_HZ, (float)AEC_SUP_GATE_HF_MAX_HZ),
+	TUNE_KEY(gate_hf_ratio, FLOAT, 0.0f, 100.0f),
+	TUNE_KEY(dtd_mult, FLOAT, 0.0f, 1000.0f),
+	TUNE_KEY(dtd_init, FLOAT, AEC_DTD_MIN, AEC_DTD_THRESHOLD),
 };
 
 /* the mic thread's snapshot: the parameter set plus its block counts */
@@ -917,6 +1093,7 @@ struct aec_tune_rt {
 	uint32_t gate_bin_end;  /* gate band: bins [FD_BIN_LO, end) */
 	uint32_t cap_split_bin; /* bins [FD_BIN_LO, it) take cap_lo_gcap (0 = off) */
 	uint32_t cap_hi_bin;    /* bins >= it take cap_hi_gcap (FD_BINS = off) */
+	uint32_t gate_hf_bin;   /* high-band reference term: bins [it, FD_BINS) */
 };
 
 static struct audio_aec_tune tune_pub = AEC_TUNE_DEFAULTS;
@@ -933,25 +1110,130 @@ static struct aec_tune_rt tune = {
 					     : FD_BIN_HI + 1,
 	.cap_split_bin = AEC_HZ_TO_BIN(AEC_SUP_CAP_SPLIT_HZ),
 	.cap_hi_bin = AEC_CAP_HI_BIN(AEC_SUP_CAP_HI_SPLIT_HZ),
+	.gate_hf_bin = AEC_HZ_TO_BIN(AEC_SUP_GATE_HF_HZ),
 };
 static atomic_t tune_gen = ATOMIC_INIT(1);
 static uint32_t tune_seen = 1;
-static struct k_spinlock tune_lock;
+#endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
 
-/* Mic thread, top of each block: adopt a newly published set. */
+/* Effective mic gain relative to gain 1 (audio_aec_set_mic_gain_scale),
+ * published under tune_lock with its own generation, so a gain change does
+ * not bump tune_gen (which identifies the aec_tune set).
+ */
+static struct k_spinlock tune_lock;
+static float gain_pub = 1.0f;
+/* accepted range: the PDM gain steps give 0.045..5.5; the floor keeps a
+ * denormal or tiny scale from zeroing the thresholds and dividing by zero
+ * on the next change */
+#define AEC_GAIN_SCALE_MIN 0.001f
+#define AEC_GAIN_SCALE_MAX 100.0f
+static atomic_t gain_gen = ATOMIC_INIT(1);
+
+/* The mic thread's adopted scale g and the mic-vs-reference POWER
+ * thresholds scaled by g^2: the adaptation-freeze DTD (p_err vs
+ * AEC_DTD_THRESHOLD * p_ref), the divergence guard on ||w||^2 (the filter
+ * is a mic / reference amplitude ratio, so its energy scales by g^2) and
+ * option A's dead-end p_err vs p_ref release. With the gate's amplitude
+ * keys scaled by g (aec_tune_refresh), every AEC decision is the same at
+ * any mic gain. Constant-folded values at g = 1.
+ */
+static uint32_t gain_seen = 1;
+static float mic_g = 1.0f;
+static float dtd_thr = AEC_DTD_THRESHOLD;
+static float norm_clamp = AEC_NORM_CLAMP;
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+/* Tracked double-talk threshold (AEC_DTD_MULT), mic thread only: dtd_q is
+ * the tracked quantile of the in-band p_err / p_ref (at the current mic
+ * gain), valid once dtd_q_set; dtd_eff the threshold in force.
+ */
+static bool dtd_q_set;
+static float dtd_q;
+static float dtd_eff = AEC_DTD_THRESHOLD;
+static uint32_t dtd_stuck;   /* divergence escape count (blocks) */
+static uint32_t dtd_escapes; /* escapes taken (diagnostics) */
+static float dtd_coh;        /* last block's residual coherence */
+
+static void aec_dtd_rescale(float r)
+{
+	dtd_q *= r;
+	dtd_eff *= r;
+}
+#endif
+
+/* A gain change scales the mic by r = g_new / g_old from the next block
+ * on. Carry the mic-domain state over with it, so a converged filter keeps
+ * cancelling instead of re-adapting by a factor r: the filter (a mic /
+ * reference amplitude ratio, both builds) and the mic and error signal
+ * filter memories by r, the mic and error power trackers by r^2, and in
+ * the FDAF build the suppressor's predicted-echo and residual spectra by
+ * r^2, the gate's residual power by r^2 and its envelopes (amplitudes)
+ * by r. Reference-side state is unaffected. Unscaled, a x2.5 step left a
+ * converged unit's residual 10-12dB higher until the filter had
+ * re-adapted. AEC_GAIN_RESCALE 0 = off (host check control).
+ */
+#ifndef AEC_GAIN_RESCALE
+#define AEC_GAIN_RESCALE 1
+#endif
+
+static void aec_state_rescale(float r); /* after the state, below */
+
+static void aec_gain_adopt(float g)
+{
+	const float r = g / mic_g;
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	/* the tracked double-talk ratio is a mic / reference power ratio:
+	 * carry it over to the new gain */
+	aec_dtd_rescale(r * r);
+#endif
+	if (AEC_GAIN_RESCALE && r != 1.0f) {
+		aec_state_rescale(r);
+	}
+	mic_g = g;
+	dtd_thr = AEC_DTD_THRESHOLD * g * g;
+	norm_clamp = AEC_NORM_CLAMP * g * g;
+}
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+/* Mic thread, top of each block: adopt a newly published set and mic gain
+ * scale.
+ */
 static void aec_tune_refresh(void)
 {
 	uint32_t gen = (uint32_t)atomic_get(&tune_gen);
+	uint32_t ggen = (uint32_t)atomic_get(&gain_gen);
 
-	if (gen == tune_seen) {
+	if (gen == tune_seen && ggen == gain_seen) {
 		return;
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&tune_lock);
 
 	tune.p = tune_pub;
+	float g = gain_pub;
+
 	tune_seen = (uint32_t)atomic_get(&tune_gen);
+	gain_seen = (uint32_t)atomic_get(&gain_gen);
 	k_spin_unlock(&tune_lock, key);
+
+	/* The gate runs on ex = sqrt(p_err) - kappa * sqrt(p_ref) - the
+	 * high-band term, and on fast, floor and mid envelopes of ex, all
+	 * amplitudes: a mic gain g scales sqrt(p_err) by g and leaves the
+	 * reference alone. kappa and kappa_hf (mic / reference amplitude
+	 * ratios) and absfloor and edge_abs (amplitudes in sqrt(p_err) units)
+	 * are all expressed at mic gain 1 and scale by g, so ex and its
+	 * envelopes scale exactly by g and the gate decides as it would at
+	 * gain 1: an aec_tune set means the same at any gain, and the gain
+	 * only matters through clipping. gate_ratio / gate_edge_ratio /
+	 * gate_hf_ratio are ratios of like quantities and gate_pref_min is a
+	 * reference power: unaffected.
+	 */
+	tune.p.gate_kappa *= g;
+	tune.p.gate_absfloor *= g;
+	tune.p.gate_edge_abs *= g;
+	tune.p.gate_kappa_hf *= g;
+	aec_gain_adopt(g);
 
 	tune.onset_hops = tune.p.onset_ms / 20;
 	tune.onset_hold_hops = tune.p.onset_hold_ms / 20;
@@ -964,8 +1246,37 @@ static void aec_tune_refresh(void)
 						: FD_BIN_HI + 1;
 	tune.cap_split_bin = AEC_HZ_TO_BIN(tune.p.cap_split_hz);
 	tune.cap_hi_bin = AEC_CAP_HI_BIN(tune.p.cap_hi_split_hz);
+	tune.gate_hf_bin = AEC_HZ_TO_BIN(tune.p.gate_hf_hz);
 }
 #endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
+
+int audio_aec_set_mic_gain_scale(float scale)
+{
+	uint32_t u;
+
+	/* reject NaN/inf by bit pattern (-ffast-math, see tune_check) */
+	memcpy(&u, &scale, sizeof(u));
+	if ((u & 0x7f800000u) == 0x7f800000u ||
+	    !(scale >= AEC_GAIN_SCALE_MIN && scale <= AEC_GAIN_SCALE_MAX)) {
+		return -EINVAL;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+
+	gain_pub = scale;
+	atomic_inc(&gain_gen);
+	k_spin_unlock(&tune_lock, key);
+	return 0;
+}
+
+float audio_aec_get_mic_gain_scale(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+	float g = gain_pub;
+
+	k_spin_unlock(&tune_lock, key);
+	return g;
+}
 
 const struct audio_aec_tune_key *audio_aec_tune_keys(size_t *count)
 {
@@ -1014,6 +1325,9 @@ const char *audio_aec_tune_check(const struct audio_aec_tune *t)
 	if (t->cap_hi_split_hz != 0 && t->cap_split_hz != 0 &&
 	    t->cap_hi_split_hz <= t->cap_split_hz) {
 		return "cap_hi_split_hz";
+	}
+	if (t->gate_band_hz != 0 && t->gate_hf_hz < t->gate_band_hz) {
+		return "gate_hf_hz";
 	}
 	return NULL;
 #else
@@ -1290,6 +1604,8 @@ static struct {
 	float buf[FD_N];     /* time-domain scratch */
 	float spec[FD_N];    /* spectrum scratch */
 	float e_blk[FD_H];   /* post-clamp error block for the E transform */
+	/* divergence escape: smoothed Re/Im Sxe, Sxx, See per sampled bin */
+	float coh[4 * FD_COH_N];
 	uint32_t frame;      /* hop counter */
 } fd AEC_FD_SECTION;
 
@@ -1330,6 +1646,8 @@ static struct {
 	float gate_mid;          /* medium EMA: edge-detector baseline (see MID_A) */
 	float gate_pref;         /* gate-band reference / residual powers */
 	float gate_perr;         /* (AEC_SUP_GATE_BAND_HZ) */
+	float gate_phf;          /* reference power from gate_hf_hz up
+				  * (AEC_SUP_GATE_KAPPA_HF) */
 	bool  gate_floor_init;   /* seed the floor/mid on the first block */
 	uint32_t gate_hang;      /* release hangover blocks remaining */
 	bool  gate_released;     /* last block's release decision (diagnostics) */
@@ -1345,6 +1663,63 @@ BUILD_ASSERT(256 + sizeof(fd) + sizeof(sup) <=
 	     CONFIG_HALO_MEM_EXTERNAL_SRAM_OFFSET,
 	     "guard + FDAF + suppressor must fit below the ITCM heap offset");
 #endif
+
+/* divergence escape run and coherence accumulators: wherever the
+ * reference history is wiped (enable, resync, re-engage after the
+ * speaker-idle bypass) or the mic history splices (lost samples), so a
+ * frozen-coherent run at the end of one reply never counts towards an
+ * escape in the next
+ */
+static void aec_dtd_esc_reset(void)
+{
+	dtd_stuck = 0;
+	memset(fd.coh, 0, sizeof(fd.coh));
+	dtd_coh = 0.0f;
+}
+#endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
+
+/* see AEC_GAIN_RESCALE */
+static void aec_state_rescale(float r)
+{
+	const float r2 = r * r;
+
+	for (uint32_t j = 0; j < AEC_TAPS; j++) {
+		aec.w[j] *= r;
+	}
+	aec.p_err *= r2;
+	aec.p_mic *= r2;
+	aec.mic_lf1 *= r;
+	aec.mic_lf2 *= r;
+	aec.err_lf1 *= r;
+	aec.err_lf2 *= r;
+	for (uint32_t j = 0; j < ARRAY_SIZE(aec.err_lp); j++) {
+		aec.err_lp[j] *= r;
+	}
+	aec.err_pe *= r;
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	for (uint32_t k = 0; k < FD_K; k++) {
+		for (uint32_t j = 0; j < FD_N; j++) {
+			fd.W[k][j] *= r;
+		}
+	}
+	for (uint32_t j = 0; j < AEC_SUP_NBINS; j++) {
+		sup.Sy[j] *= r2;
+		sup.Se[j] *= r2;
+	}
+	sup.gate_perr *= r2;
+	sup.gate_fast *= r;
+	sup.gate_floor *= r;
+	sup.gate_mid *= r;
+	/* coherence: Sxe x r, See x r^2, Sxx (reference) unchanged */
+	for (uint32_t i = 0; i < FD_COH_N; i++) {
+		fd.coh[4 * i] *= r;
+		fd.coh[4 * i + 1] *= r;
+		fd.coh[4 * i + 3] *= r2;
+	}
+#endif
+}
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
 
 #if defined(CONFIG_CMSIS_DSP)
 static arm_rfft_fast_instance_f32 fd_fft;
@@ -1550,12 +1925,17 @@ static void aec_session_reset(void)
 	sup.gate_mid = 0.0f;
 	sup.gate_pref = 0.0f;
 	sup.gate_perr = 0.0f;
+	sup.gate_phf = 0.0f;
 	sup.gate_floor_init = false;
 	sup.gate_hang = 0;
 	sup.gate_released = false;
 	sup.pb_hold = false;
 	aec.ref_unrel_hops = 0;
 	aec.ref_quiet = UINT32_MAX; /* full: the first reply is ducked */
+	/* W wiped: the double-talk tracker restarts from dtd_init */
+	dtd_q_set = false;
+	dtd_eff = dtd_thr;
+	aec_dtd_esc_reset();
 #else
 	aec.xf_norm2 = 0.0f;
 #endif
@@ -1888,6 +2268,7 @@ static size_t ref_consume(float *dst, float *dst_f, size_t n)
 			memset(fd.Xf, 0, sizeof(fd.Xf));
 			memset(fd.P, 0, sizeof(fd.P));
 			aec.fd_hist_fill = 0;
+			aec_dtd_esc_reset();
 #else
 			aec.xf_norm2 = 0.0f;
 #endif
@@ -2213,6 +2594,18 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 	aec.p_err += AEC_FD_POW_ALPHA * (pe - aec.p_err);
 	sup.gate_pref += AEC_FD_POW_ALPHA * (pr_g - sup.gate_pref);
 	sup.gate_perr += AEC_FD_POW_ALPHA * (pe_g - sup.gate_perr);
+	{
+		/* the high-band reference term's power (AEC_SUP_GATE_KAPPA_HF):
+		 * the raw reference spectrum, up to 8kHz. Tracked even while
+		 * the term is off, so turning it on starts from a current value */
+		const float *Xr = fd.X[slot];
+		float ph = 0.0f;
+
+		for (uint32_t b = tune.gate_hf_bin; b < FD_BINS; b++) {
+			ph += Xr[2 * b] * Xr[2 * b] + Xr[2 * b + 1] * Xr[2 * b + 1];
+		}
+		sup.gate_phf += AEC_FD_POW_ALPHA * (ph - sup.gate_phf);
+	}
 
 #if AEC_SUP_GCAP_ENV_GATE
 	/* near-end release gate (see AEC_SUP_GCAP_ENV_GATE): echo-removed
@@ -2230,6 +2623,17 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		float xr = __builtin_sqrtf(gpr > 0.0f ? gpr : 0.0f);
 		float ex = re - tp->gate_kappa * xr;
 
+		/* high-band reference term (AEC_SUP_GATE_KAPPA_HF): only the
+		 * high-band reference in excess of gate_hf_ratio x the gate
+		 * band's counts */
+		if (tp->gate_kappa_hf > 0.0f) {
+			float xh = __builtin_sqrtf(sup.gate_phf > 0.0f ? sup.gate_phf : 0.0f) -
+				   tp->gate_hf_ratio * xr;
+
+			if (xh > 0.0f) {
+				ex -= tp->gate_kappa_hf * xh;
+			}
+		}
 		if (ex < 0.0f) {
 			ex = 0.0f;
 		}
@@ -2284,8 +2688,98 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		aec.fd_hist_fill++;
 	}
 
+	/* double-talk threshold: tracked (AEC_DTD_MULT) or fixed */
+	float dthr = dtd_thr;
+
+	if (tp->dtd_mult > 0.0f) {
+		const float g2 = mic_g * mic_g;
+
+		if (!dtd_q_set) {
+			dtd_q = tp->dtd_init * g2 / tp->dtd_mult;
+			dtd_q_set = true;
+		}
+		/* playback, clean history, and the wearer not detected - or the
+		 * filter still cold, so that a strongly coupled unit (residual
+		 * holding the gate open) can raise its threshold until it adapts
+		 */
+		const bool track = adapt_ok && hist_ok && aec.p_ref > tp->gate_pref_min &&
+				   aec.p_err > 0.0f;
+
+		if (track && (sup.gate_hang == 0 ||
+			      (AEC_DTD_COLD_RISE &&
+			       aec.mu_hot_excess >= AEC_SUP_ONSET_LIFT_WARM))) {
+			dtd_q *= aec.p_err > dtd_q * aec.p_ref ? AEC_DTD_UP : AEC_DTD_DOWN;
+		}
+		/* anti-windup (AEC_DTD_CLAMP): the tracker lives inside the
+		 * threshold's bounds, so it starts rising from the floor the
+		 * moment the residual does (unclamped, a linear unit's ratio
+		 * winds it ever further under the floor, ~50x after a minute,
+		 * and a rise in the residual then stays frozen ~30 s longer) */
+#if AEC_DTD_CLAMP
+		const float qlo = AEC_DTD_MIN * g2 / tp->dtd_mult;
+		const float qhi = dtd_thr / tp->dtd_mult;
+
+		if (dtd_q < qlo) {
+			dtd_q = qlo;
+		} else if (dtd_q > qhi) {
+			dtd_q = qhi;
+		}
+#endif
+		dthr = tp->dtd_mult * dtd_q;
+		if (dthr < AEC_DTD_MIN * g2) {
+			dthr = AEC_DTD_MIN * g2;
+		} else if (dthr > dtd_thr) {
+			dthr = dtd_thr;
+		}
+		/* divergence escape (AEC_DTD_ESCAPE_BLOCKS): adaptation frozen
+		 * during playback on a residual coherent with the reference is
+		 * echo the filter no longer cancels (the echo path changed), not
+		 * the wearer. Fall back to the fixed threshold; the tracker then
+		 * decays to the unit's ratio as the filter re-converges. The
+		 * coherence: per-bin smoothed cross and auto spectra of the
+		 * newest reference frame and the error on every
+		 * AEC_DTD_COH_STEP-th adaptation bin, sum |Sxe|^2 / sum Sxx See.
+		 * Blocks without playback hold the run.
+		 */
+		float coh = 0.0f;
+
+		if (track) {
+			float num = 0.0f, den = 0.0f;
+
+			for (uint32_t i = 0; i < FD_COH_N; i++) {
+				const uint32_t b = FD_BIN_LO + i * AEC_DTD_COH_STEP;
+				const float xr = Xn[2 * b], xi = Xn[2 * b + 1];
+				const float er = E[2 * b], ei = E[2 * b + 1];
+				float *c = &fd.coh[4 * i];
+
+				c[0] += AEC_DTD_COH_A * ((xr * er + xi * ei) - c[0]);
+				c[1] += AEC_DTD_COH_A * ((xr * ei - xi * er) - c[1]);
+				c[2] += AEC_DTD_COH_A * ((xr * xr + xi * xi) - c[2]);
+				c[3] += AEC_DTD_COH_A * ((er * er + ei * ei) - c[3]);
+				num += c[0] * c[0] + c[1] * c[1];
+				den += c[2] * c[3];
+			}
+			coh = den > 0.0f ? num / den : 0.0f;
+		}
+		dtd_coh = coh;
+		if (track) {
+			if (aec.p_err < dthr * aec.p_ref) {
+				dtd_stuck -= dtd_stuck > 0;
+			} else if (coh < AEC_DTD_ESC_COH) {
+				dtd_stuck = 0;
+			} else if (AEC_DTD_ESCAPE_BLOCKS > 0 &&
+				   ++dtd_stuck >= AEC_DTD_ESCAPE_BLOCKS) {
+				dtd_stuck = 0;
+				dtd_q = dtd_thr / tp->dtd_mult;
+				dthr = dtd_thr;
+				dtd_escapes++;
+			}
+		}
+	}
+	dtd_eff = dthr;
+
 	bool adapt = adapt_ok && hist_ok && aec.p_ref > 1e-8f &&
-		     aec.p_err < AEC_DTD_THRESHOLD * aec.p_ref;
+		     aec.p_err < dthr * aec.p_ref;
 
 	if (adapt) {
 		/* cold-onset schedule (see AEC_FD_MU_HOT_EXCESS): hot mu
@@ -2363,8 +2857,8 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		}
 		wn += s * (1.0f / FD_N);
 	}
-	if (wn > AEC_NORM_CLAMP) {
-		float s = __builtin_sqrtf((AEC_NORM_CLAMP / 4.0f) / wn);
+	if (wn > norm_clamp) {
+		float s = __builtin_sqrtf((norm_clamp / 4.0f) / wn);
 
 		for (uint32_t k = 0; k < FD_K; k++) {
 			for (uint32_t j = 0; j < FD_N; j++) {
@@ -2537,7 +3031,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			}
 		}
 #elif AEC_SUP_GCAP_DTD_GATE
-		if (aec.p_err >= AEC_SUP_GCAP_DTD_RATIO * aec.p_ref) {
+		if (aec.p_err >= AEC_SUP_GCAP_DTD_RATIO * mic_g * mic_g * aec.p_ref) {
 			steady_cap = 1.0f; /* near-end: release the sustained cap */
 			cap_hold = false;
 		}
@@ -2650,6 +3144,7 @@ void audio_aec_note_mic_loss(size_t samples)
 	aec.mic_lost += samples;
 #if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
 	aec.fd_hist_fill = 0;
+	aec_dtd_esc_reset();
 #else
 	aec.mu_ramp = 0;
 #endif
@@ -2764,6 +3259,16 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 	 * (the reset included) reads it
 	 */
 	aec_tune_refresh();
+#else
+	/* the mic gain scale alone (no tune set in the time-domain build) */
+	if ((uint32_t)atomic_get(&gain_gen) != gain_seen) {
+		k_spinlock_key_t key = k_spin_lock(&tune_lock);
+		float g = gain_pub;
+
+		gain_seen = (uint32_t)atomic_get(&gain_gen);
+		k_spin_unlock(&tune_lock, key);
+		aec_gain_adopt(g);
+	}
 #endif
 	if (atomic_cas(&reset_req, 1, 0)) {
 		aec_session_reset();
@@ -2823,6 +3328,7 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 		aec.p_err = 0.0f;
 		sup.gate_pref = 0.0f;
 		sup.gate_perr = 0.0f;
+		sup.gate_phf = 0.0f;
 #endif
 		return;
 	}
@@ -3089,7 +3595,7 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			 * wearer is speaking (double-talk) - freeze
 			 */
 			if (adapt_ok && aec.p_ref > 1e-8f &&
-			    aec.p_err < AEC_DTD_THRESHOLD * aec.p_ref) {
+			    aec.p_err < dtd_thr * aec.p_ref) {
 				float mu = AEC_MU;
 
 				/* soft-start after each gate-on */
@@ -3120,8 +3626,8 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			aec.w[k] *= leak;
 			wn += aec.w[k] * aec.w[k];
 		}
-		if (wn > AEC_NORM_CLAMP) {
-			float s = __builtin_sqrtf((AEC_NORM_CLAMP / 4.0f) / wn);
+		if (wn > norm_clamp) {
+			float s = __builtin_sqrtf((norm_clamp / 4.0f) / wn);
 
 			for (size_t k = 0; k < AEC_TAPS; k++) {
 				aec.w[k] *= s;
@@ -3224,6 +3730,18 @@ const float *audio_aec_snapshot(struct audio_aec_stats *stats, size_t *taps)
 	stats->sup_gate_mid = 0.0f;
 	stats->sup_gate_rel = 0u;
 	stats->sup_pb_hold = 0u;
+#endif
+	stats->mic_gain_scale = audio_aec_get_mic_gain_scale();
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	stats->dtd_thr = dtd_eff / (mic_g * mic_g);
+	stats->dtd_escapes = dtd_escapes;
+	stats->dtd_coh = dtd_coh;
+	stats->dtd_run = dtd_stuck;
+#else
+	stats->dtd_thr = dtd_thr / (mic_g * mic_g);
+	stats->dtd_escapes = 0;
+	stats->dtd_coh = 0.0f;
+	stats->dtd_run = 0;
 #endif
 	stats->p_ref = aec.p_ref;
 	stats->p_err = aec.p_err;

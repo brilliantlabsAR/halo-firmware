@@ -348,6 +348,12 @@ def write_report(root, silero=False):
       + (", restored at the end" if dv.get("gain_restored") else "") + f"), voice=true, AEC off "
       f"for step 2. Speaker LC3 volume {st['volume']}, gain {st['spk_gain']}, budget {st['budget']}."
       + (f" Desk mode: Mac voice at afplay -v {st.get('afplay_volume')}." if st.get("afplay_volume") else ""))
+    import calib_offline as O
+    rp = os.path.join(root, "replay")
+    gs = O.session_gain_scale(rp) if os.path.exists(os.path.join(rp, "manifest.json")) else 1.0
+    if gs != 1.0:
+        P(f"\nThe replays scale the gate's thresholds by {gs:g} (the effective mic gain over gain 1), "
+          "as the firmware does; every aec_tune value in this report is a gain-1 value.")
     tab = dv.get("aec_tune")
     P(f"\n`frame.microphone.aec_tune`: " + (f"present, {len(tab)} keys." if tab else
                                             "absent (step 4 skipped)."))

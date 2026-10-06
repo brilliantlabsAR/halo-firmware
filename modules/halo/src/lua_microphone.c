@@ -785,7 +785,7 @@ static int lua_microphone_start(lua_State *L)
 	int sample_rate = 8000;
 	int bit_depth = 16;
 	int channels = 1;
-	int gain = 0;
+	int gain = AUDIO_MIC_DEFAULT_GAIN;
 	int lc3_duration = 1000;
 	int lc3_bitrate = 16000;
 
@@ -1430,6 +1430,14 @@ static int lua_microphone_diag(lua_State *L)
 		lua_setfield(L, -2, "tune_gen");
 		lua_pushinteger(L, st.ref_quiet);
 		lua_setfield(L, -2, "ref_quiet");
+		lua_pushnumber(L, st.mic_gain_scale);
+		lua_setfield(L, -2, "mic_gain_scale");
+		lua_pushnumber(L, st.dtd_thr);
+		lua_setfield(L, -2, "dtd_thr");
+		lua_pushinteger(L, (lua_Integer)st.dtd_escapes);
+		lua_setfield(L, -2, "dtd_escapes");
+		lua_pushnumber(L, st.dtd_coh);
+		lua_setfield(L, -2, "dtd_coh");
 		lua_pushnumber(L, st.p_ref);
 		lua_setfield(L, -2, "p_ref");
 		lua_pushnumber(L, st.p_err);

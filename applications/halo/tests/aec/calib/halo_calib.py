@@ -36,7 +36,10 @@ Step 4 runs only on firmware with frame.microphone.aec_tune; steps 1-3 work
 on any firmware with start{aec=, voice=} (0.8.17 and later). Step 3 replays
 the captures through this tree's audio_aec.c (built on the host on first
 use: needs a C compiler), so run it from the tree the device was built from.
-Nothing on the device is wiped. /lfs/cap.lc3 is written and removed. If a
+Nothing on the device is wiped. /lfs/cap.lc3 is written and removed; before
+each recording a probe checks /lfs has room for it (35-55 KB), and a full
+/lfs stops the session with "device storage full: N KB free, need M KB"
+(free space, then --resume). If a
 saved mic gain (frame.microphone.gain(), the persisted audio/gain setting)
 overrides start{gain=} and you agree (or pass --gain-policy set), it is set
 for the sitting and the old value is saved in session.json first and
@@ -419,6 +422,25 @@ class Ble:
         ls = await self.lines("print('G '..tostring(frame.microphone.gain())) print('GEND')", "GEND")
         return int(float([x for x in ls if x.startswith("G ")][-1][2:]))
 
+    async def gain_scale_probe(self, g):
+        """start{gain=g}: the effective mic gain scale the AEC was handed
+        (diag('stats').mic_gain_scale), or None on firmware without it or if
+        the mic would not start. A saved gain overrides start{gain=}, so
+        this tells "nothing saved" from a saved gain equal to the default."""
+        ls = await self.lines(
+            "local m=frame.microphone pcall(m.stop) "
+            f"local ok,e=pcall(m.start,{{sample_rate={C.SR}, bit_depth=16, channels=1, gain={int(g)}}}) "
+            "local s=nil if ok and m.diag then local o,t=pcall(m.diag,'stats') "
+            "if o and type(t)=='table' then s=t.mic_gain_scale end end pcall(m.stop) "
+            "print('GS '..tostring(s)..' '..tostring(ok and '' or e)) print('GSEND')", "GSEND")
+        r = [x for x in ls if x.startswith("GS ")]
+        v = r[-1].split(" ", 2) if r else ["GS", "nil", "no reply"]
+        if v[1] == "nil":
+            if len(v) > 2 and v[2]:
+                self.log(f"gain scale probe: mic start failed: {v[2]}")
+            return None
+        return float(v[1])
+
     async def set_gain(self, g):
         """gain() persists (audio/gain) and needs a started mic."""
         await self.lua(f"frame.microphone.start{{sample_rate={C.SR}, bit_depth=16, channels=1}} "
@@ -439,11 +461,27 @@ class Ble:
             raise RuntimeError(f"upload incomplete {ls[-1]}/{len(blob)}")
         self.clip_loaded = cid
 
+    async def space_check(self, need):
+        """Free-space probe for /lfs (frame.file has no statvfs): write up to
+        `need` bytes to cap.lc3 in 4000-byte chunks, each write checked, then
+        remove it. Returns (bytes written, device error or None)."""
+        ls = await self.lines(
+            "pcall(frame.file.remove,'cap.lc3') local w,e=0,nil "
+            "local ok,f=pcall(frame.file.open,'cap.lc3','w') "
+            "if not ok then e=f else local s=string.rep('0',4000) "
+            f"while w<{int(need)} do local ok2,e2=pcall(f.write,f,s) "
+            "if not ok2 then e=e2 break end w=w+#s end pcall(f.close,f) end "
+            "pcall(frame.file.remove,'cap.lc3') collectgarbage() "
+            "print('SP '..w..' '..tostring(e)) print('SPEND')", "SPEND", timeout=60)
+        _, w, err = parse_counts(ls, "SP", 1)
+        return w[0], err
+
     async def capture(self, st, aec, tts, seconds, on_start, prompts=()):
         """One trial: mic (and optionally the uploaded clip) on device, captured
-        to Lua RAM, written to /lfs/cap.lc3 and read back. Returns
+        to Lua RAM, written to /lfs/cap.lc3 (every write checked: a full /lfs
+        stops the session with StorageFull) and read back. Returns
         (pcm, raw lc3, diag rows, info)."""
-        target = int((LEAD_S + seconds + TAIL_S) * C.LC3_BPS)
+        target = capture_bytes(seconds)
         await self.lua("pcall(frame.file.remove, 'cap.lc3') print('k')")
         await self.lua("capt={} capn=0 dg={} collectgarbage() "
                        "drainf=function() local s=frame.microphone.read(4080) "
@@ -480,13 +518,16 @@ class Ble:
             raise
         if "ok4" not in self.printed:
             raise RuntimeError(f"playback failed: {self.printed[-3:]}")
-        self.printed.clear()
-        await self.lua(
+        ls = await self.lines(
             f"for i=1,{int((TAIL_S + 5) * 100)} do if capn>={target} then break end "
             "drainf() frame.sleep(0.01) end frame.microphone.stop() "
-            "local f=frame.file.open('cap.lc3','w') "
-            "for i=1,#capt do pcall(function() f:write(capt[i]) end) end "
-            "f:close() capt=nil collectgarbage() print(capn)", timeout=int(TAIL_S) + 60)
+            "local w,e=0,nil local ok,f=pcall(frame.file.open,'cap.lc3','w') "
+            "if not ok then e=f else for i=1,#capt do local ok2,e2=pcall(f.write,f,capt[i]) "
+            "if not ok2 then e=e2 break end w=w+#capt[i] end pcall(f.close,f) end "
+            "capt=nil collectgarbage() print('WR '..capn..' '..w..' '..tostring(e)) print('WREND')",
+            "WREND", timeout=int(TAIL_S) + 60)
+        _, (capn, written), werr = parse_counts(ls, "WR", 2)
+        check_write(capn, written, werr)
         diag = [list(map(float, x.split())) for x in
                 await self.lines("for i=1,#dg do print(dg[i]) end print('DGEND')", "DGEND")]
         self.rx.clear()
@@ -498,7 +539,8 @@ class Ble:
         await asyncio.sleep(0.5)
         raw = bytes(self.rx)
         raw = raw[:len(raw) - len(raw) % C.LC3_FRAME_BYTES]
-        return C.lc3_decode(raw), raw, diag, dict(target_bytes=target, got_bytes=len(raw))
+        return C.lc3_decode(raw), raw, diag, dict(target_bytes=target, got_bytes=len(raw),
+                                                  write=[capn, written, werr])
 
     # end of session (finish_device): one call per thing to put back
     async def tune_defaults(self):
@@ -515,6 +557,61 @@ class Ble:
 
 class Abort(BaseException):
     """Stop the session now (state is saved; --resume continues)."""
+
+
+class StorageFull(Abort):
+    """/lfs cannot hold a capture: stop with a clear message (no retries; a
+    BLE retry cannot help). Free space on the device, then --resume."""
+
+
+# headroom on top of a capture's bytes for the LittleFS metadata and
+# copy-on-write blocks (2 x 4 KB blocks)
+CAP_MARGIN = 8 * 1024
+
+
+def capture_bytes(seconds):
+    """Bytes of LC3 one recording writes to /lfs/cap.lc3."""
+    return int((LEAD_S + seconds + TAIL_S) * C.LC3_BPS)
+
+
+def parse_counts(lines, tag, n):
+    """'<tag> <int> x n <device error or nil>' from a REPL print ->
+    (line, [ints], error or None)."""
+    ln = next((x for x in reversed(lines) if x.startswith(tag + " ")), None)
+    if ln is None:
+        raise RuntimeError(f"no {tag} reply from the device: {lines[-3:]}")
+    f = ln.split(" ", n + 1)
+    err = f[n + 1] if len(f) > n + 1 and f[n + 1] != "nil" else None
+    return ln, [int(float(v)) for v in f[1:n + 1]], err
+
+
+def storage_full_msg(free_b, need_b, err=None):
+    return (f"device storage full: {free_b / 1024:.0f} KB free, need {need_b / 1024:.0f} KB; "
+            "free space or remove files on the device (/lfs, e.g. frame.file.listdir('/') and "
+            "frame.file.remove(name)), then continue with --resume latest"
+            + (f" (device: {err})" if err else ""))
+
+
+def check_space(written, need, err):
+    """The free-space probe's result (space_check) against one capture."""
+    if written < need:
+        raise StorageFull(storage_full_msg(written, need, err))
+
+
+def _no_space(err):
+    e = (err or "").lower()
+    return "-28" in e or "no space" in e or "incomplete write" in e
+
+
+def check_write(capn, written, err):
+    """The capture's write to /lfs/cap.lc3: every chunk must land. A full
+    filesystem (-28 ENOSPC, or a short write) is StorageFull; any other
+    write error is an ordinary failure (retried)."""
+    if written >= capn and err is None:
+        return
+    if _no_space(err) or err is None:
+        raise StorageFull(storage_full_msg(written, capn + CAP_MARGIN, err))
+    raise RuntimeError(f"writing /lfs/cap.lc3 failed after {written} of {capn} bytes: {err}")
 
 
 def gain_cmd(g):
@@ -574,6 +671,9 @@ async def run_trial(a, S, dev, ui, t, player, clips_blob, tune_keys):
                 if bad:
                     S.log(f"trial {t['id']}: aec_tune readback differs: {bad}")
                     ui.warn(f"aec_tune readback differs from the request: {bad}")
+            need = capture_bytes(seconds) + CAP_MARGIN
+            got, err = await dev.space_check(need)
+            check_space(got, need, err)
             if t["prompts"] and ui.worn:
                 await ui.countdown(3, "starting in")
             else:
@@ -585,6 +685,7 @@ async def run_trial(a, S, dev, ui, t, player, clips_blob, tune_keys):
                     await ui.prompts(t["prompts"], t0, player)
             pcm, raw, diag, info = await dev.capture(st, t["aec"], tts, seconds, on_start,
                                                     prompts=t["prompts"])
+            check_write(*info["write"])
             if len(pcm) < 0.8 * (LEAD_S + seconds + TAIL_S) * C.SR:
                 raise RuntimeError(f"short capture: {len(pcm) / C.SR:.1f} s")
             rec = dict(diag=diag, diag_fields=["capn"] + DIAG_FIELDS, info=info, attempts=attempt,
@@ -594,6 +695,9 @@ async def run_trial(a, S, dev, ui, t, player, clips_blob, tune_keys):
             S.save_trial(t, pcm, raw, rec)
             S.log(f"trial {t['id']} done (attempt {attempt}, {len(pcm) / C.SR:.1f} s)")
             return pcm
+        except StorageFull as e:
+            S.log(f"trial {t['id']}: {e}")
+            raise
         except (Abort, KeyboardInterrupt):
             raise
         except SystemExit:
@@ -714,18 +818,37 @@ async def resolve_gain(a, S, ui, dev, g, restore_gain):
     prev_eff = dv.get("gain_effective")
     prev_pol = dv.get("gain_policy")
     eff = None
+    # gain() reads the firmware's default when nothing is saved (0 up to
+    # 0.8.18, 1 from the gain-1 rebaseline on), so a reading other than
+    # start{gain=} is a saved gain or no saved gain at all. Firmware with
+    # diag('stats').mic_gain_scale answers directly: start{gain=} and read
+    # the scale the AEC was handed (a saved gain overrides start{gain=}).
+    # Read on every run: it also marks firmware with the readback for the
+    # offline replay (calib_common.mic_unit_keys).
+    scale = await dev.gain_scale_probe(st_gain(S))
+    dv["gain_scale_probe"] = scale
     if g == st_gain(S):
         eff = g
         ui.info(f"saved mic gain {g}: start{{gain={st_gain(S)}}} is in effect")
-    elif g == 0:
-        # gain() reads 0 both when nothing is saved and when 0 is saved:
-        # step 2a repeats one reply at start{gain=0} and compares levels
+    elif scale is not None and C.same(scale, C.mic_gain_scale(st_gain(S))):
+        eff = st_gain(S)
+        ui.info(f"no saved mic gain (gain() reads the firmware default, {g}): "
+                f"start{{gain={eff}}} is in effect (AEC gain scale {scale:g})")
+    elif scale is None and g == 0:
+        # firmware without the scale readback (0.8.18 and earlier): gain()
+        # reads its default 0 both when nothing is saved and when 0 is
+        # saved: step 2a repeats one reply at start{gain=0} and compares
+        # levels
         if dv.get("gain_probe") is None:
             dv["gain_effective"] = f"{st_gain(S)} or 0"
             add_gain_probe(S)
             ui.info(f"gain() reads 0: no saved gain, or a saved 0. Step 2a checks which "
                     f"(one extra reply at start{{gain=0}}).")
     else:
+        if scale is not None and not C.same(scale, C.mic_gain_scale(g)):
+            ui.warn(f"the AEC gain scale reads {scale:g} at start{{gain={st_gain(S)}}}, neither gain "
+                    f"{st_gain(S)} ({C.mic_gain_scale(st_gain(S)):g}) nor the saved {g} "
+                    f"({C.mic_gain_scale(g):g}); treating {g} as saved")
         ui.warn(f"a saved mic gain {g} overrides start{{gain={st_gain(S)}}} (audio/gain setting)")
         rec = recorded_steps(S)
         if prev_pol and a.gain_policy_explicit and a.gain_policy != prev_pol and rec:
@@ -1015,9 +1138,17 @@ def main():
     ap.add_argument("--sim-no-tune", action="store_true", help="--sim: firmware without aec_tune")
     ap.add_argument("--sim-old-gate", action="store_true",
                     help="--sim: aec_tune without the gate band and two-band cap keys")
-    ap.add_argument("--sim-saved-gain", type=int, default=0)
+    ap.add_argument("--sim-saved-gain", type=int, default=None,
+                    help="--sim: saved gain() (default: nothing saved)")
+    ap.add_argument("--sim-gain-gen", choices=("old", "scale", "new"), default="old",
+                    help="--sim: firmware gain reporting: old (0.8.18, gain() reads 0 with nothing "
+                         "saved, no mic_gain_scale), scale (readback, default 0), new (readback, "
+                         "default 1)")
     ap.add_argument("--sim-fw", help="--sim: firmware version string (default sim-0.8.18)")
-    ap.add_argument("--sim-fail", help="--sim: device calls that fail: set_gain,finish_tune")
+    ap.add_argument("--sim-fail", help="--sim: device calls that fail: set_gain,finish_tune,"
+                    "write_capture (the cap.lc3 write hits ENOSPC)")
+    ap.add_argument("--sim-lfs-free", type=float, default=None,
+                    help="--sim: free space on /lfs in KB (default: plenty)")
     ap.add_argument("--sim-coupling-db", type=float, default=-9.0,
                     help="--sim: echo path gain (-9 ~ -30 dBFS echo, desk Halo 28 mid; -3 ~ worn)")
     ap.add_argument("--seed", type=int, default=1)
@@ -1036,7 +1167,8 @@ def main():
     try:
         asyncio.run(session(a))
     except (Abort, KeyboardInterrupt) as e:
-        print(f"\n !! stopped: {e!r}\n    Everything recorded so far is saved. Continue with:\n"
+        print(f"\n !! stopped: {e if isinstance(e, StorageFull) else repr(e)}\n"
+              "    Everything recorded so far is saved. Continue with:\n"
               f"    uv run halo_calib.py --resume latest" + (" --sim" if a.sim else ""))
         sys.exit(2)
 

@@ -40,6 +40,26 @@
              worse on the device makes the headline "keep the current
              defaults" (shown as rejected, no paste line); a pick that passes
              gets the paste line; desk phrases are at the desk talker level
+13 gain-scale the replay applies the session's effective mic gain as the
+             firmware does: a capture x2.5 at -g 2.5 gates and cancels like
+             it does x1 at gain 1 with the same set (every gate threshold
+             follows the gain), and the gain-1 keys alone at x2.5 (no -g)
+             open the gate on it; the scale comes from
+             gain_effective, else start{gain=}, else a manifest override;
+             the keys older firmware ran in mic units are found (0.8.18:
+             gate_kappa, gate_absfloor, gate_edge_abs) for step 3 to replay
+             'current' / f
+14 storage   a full /lfs stops the session before the recording with
+             "device storage full: N KB free, need M KB" (free-space probe),
+             and a cap.lc3 write that hits ENOSPC stops it too, both with no
+             BLE retries and nothing marked done; other write errors retry
+15 saved-gain --mic-gain 3 with nothing saved records at gain 3 with no
+             saved-gain warning under --gain-policy keep and set, on 0.8.18
+             (gain() reads 0: the 2a level probe decides) and on firmware
+             with the mic_gain_scale readback (gain() reads its default 0
+             or 1: the readback decides, no extra recording); a real saved
+             gain equal to that default is still found and handled by the
+             policy
 """
 import json
 import os
@@ -166,6 +186,69 @@ def t_replay(tmp):
     a, b = C.read_wav(so), C.read_wav(oo)
     err = np.abs(a - b).max() * 32768
     check(err <= 2, f"shadow of the mic == AEC output with a silent reference (max {err:.0f} LSB)")
+
+
+def t_gain_scale(tmp):
+    print("13 gain-scale")
+    want = {1: 1.0, 4: 2.5, 3: 2.0, 0: 0.5, -1: 0.25, -10: 32 / 704, 10: 5.5, 12: 5.5}
+    got = {g: C.mic_gain_scale(g) for g in want}
+    check(got == want, f"gain step -> scale over gain 1 (dmic_gain_raw / 704): {got}")
+    # a hot synthetic capture (H2-like distortion left for the suppressor)
+    clip = C.read_wav(os.path.join(C.CLIPS_DIR, "replies", "B.wav"))
+    ref = O.spk_ref(C.lc3_decode(C.lc3_encode(clip)), 100, 6, 100, tmp, "Bg")
+    rng = np.random.default_rng(1)
+    n = len(ref) + 2 * C.SR
+    r = np.zeros(n)
+    r[C.SR:C.SR + len(ref)] = ref
+    ir = rng.standard_normal(64) * np.exp(-np.arange(64) / 12.0)
+    ir[0] += 2
+    ir *= 0.4 / np.sqrt((ir ** 2).sum())
+    e = np.convolve(r, ir)[:n]
+    mic = 2.0 * C.bandpass(e + 3.0 * e * np.abs(e) + 3e-4 * rng.standard_normal(n), 300, 3400)
+    rp, m1, m25 = (os.path.join(tmp, f) for f in ("rg.wav", "m1.wav", "m25.wav"))
+    C.write_wav(rp, np.roll(r, -24))
+    C.write_wav(m1, mic / 2.5)
+    C.write_wav(m25, mic)
+    d = O.tree_defaults()
+    fd = [C.SR, n - C.SR]
+    a = O.run(m25, rp, d, feed=fd, dump=True, gain_scale=2.5)
+    c = O.run(m25, rp, d, feed=fd, dump=True)
+    g1 = O.run(m1, rp, d, feed=fd, dump=True)
+    ga, gc, g1g = a["dump"]["gate_rel"], c["dump"]["gate_rel"], g1["dump"]["gate_rel"]
+    err = 10 * np.log10(((a["out"] / 2.5 - g1["out"]) ** 2).sum() / (g1["out"] ** 2).sum())
+    errc = 10 * np.log10(((c["out"] / 2.5 - g1["out"]) ** 2).sum() / (g1["out"] ** 2).sum())
+    check(np.abs(mic).max() < 0.99 and np.array_equal(ga, g1g) and err < -30 and
+          gc.sum() > g1g.sum() + 20 and errc > err + 10,
+          f"x2.5 at -g 2.5 gates as x1 at gain 1 ({int(ga.sum())} vs {int(g1g.sum())} open, output "
+          f"{err:.0f} dB); without -g the gain-1 keys open the gate on {int(gc.sum())}/{len(gc)} "
+          f"blocks, output {errc:.0f} dB")
+    # where the scale comes from
+    sd = os.path.join(tmp, "gs_sess")
+    rd = os.path.join(sd, "replay")
+    os.makedirs(rd)
+    man = {"session": sd, "items": {}}
+    json.dump(man, open(os.path.join(rd, "manifest.json"), "w"))
+    res = []
+    for dev, mg in (({"gain_effective": 4}, 1), ({"gain_effective": "3 or 0"}, 3), ({}, 1)):
+        json.dump({"settings": {"mic_gain": mg}, "device": dev}, open(os.path.join(sd, "session.json"), "w"))
+        res.append(O.session_gain_scale(rd))
+    man["mic_gain_scale"] = 2.0
+    json.dump(man, open(os.path.join(rd, "manifest.json"), "w"))
+    res.append(O.session_gain_scale(rd))
+    check(res == [2.5, 2.0, 1.0, 2.0],
+          f"scale from gain_effective 4, else start{{gain=3}}, else 1; manifest override 2.0: {res}")
+    # what older firmware ran in mic units ('current' replays them / f)
+    tree = O.tree_defaults()
+    v0818 = {k: v for k, v in tree.items() if not k.startswith(("gate_kappa_hf", "gate_hf_", "dtd_"))}
+    v0818.update(gate_kappa=0.5, sup_beta=1.25)
+    mid = dict(tree, gate_kappa=0.5, sup_beta=1.25)
+    mu = [C.mic_unit_keys(dv) for dv in ({"aec_defaults": v0818}, {"aec_defaults": v0818, "gain_scale_probe": 1.0},
+                                         {"aec_defaults": mid}, {"aec_defaults": tree}, {})]
+    t = C.to_gain1(dict(gate_kappa=0.5, gate_absfloor=0.9, sup_beta=1.0), mu[0], 2.5)
+    check(mu == [C.MIC_UNIT_KEYS_0818, [], ["gate_kappa"], [], []]
+          and C.same(t["gate_kappa"], 0.2) and C.same(t["gate_absfloor"], 0.36) and t["sup_beta"] == 1.0,
+          f"mic-unit keys: 0.8.18 kappa/absfloor/edge_abs, first readback build none, unscaled-kappa "
+          f"builds kappa, this tree none ({mu}); / 2.5: {t}")
 
 
 def sim(tmp, *args):
@@ -590,6 +673,84 @@ def t_step4_wins(tmp, src):
           f"levelling hits the target with peaks under full scale ({C.active_rms_db(x):.2f} dBFS)")
 
 
+def t_storage(tmp):
+    print("14 storage")
+    import re
+    import halo_calib as H
+    _, v, err = H.parse_counts(["k", "WR 48000 16000 [string \"x\"]: error writing to file: -28"], "WR", 2)
+    check(v == [48000, 16000] and err.endswith("-28"), f"WR reply parsed ({v}, {err!r})")
+    _, v, err = H.parse_counts(["SP 56000 nil"], "SP", 1)
+    check(v == [56000] and err is None, "SP reply parsed, nil = no error")
+
+    def raises(fn, *args):
+        try:
+            fn(*args)
+        except BaseException as e:      # noqa: BLE001
+            return e
+        return None
+    check(raises(H.check_write, 48000, 48000, None) is None, "a complete write passes")
+    e = raises(H.check_write, 48000, 16000, "error writing to file: -28")
+    check(isinstance(e, H.StorageFull) and "16 KB free, need 55 KB" in str(e),
+          f"ENOSPC on the write -> StorageFull ({e})")
+    e = raises(H.check_write, 48000, 16000, "incomplete write: 100 of 4080 bytes")
+    check(isinstance(e, H.StorageFull), "a short write -> StorageFull")
+    e = raises(H.check_write, 48000, 16000, "error writing to file: -5")
+    check(isinstance(e, RuntimeError), "another write error is an ordinary (retried) failure")
+    check(raises(H.check_space, 56000, 56000, None) is None
+          and isinstance(raises(H.check_space, 12000, 56000, "-28"), H.StorageFull),
+          "the probe passes with room and stops without")
+    # the developer's case: their app had left ~14 KB free
+    r = sim(tmp, "--sim-lfs-free", "14", "--steps", "1")
+    sd = latest(tmp)
+    s = json.load(open(os.path.join(sd, "session.json")))
+    log = open(os.path.join(sd, "log.txt")).read()
+    check(r.returncode == 2 and re.search(r"stopped: device storage full: 12 KB free, need \d+ KB; "
+                                          r"free space or remove files", r.stdout)
+          and "--resume latest" in r.stdout,
+          f"probe: stops with the storage message ({r.returncode}) {r.stdout[-300:]}")
+    check(not any(t["status"] == "done" for t in s["plan"]) and "attempt 2" not in log
+          and "device storage full" in log, "probe: nothing recorded, no BLE retries, logged")
+    r = sim(tmp, "--sim-fail", "write_capture", "--steps", "1")
+    sd = latest(tmp)
+    s = json.load(open(os.path.join(sd, "session.json")))
+    log = open(os.path.join(sd, "log.txt")).read()
+    check(r.returncode == 2 and "stopped: device storage full:" in r.stdout and "-28" in r.stdout
+          and not any(t["status"] == "done" for t in s["plan"]) and "attempt 2" not in log,
+          f"write: ENOSPC on cap.lc3 stops the session, no retries ({r.returncode})")
+    r = sim(tmp, "--sim-lfs-free", "100", "--steps", "1")
+    s = json.load(open(os.path.join(latest(tmp), "session.json")))
+    check(r.returncode == 0 and any(t["status"] == "done" for t in s["plan"]),
+          f"with 100 KB free step 1 records ({r.returncode})")
+
+
+def t_saved_gain(tmp):
+    print("15 saved-gain")
+    for gen in ("old", "scale", "new"):
+        for pol in ("keep", "set"):
+            steps = "1,2a" if gen == "old" else "1"
+            r = sim(tmp, "--sim-gain-gen", gen, "--mic-gain", "3", "--gain-policy", pol,
+                    "--steps", steps, "--echo-reps", "1")
+            s = json.load(open(os.path.join(latest(tmp), "session.json")))
+            dv = s["device"]
+            probe = any(t["kind"] == "probe" for t in s["plan"])
+            check(r.returncode == 0 and dv.get("gain_effective") == 3
+                  and "overrides start" not in r.stdout and "gain_policy" not in dv
+                  and "gain_restore" not in dv and not dv.get("gain_restored")
+                  and probe == (gen == "old"),
+                  f"{gen} firmware, nothing saved, --gain-policy {pol}: gain() reads "
+                  f"{dv.get('gain_saved')}, effective {dv.get('gain_effective')}, probe recording "
+                  f"{probe}, scale readback {dv.get('gain_scale_probe')} ({r.returncode})")
+    # a saved gain equal to the new firmware's default is a saved gain
+    for pol, eff in (("keep", 1), ("set", 3)):
+        r = sim(tmp, "--sim-gain-gen", "new", "--sim-saved-gain", "1", "--mic-gain", "3",
+                "--gain-policy", pol, "--steps", "1")
+        dv = json.load(open(os.path.join(latest(tmp), "session.json")))["device"]
+        check(r.returncode == 0 and dv.get("gain_effective") == eff and "overrides start" in r.stdout
+              and dv.get("gain_policy") == pol and bool(dv.get("gain_restored")) == (pol == "set"),
+              f"new firmware, saved 1 (= its default), --gain-policy {pol}: effective "
+              f"{dv.get('gain_effective')}, restored {dv.get('gain_restored')} ({r.returncode})")
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="calib_test_")
     try:
@@ -599,6 +760,9 @@ def main():
         t_guard(tmp)
         t_ctrl_c(tmp)
         t_vs_current(tmp)
+        t_gain_scale(tmp)
+        t_storage(tmp)
+        t_saved_gain(tmp)
         if "--quick" not in sys.argv:
             full = t_sim_resume(tmp)
             notune = t_sim_notune(tmp)
