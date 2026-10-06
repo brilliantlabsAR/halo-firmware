@@ -40,6 +40,12 @@
              worse on the device makes the headline "keep the current
              defaults" (shown as rejected, no paste line); a pick that passes
              gets the paste line; desk phrases are at the desk talker level
+13 gain-scale the replay applies the session's effective mic gain as the
+             firmware does: -g 2.5 == the three gate keys x2.5 (bit-exact
+             here: the g^2-scaled power thresholds do not bite on it),
+             and a capture x2.5 at -g 2.5 gates like it does x1 at gain 1
+             (the defaults alone open the gate on it); the scale comes from
+             gain_effective, else start{gain=}, else a manifest override
 """
 import json
 import os
@@ -166,6 +172,59 @@ def t_replay(tmp):
     a, b = C.read_wav(so), C.read_wav(oo)
     err = np.abs(a - b).max() * 32768
     check(err <= 2, f"shadow of the mic == AEC output with a silent reference (max {err:.0f} LSB)")
+
+
+def t_gain_scale(tmp):
+    print("13 gain-scale")
+    want = {1: 1.0, 4: 2.5, 3: 2.0, 0: 0.5, -1: 0.25, -10: 32 / 704, 10: 5.5, 12: 5.5}
+    got = {g: C.mic_gain_scale(g) for g in want}
+    check(got == want, f"gain step -> scale over gain 1 (dmic_gain_raw / 704): {got}")
+    # a hot synthetic capture (H2-like distortion left for the suppressor)
+    clip = C.read_wav(os.path.join(C.CLIPS_DIR, "replies", "B.wav"))
+    ref = O.spk_ref(C.lc3_decode(C.lc3_encode(clip)), 100, 6, 100, tmp, "Bg")
+    rng = np.random.default_rng(1)
+    n = len(ref) + 2 * C.SR
+    r = np.zeros(n)
+    r[C.SR:C.SR + len(ref)] = ref
+    ir = rng.standard_normal(64) * np.exp(-np.arange(64) / 12.0)
+    ir[0] += 2
+    ir *= 0.4 / np.sqrt((ir ** 2).sum())
+    e = np.convolve(r, ir)[:n]
+    mic = 2.0 * C.bandpass(e + 3.0 * e * np.abs(e) + 3e-4 * rng.standard_normal(n), 300, 3400)
+    rp, m1, m25 = (os.path.join(tmp, f) for f in ("rg.wav", "m1.wav", "m25.wav"))
+    C.write_wav(rp, np.roll(r, -24))
+    C.write_wav(m1, mic / 2.5)
+    C.write_wav(m25, mic)
+    d = O.tree_defaults()
+    x25 = {k: float(np.float32(d[k]) * np.float32(2.5)) for k in ("gate_kappa", "gate_absfloor", "gate_edge_abs")}
+    fd = [C.SR, n - C.SR]
+    a = O.run(m25, rp, d, feed=fd, dump=True, gain_scale=2.5)
+    b = O.run(m25, rp, dict(d, **x25), feed=fd, dump=True)
+    c = O.run(m25, rp, d, feed=fd, dump=True)
+    g1 = O.run(m1, rp, d, feed=fd, dump=True)
+    ga, gc, g1g = a["dump"]["gate_rel"], c["dump"]["gate_rel"], g1["dump"]["gate_rel"]
+    check(np.abs(mic).max() < 0.99 and np.array_equal(a["out"], b["out"]),
+          "-g 2.5 == gate_kappa, gate_absfloor, gate_edge_abs x2.5 (bit-exact, no clipping; "
+          "the g^2 power thresholds do not bite here)")
+    err = 10 * np.log10(((a["out"] / 2.5 - g1["out"]) ** 2).sum() / (g1["out"] ** 2).sum())
+    check(np.array_equal(ga, g1g) and gc.sum() > 20 and g1g.sum() == 0 and err < -30,
+          f"x2.5 at -g 2.5 gates as x1 at gain 1 ({int(ga.sum())} vs {int(g1g.sum())} open, output "
+          f"{err:.0f} dB); the defaults alone open the gate on {int(gc.sum())}/{len(gc)} blocks")
+    # where the scale comes from
+    sd = os.path.join(tmp, "gs_sess")
+    rd = os.path.join(sd, "replay")
+    os.makedirs(rd)
+    man = {"session": sd, "items": {}}
+    json.dump(man, open(os.path.join(rd, "manifest.json"), "w"))
+    res = []
+    for dev, mg in (({"gain_effective": 4}, 1), ({"gain_effective": "3 or 0"}, 3), ({}, 1)):
+        json.dump({"settings": {"mic_gain": mg}, "device": dev}, open(os.path.join(sd, "session.json"), "w"))
+        res.append(O.session_gain_scale(rd))
+    man["mic_gain_scale"] = 2.0
+    json.dump(man, open(os.path.join(rd, "manifest.json"), "w"))
+    res.append(O.session_gain_scale(rd))
+    check(res == [2.5, 2.0, 1.0, 2.0],
+          f"scale from gain_effective 4, else start{{gain=3}}, else 1; manifest override 2.0: {res}")
 
 
 def sim(tmp, *args):
@@ -599,6 +658,7 @@ def main():
         t_guard(tmp)
         t_ctrl_c(tmp)
         t_vs_current(tmp)
+        t_gain_scale(tmp)
         if "--quick" not in sys.argv:
             full = t_sim_resume(tmp)
             notune = t_sim_notune(tmp)

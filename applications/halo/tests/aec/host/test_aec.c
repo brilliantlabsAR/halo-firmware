@@ -8,6 +8,9 @@
  * 300-sample bulk delay, ~-30dB, plus -70dBFS mic noise.
  */
 #include <errno.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,6 +220,16 @@ static int g_tap_late_ms;
  */
 static int g_drop_mic;
 
+/* mic gain in the float domain (check 24): the whole mic (echo, noise,
+ * near end) is scaled before the int16 conversion, as a PDM gain step
+ * would; g_echo_gain raises the echo coupling alone. g_clipped counts
+ * samples that hit the int16 rails.
+ */
+static float g_mic_scale = 1.0f;
+static int16_t step_last_out[BLK]; /* the last processed block's output */
+static float g_echo_gain = 1.0f;
+static long g_clipped;
+
 /* defer_tap: hold this block's tap back and deliver it (before the next
  * block's tap) on the following step - models the I2S tap firing late
  * relative to the mic consumer (a 20ms underrun then catch-up).
@@ -287,6 +300,7 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 		 *   entirely uncorrelated with the reference
 		 */
 		echo += 30.0f * echo * fabsf(echo);
+		echo *= g_echo_gain;
 		/* narrowband NOISE with a steep (18dB/oct) skirt, matching the
 		 * device: >90% of energy <100Hz and ~29dB down by 100-300Hz.
 		 * Not a sine - a sine is phase-predictable over the filter's
@@ -314,6 +328,8 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 		pnear += near * near;
 		rum[i] = rumble + hfn;
 
+		d *= g_mic_scale;
+		if (d > 1.0f || d < -1.0f) g_clipped++;
 		if (d > 1.0f) d = 1.0f;
 		if (d < -1.0f) d = -1.0f;
 		mic[i] = (int16_t)(d * 32767.0f);
@@ -341,6 +357,7 @@ static struct blkstat step_ex(int mode, int defer_tap, int mic_late_ms)
 	host_uptime_ms += adv;
 	audio_aec_process(mic, BLK, SR, 1);
 	host_uptime_ms -= adv;
+	memcpy(step_last_out, mic, sizeof(step_last_out));
 
 	/* the AEC's one-block hold-back delays its output by one block, so
 	 * out(b) is the cancelled in(b-1): score against the previous
@@ -599,6 +616,110 @@ static int pause_rearms(int *crushed, int *nexc)
 	}
 	near2_amp = 0.0f;
 	return rearms;
+}
+#endif
+
+#ifdef CONFIG_HALO_AUDIO_AEC_FDAF
+/* check 24: the mic at a higher gain, in the float domain */
+#define GS_WARM 300
+#define GS_BLOCKS 900
+struct gs_run {
+	uint8_t gate[GS_BLOCKS];
+	int16_t out[GS_BLOCKS][BLK];
+	long clipped;
+	double pin, pout; /* scored in/out power over the last GS_WARM blocks */
+	int done;
+};
+
+/* the stimulus: mic scale at gain 1, echo coupling, wearer phase on/off */
+struct gs_cfg {
+	float base, echo;
+	int near;
+};
+static const struct gs_cfg gs_hot = {0.3f, 20.0f, 1};
+
+/* gs_hot: a hot unit through a warm-up reply, an echo-only reply
+ * (speech_sample's 0.5s pauses are where the absolute keys alone hold the
+ * gate) and the wearer talking over a reply. The "gain 1" mic is the usual
+ * stimulus x0.3 with the echo x20 (echo x6 overall), so that x2.5 does not
+ * clip. gs_cold: echo-only from a cold filter on a stronger-coupled unit,
+ * where at x2.5 the echo-only p_err exceeds the double-talk threshold
+ * (p_err < 2 p_ref) unless that is scaled too: adaptation freezes and the
+ * filter never converges. Runs in a forked child, so every variant starts
+ * from the same AEC and stimulus state.
+ */
+static void gs_child(const struct gs_cfg *c, float g, int api, struct gs_run *r)
+{
+	g_mic_scale = c->base * g;
+	g_echo_gain = c->echo;
+	g_clipped = 0;
+	r->pin = r->pout = 0;
+	if (api) {
+		audio_aec_set_mic_gain_scale(g);
+	}
+	audio_aec_enable(true);
+	for (int b = 0; b < GS_BLOCKS; b++) {
+		struct audio_aec_stats st;
+		size_t nt;
+
+		near2_amp = (c->near && b >= 2 * GS_WARM) ? 0.6f : 0.0f;
+		struct blkstat bs = step(4);
+
+		if (b >= GS_BLOCKS - GS_WARM && bs.in_rms > -100.0f) {
+			r->pin += pow(10, bs.in_rms / 10);
+			r->pout += pow(10, bs.out_rms / 10);
+		}
+		memcpy(r->out[b], step_last_out, sizeof(r->out[b]));
+		audio_aec_snapshot(&st, &nt);
+		r->gate[b] = (uint8_t)st.sup_gate_rel;
+	}
+	near2_amp = 0.0f;
+	r->clipped = g_clipped;
+	r->done = 1;
+}
+
+static int gs_fork(const struct gs_cfg *c, float g, int api, struct gs_run *r)
+{
+	fflush(stdout);
+	r->done = 0;
+	pid_t pid = fork();
+
+	if (pid == 0) {
+		gs_child(c, g, api, r);
+		_exit(0);
+	}
+	int status;
+
+	return pid > 0 && waitpid(pid, &status, 0) == pid && r->done;
+}
+
+/* gate decisions that differ from the base run (all blocks), gate releases
+ * on the echo-only reply, and the output difference after the warm-up:
+ * 10log10(sum (out/g - base)^2 / sum base^2)
+ */
+static void gs_compare(const struct gs_run *a, const struct gs_run *base, float g,
+		       int *mism, int *rel_echo, double *err_db)
+{
+	double e = 0, p = 0;
+
+	*mism = 0;
+	*rel_echo = 0;
+	for (int b = 0; b < GS_BLOCKS; b++) {
+		*mism += a->gate[b] != base->gate[b];
+		if (b >= GS_WARM && b < 2 * GS_WARM) {
+			*rel_echo += a->gate[b];
+		}
+		if (b < GS_WARM) {
+			continue;
+		}
+		for (int i = 0; i < BLK; i++) {
+			double d = a->out[b][i] / g - base->out[b][i];
+
+			e += d * d;
+			p += (double)base->out[b][i] * base->out[b][i];
+		}
+	}
+	*err_db = 10 * log10(e / p + 1e-30);
 }
 #endif
 
@@ -2010,6 +2131,106 @@ int main(int argc, char **argv)
 			      half[1] - half[0] > 4.0f,
 		      buf);
 		audio_aec_tune_set(&saved);
+	}
+
+	/* --- 24. mic gain scale: gate thresholds follow the mic gain ---- */
+	{
+		/* the same run with the mic x2.5 in float (gain 4 over gain 1,
+		 * no clipping) and audio_aec_set_mic_gain_scale(2.5) must make
+		 * the same gate decisions and the same output up to x2.5;
+		 * without the scale (the control) the gate opens on the echo.
+		 * AEC_GS_NOAPI=1 leaves the scale unset in the first run too:
+		 * the check must then FAIL.
+		 */
+		struct gs_run *r;
+		const float g = 2.5f;
+		const int api = getenv("AEC_GS_NOAPI") == NULL;
+
+		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
+			 MAP_SHARED | MAP_ANON, -1, 0);
+		int ok = r != MAP_FAILED && gs_fork(&gs_hot, 1.0f, 0, &r[0]) &&
+			 gs_fork(&gs_hot, g, api, &r[1]) && gs_fork(&gs_hot, g, 0, &r[2]);
+		int m1 = 0, m2 = 0, rel0 = 0, rel1 = 0, rel2 = 0;
+		double e1 = 0, e2 = 0, dummy;
+		int dm;
+
+		if (ok) {
+			gs_compare(&r[0], &r[0], 1.0f, &dm, &rel0, &dummy);
+			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
+			gs_compare(&r[2], &r[0], g, &m2, &rel2, &e2);
+		}
+		long clipped = ok ? r[1].clipped + r[2].clipped : -1L;
+		/* the setter: diag reports the published factor; NaN, inf,
+		 * 0, negative, under 0.001 (a denormal) and > 100 are rejected
+		 * and change nothing; 0.001 and 100 are accepted */
+		struct audio_aec_stats st;
+		size_t nt;
+		const float nan_v = NAN, inf_v = INFINITY;
+		int set_ok = audio_aec_set_mic_gain_scale(g) == 0;
+
+		audio_aec_snapshot(&st, &nt);
+		set_ok &= st.mic_gain_scale == g;
+		set_ok &= audio_aec_set_mic_gain_scale(nan_v) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(inf_v) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(0.0f) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(1e-30f) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(0.0009f) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(-1.0f) == -EINVAL &&
+			  audio_aec_set_mic_gain_scale(101.0f) == -EINVAL &&
+			  audio_aec_get_mic_gain_scale() == g;
+		set_ok &= audio_aec_set_mic_gain_scale(0.001f) == 0 &&
+			  audio_aec_set_mic_gain_scale(100.0f) == 0 &&
+			  audio_aec_set_mic_gain_scale(1.0f) == 0 &&
+			  audio_aec_get_mic_gain_scale() == 1.0f;
+		ok &= set_ok;
+
+		snprintf(buf, sizeof(buf),
+			 "x2.5+scale: %d/%d gate diffs, out %.1f dB, echo-only open %d/%d; "
+			 "no scale: %d diffs, %.1f dB, open %d; x1 open %d; clipped %ld%s",
+			 m1, GS_BLOCKS, e1, rel1, GS_WARM, m2, e2, rel2, rel0, clipped,
+			 set_ok ? "" : "; SETTER WRONG");
+		check("mic gain scale keeps gain-1 gate decisions",
+		      ok && clipped == 0 && rel0 == 0 && m1 == 0 && e1 < -40.0 &&
+			      m2 > GS_BLOCKS / 10 && rel2 > GS_WARM / 2,
+		      buf);
+		if (r != MAP_FAILED) {
+			munmap(r, 3 * sizeof(*r));
+		}
+
+		/* (b) cold start on a strong-coupled unit: the double-talk
+		 * threshold and the divergence guard scale by g^2, so x2.5 +
+		 * scale converges as x1 does; without the scale p_err stays
+		 * above 2 p_ref, adaptation freezes and nothing is removed */
+		/* echo x8.25 overall on a x0.15 mic: no clipping at x2.5 */
+		const struct gs_cfg cold = {0.15f, 55.0f, 0};
+
+		r = mmap(NULL, 3 * sizeof(*r), PROT_READ | PROT_WRITE,
+			 MAP_SHARED | MAP_ANON, -1, 0);
+		ok = r != MAP_FAILED && gs_fork(&cold, 1.0f, 0, &r[0]) &&
+		     gs_fork(&cold, g, api, &r[1]) && gs_fork(&cold, g, 0, &r[2]);
+		double erle[3] = {0, 0, 0};
+
+		m1 = m2 = 0;
+		e1 = e2 = 0;
+		if (ok) {
+			gs_compare(&r[1], &r[0], g, &m1, &rel1, &e1);
+			gs_compare(&r[2], &r[0], g, &m2, &rel2, &e2);
+			for (int k = 0; k < 3; k++) {
+				erle[k] = 10 * log10(r[k].pin / (r[k].pout + 1e-30) + 1e-30);
+			}
+		}
+		clipped = ok ? r[1].clipped + r[2].clipped : -1L;
+		snprintf(buf, sizeof(buf),
+			 "ERLE x1 %.1f, x2.5+scale %.1f (%d gate diffs, out %.1f dB), "
+			 "no scale %.1f dB; clipped %ld",
+			 erle[0], erle[1], m1, e1, erle[2], clipped);
+		check("mic gain scale: hot cold start converges",
+		      ok && clipped == 0 && erle[0] > 10.0 && m1 == 0 && e1 < -40.0 &&
+			      erle[2] < erle[0] - 6.0,
+		      buf);
+		if (r != MAP_FAILED) {
+			munmap(r, 3 * sizeof(*r));
+		}
 	}
 #endif
 	printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "OK",

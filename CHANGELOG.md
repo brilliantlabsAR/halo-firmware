@@ -11,6 +11,23 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Changed
+
+- With echo cancellation on, the near-end gate now behaves the same at
+  any microphone gain. Its thresholds `gate_kappa`, `gate_absfloor` and
+  `gate_edge_abs` are expressed at gain 1, and the firmware scales them by
+  the effective gain over gain 1 (x2.5 at gain 4). This follows the gain
+  actually applied (`start{gain=}`, a saved gain, `frame.microphone.gain()`
+  or the LE Audio gain control). Before, gain 4 made the gate open on echo
+  on units with strong coupling (in a replay of one worn unit, echo removed
+  fell from 18 to 6 dB and the gate was open on echo 23% of the time).
+  The canceller's internal mic-versus-speaker power thresholds (the
+  double-talk test that pauses adaptation and the divergence guard) scale
+  with the square of that factor, so a strongly coupled unit still
+  converges at gain 4. `aec_tune()` values stay gain-1 values, so an app
+  does not retune when it changes gain. `diag('stats').mic_gain_scale` reports the factor, and the
+  calibration harness replays each sitting at its effective gain.
+
 ## [0.8.18] - 2026-10-05
 
 ### Added

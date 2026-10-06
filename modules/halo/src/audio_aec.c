@@ -936,22 +936,98 @@ static struct aec_tune_rt tune = {
 };
 static atomic_t tune_gen = ATOMIC_INIT(1);
 static uint32_t tune_seen = 1;
-static struct k_spinlock tune_lock;
+#endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
 
-/* Mic thread, top of each block: adopt a newly published set. */
+/* Effective mic gain relative to gain 1 (audio_aec_set_mic_gain_scale),
+ * published under tune_lock with its own generation, so a gain change does
+ * not bump tune_gen (which identifies the aec_tune set).
+ */
+static struct k_spinlock tune_lock;
+static float gain_pub = 1.0f;
+/* accepted range: the PDM gain steps give 0.045..5.5; the floor keeps a
+ * denormal or tiny scale from zeroing the thresholds and dividing by zero
+ * on the next change */
+#define AEC_GAIN_SCALE_MIN 0.001f
+#define AEC_GAIN_SCALE_MAX 100.0f
+static atomic_t gain_gen = ATOMIC_INIT(1);
+
+/* The mic thread's adopted scale g and the mic-vs-reference POWER
+ * thresholds scaled by g^2: the adaptation-freeze DTD (p_err vs
+ * AEC_DTD_THRESHOLD * p_ref), the divergence guard on ||w||^2 (the filter
+ * is a mic / reference amplitude ratio, so its energy scales by g^2) and
+ * option A's dead-end p_err vs p_ref release. With the gate's amplitude
+ * keys scaled by g (aec_tune_refresh), every AEC decision is the same at
+ * any mic gain. Constant-folded values at g = 1.
+ */
+static uint32_t gain_seen = 1;
+static float mic_g = 1.0f;
+static float dtd_thr = AEC_DTD_THRESHOLD;
+static float norm_clamp = AEC_NORM_CLAMP;
+
+/* A gain change scales the mic by r = g_new / g_old from the next block
+ * on. Carry the mic-domain state over with it, so a converged filter keeps
+ * cancelling instead of re-adapting by a factor r: the filter (a mic /
+ * reference amplitude ratio, both builds) and the mic and error signal
+ * filter memories by r, the mic and error power trackers by r^2, and in
+ * the FDAF build the suppressor's predicted-echo and residual spectra by
+ * r^2, the gate's residual power by r^2 and its envelopes (amplitudes)
+ * by r. Reference-side state is unaffected. Unscaled, a x2.5 step left a
+ * converged unit's residual 10-12dB higher until the filter had
+ * re-adapted. AEC_GAIN_RESCALE 0 = off (host check control).
+ */
+#ifndef AEC_GAIN_RESCALE
+#define AEC_GAIN_RESCALE 1
+#endif
+
+static void aec_state_rescale(float r); /* after the state, below */
+
+static void aec_gain_adopt(float g)
+{
+	const float r = g / mic_g;
+
+	if (AEC_GAIN_RESCALE && r != 1.0f) {
+		aec_state_rescale(r);
+	}
+	mic_g = g;
+	dtd_thr = AEC_DTD_THRESHOLD * g * g;
+	norm_clamp = AEC_NORM_CLAMP * g * g;
+}
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+/* Mic thread, top of each block: adopt a newly published set and mic gain
+ * scale.
+ */
 static void aec_tune_refresh(void)
 {
 	uint32_t gen = (uint32_t)atomic_get(&tune_gen);
+	uint32_t ggen = (uint32_t)atomic_get(&gain_gen);
 
-	if (gen == tune_seen) {
+	if (gen == tune_seen && ggen == gain_seen) {
 		return;
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&tune_lock);
 
 	tune.p = tune_pub;
+	float g = gain_pub;
+
 	tune_seen = (uint32_t)atomic_get(&tune_gen);
+	gain_seen = (uint32_t)atomic_get(&gain_gen);
 	k_spin_unlock(&tune_lock, key);
+
+	/* The gate's three absolute keys are expressed at mic gain 1. The
+	 * gate runs on ex = sqrt(p_err) - kappa * sqrt(p_ref) and its fast,
+	 * floor and mid envelopes of ex, all amplitudes: a mic gain g scales
+	 * sqrt(p_err) by g and leaves the reference alone, so kappa (a mic /
+	 * reference amplitude ratio), absfloor and edge_abs (amplitudes in
+	 * sqrt(p_err) units) scale by g, and the gate then decides exactly as
+	 * it does at gain 1. gate_ratio / gate_edge_ratio are ratios of mic
+	 * envelopes and gate_pref_min is a reference power: unaffected.
+	 */
+	tune.p.gate_kappa *= g;
+	tune.p.gate_absfloor *= g;
+	tune.p.gate_edge_abs *= g;
+	aec_gain_adopt(g);
 
 	tune.onset_hops = tune.p.onset_ms / 20;
 	tune.onset_hold_hops = tune.p.onset_hold_ms / 20;
@@ -966,6 +1042,34 @@ static void aec_tune_refresh(void)
 	tune.cap_hi_bin = AEC_CAP_HI_BIN(tune.p.cap_hi_split_hz);
 }
 #endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
+
+int audio_aec_set_mic_gain_scale(float scale)
+{
+	uint32_t u;
+
+	/* reject NaN/inf by bit pattern (-ffast-math, see tune_check) */
+	memcpy(&u, &scale, sizeof(u));
+	if ((u & 0x7f800000u) == 0x7f800000u ||
+	    !(scale >= AEC_GAIN_SCALE_MIN && scale <= AEC_GAIN_SCALE_MAX)) {
+		return -EINVAL;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+
+	gain_pub = scale;
+	atomic_inc(&gain_gen);
+	k_spin_unlock(&tune_lock, key);
+	return 0;
+}
+
+float audio_aec_get_mic_gain_scale(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&tune_lock);
+	float g = gain_pub;
+
+	k_spin_unlock(&tune_lock, key);
+	return g;
+}
 
 const struct audio_aec_tune_key *audio_aec_tune_keys(size_t *count)
 {
@@ -1345,6 +1449,44 @@ BUILD_ASSERT(256 + sizeof(fd) + sizeof(sup) <=
 	     CONFIG_HALO_MEM_EXTERNAL_SRAM_OFFSET,
 	     "guard + FDAF + suppressor must fit below the ITCM heap offset");
 #endif
+#endif /* CONFIG_HALO_AUDIO_AEC_FDAF */
+
+/* see AEC_GAIN_RESCALE */
+static void aec_state_rescale(float r)
+{
+	const float r2 = r * r;
+
+	for (uint32_t j = 0; j < AEC_TAPS; j++) {
+		aec.w[j] *= r;
+	}
+	aec.p_err *= r2;
+	aec.p_mic *= r2;
+	aec.mic_lf1 *= r;
+	aec.mic_lf2 *= r;
+	aec.err_lf1 *= r;
+	aec.err_lf2 *= r;
+	for (uint32_t j = 0; j < ARRAY_SIZE(aec.err_lp); j++) {
+		aec.err_lp[j] *= r;
+	}
+	aec.err_pe *= r;
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
+	for (uint32_t k = 0; k < FD_K; k++) {
+		for (uint32_t j = 0; j < FD_N; j++) {
+			fd.W[k][j] *= r;
+		}
+	}
+	for (uint32_t j = 0; j < AEC_SUP_NBINS; j++) {
+		sup.Sy[j] *= r2;
+		sup.Se[j] *= r2;
+	}
+	sup.gate_perr *= r2;
+	sup.gate_fast *= r;
+	sup.gate_floor *= r;
+	sup.gate_mid *= r;
+#endif
+}
+
+#if defined(CONFIG_HALO_AUDIO_AEC_FDAF)
 
 #if defined(CONFIG_CMSIS_DSP)
 static arm_rfft_fast_instance_f32 fd_fft;
@@ -2285,7 +2427,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 	}
 
 	bool adapt = adapt_ok && hist_ok && aec.p_ref > 1e-8f &&
-		     aec.p_err < AEC_DTD_THRESHOLD * aec.p_ref;
+		     aec.p_err < dtd_thr * aec.p_ref;
 
 	if (adapt) {
 		/* cold-onset schedule (see AEC_FD_MU_HOT_EXCESS): hot mu
@@ -2363,8 +2505,8 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 		}
 		wn += s * (1.0f / FD_N);
 	}
-	if (wn > AEC_NORM_CLAMP) {
-		float s = __builtin_sqrtf((AEC_NORM_CLAMP / 4.0f) / wn);
+	if (wn > norm_clamp) {
+		float s = __builtin_sqrtf((norm_clamp / 4.0f) / wn);
 
 		for (uint32_t k = 0; k < FD_K; k++) {
 			for (uint32_t j = 0; j < FD_N; j++) {
@@ -2537,7 +2679,7 @@ static bool fd_process_block(int16_t *pcm, bool adapt_ok)
 			}
 		}
 #elif AEC_SUP_GCAP_DTD_GATE
-		if (aec.p_err >= AEC_SUP_GCAP_DTD_RATIO * aec.p_ref) {
+		if (aec.p_err >= AEC_SUP_GCAP_DTD_RATIO * mic_g * mic_g * aec.p_ref) {
 			steady_cap = 1.0f; /* near-end: release the sustained cap */
 			cap_hold = false;
 		}
@@ -2764,6 +2906,16 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 	 * (the reset included) reads it
 	 */
 	aec_tune_refresh();
+#else
+	/* the mic gain scale alone (no tune set in the time-domain build) */
+	if ((uint32_t)atomic_get(&gain_gen) != gain_seen) {
+		k_spinlock_key_t key = k_spin_lock(&tune_lock);
+		float g = gain_pub;
+
+		gain_seen = (uint32_t)atomic_get(&gain_gen);
+		k_spin_unlock(&tune_lock, key);
+		aec_gain_adopt(g);
+	}
 #endif
 	if (atomic_cas(&reset_req, 1, 0)) {
 		aec_session_reset();
@@ -3089,7 +3241,7 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			 * wearer is speaking (double-talk) - freeze
 			 */
 			if (adapt_ok && aec.p_ref > 1e-8f &&
-			    aec.p_err < AEC_DTD_THRESHOLD * aec.p_ref) {
+			    aec.p_err < dtd_thr * aec.p_ref) {
 				float mu = AEC_MU;
 
 				/* soft-start after each gate-on */
@@ -3120,8 +3272,8 @@ void audio_aec_process(int16_t *pcm, size_t samples, uint32_t sample_rate,
 			aec.w[k] *= leak;
 			wn += aec.w[k] * aec.w[k];
 		}
-		if (wn > AEC_NORM_CLAMP) {
-			float s = __builtin_sqrtf((AEC_NORM_CLAMP / 4.0f) / wn);
+		if (wn > norm_clamp) {
+			float s = __builtin_sqrtf((norm_clamp / 4.0f) / wn);
 
 			for (size_t k = 0; k < AEC_TAPS; k++) {
 				aec.w[k] *= s;
@@ -3225,6 +3377,7 @@ const float *audio_aec_snapshot(struct audio_aec_stats *stats, size_t *taps)
 	stats->sup_gate_rel = 0u;
 	stats->sup_pb_hold = 0u;
 #endif
+	stats->mic_gain_scale = audio_aec_get_mic_gain_scale();
 	stats->p_ref = aec.p_ref;
 	stats->p_err = aec.p_err;
 	stats->p_mic = aec.p_mic;

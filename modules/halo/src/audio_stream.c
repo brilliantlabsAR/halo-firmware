@@ -11,6 +11,9 @@
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/init.h>
 #include <t5838.h>
+#ifdef CONFIG_HALO_AUDIO_AEC
+#include <halo/audio_aec.h>
+#endif
 #include "alif_lc3.h"
 
 #if defined(CONFIG_HALO_AUDIO_HPF)
@@ -665,6 +668,24 @@ static struct {
 	.is_initialized = false,
 };
 
+/* The one place the app writes the PDM gain (acquire's saved-or-requested
+ * gain, frame.microphone.gain(), AICS): tells the AEC the effective gain
+ * relative to gain 1, so its gain-1-referenced gate thresholds follow the
+ * gain the hardware actually runs at.
+ */
+static int mic_apply_gain(audio_microphone_t *mic, int gain)
+{
+	int ret = dmic_set_gain(mic->dmic, gain);
+
+#ifdef CONFIG_HALO_AUDIO_AEC
+	if (ret == 0) {
+		audio_aec_set_mic_gain_scale((float)dmic_gain_raw(gain) /
+					     (float)dmic_gain_raw(1));
+	}
+#endif
+	return ret;
+}
+
 audio_microphone_t *audio_microphone_init(int sample_rate, int bit_depth, int channels, int gain,
 					  audio_owner_t owner)
 {
@@ -785,7 +806,7 @@ audio_microphone_t *audio_microphone_init(int sample_rate, int bit_depth, int ch
 		saved_gain = 10;
 	}
 
-	dmic_set_gain(mic_singleton.microphone.dmic, saved_gain);
+	mic_apply_gain(&mic_singleton.microphone, saved_gain);
 	
 	/* Store current gain in structure */
 	mic_singleton.microphone.gain = saved_gain;
@@ -869,7 +890,7 @@ int audio_microphone_set_gain(audio_microphone_t *mic, int gain)
 		return -EINVAL;
 	}
 
-	int ret = dmic_set_gain(mic->dmic, gain);
+	int ret = mic_apply_gain(mic, gain);
 	if (ret != 0) {
 		LOG_ERR("Failed to set gain: %d", ret);
 		return ret;

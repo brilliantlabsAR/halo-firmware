@@ -81,11 +81,13 @@ def tree_defaults():
 # ------------------------------------------------------------------ replay
 
 
-def run(mic, ref, params=None, feed=None, shadow=None, dump=False):
+def run(mic, ref, params=None, feed=None, shadow=None, dump=False, gain_scale=1.0):
     """Replay through the firmware AEC. params: a tune table (keys that differ
     from this tree's defaults are applied) or C.REF_SET (the 0.8.17 source).
-    mic/ref/shadow: wav paths. Returns dict(out, shadow_out, dump), outputs
-    re-aligned to the input."""
+    mic/ref/shadow: wav paths. gain_scale: the capture's effective mic gain
+    relative to gain 1 (session_gain_scale), applied as the device's mic
+    stream does (the 0.8.17 source predates it and runs unscaled). Returns
+    dict(out, shadow_out, dump), outputs re-aligned to the input."""
     with tempfile.TemporaryDirectory(prefix="aec_") as td:
         if params == C.REF_SET:
             exe = tools()["aec_replay_0817"]
@@ -97,6 +99,8 @@ def run(mic, ref, params=None, feed=None, shadow=None, dump=False):
             d = C.diff(params or {}, tree_defaults())
             if d:
                 args += ["-t", ",".join(f"{k}={C.fmt_val(v)}" for k, v in sorted(d.items()))]
+            if gain_scale != 1.0:
+                args += ["-g", repr(float(gain_scale))]
         if feed is not None:
             args += ["-f", f"{feed[0]},{feed[1]}"]
         if shadow is not None:
@@ -331,9 +335,31 @@ def _onset_median(lists, cap_ms):
             float(np.mean([x is None for x in v])))
 
 
+def session_gain_scale(data, man=None):
+    """The mic gain scale the device's AEC applied to a replay dir's captures:
+    the manifest's mic_gain_scale when set, else from the session's effective
+    mic gain (the gain actually applied: a saved gain() overrides
+    start{gain=}), else its start{gain=} when that was left open (the
+    saved-gain probe could not tell; \"1 or 0\")."""
+    man = man or json.load(open(os.path.join(data, "manifest.json")))
+    if man.get("mic_gain_scale") is not None:
+        return float(man["mic_gain_scale"])
+    p = os.path.join(os.path.dirname(os.path.abspath(data)), "session.json")
+    if not os.path.exists(p) and man.get("session"):
+        p = os.path.join(man["session"], "session.json")
+    if not os.path.exists(p):
+        return 1.0
+    s = json.load(open(p))
+    g = s.get("device", {}).get("gain_effective")
+    if not isinstance(g, int):
+        g = s.get("settings", {}).get("mic_gain", 1)
+    return C.mic_gain_scale(g)
+
+
 def build_jobs(data):
     man = json.load(open(os.path.join(data, "manifest.json")))
     it = man["items"]
+    gs = session_gain_scale(data, man)
     # recordings whose reference did not align (prep: weak_align) are not scored
     echo = [k for k, v in it.items() if v["kind"] == "echo" and not v.get("weak_align")]
     talk = [k for k, v in it.items() if v["kind"] == "wearer" and v.get("active_frames", 0) >= 10]
@@ -377,6 +403,8 @@ def build_jobs(data):
                       echo_ref=os.path.join(data, e, "ref.wav"), echo_feed=it[e]["feed"],
                       echo_play=it[e]["play"], dlag=it[dt]["lag"] - it[e]["lag"],
                       prompts_s=it[dt].get("prompts_s", [])))
+    for j in J:
+        j["gain_scale"] = gs
     return J
 
 
@@ -384,13 +412,15 @@ def _run(args):
     job, params = args[:2]
     thr = args[2] if len(args) > 2 else {}
     if job["kind"] == "echo":
-        r = run(job["mic"], job["ref"], params, feed=job["feed"], dump=True)
+        r = run(job["mic"], job["ref"], params, feed=job["feed"], dump=True,
+                gain_scale=job.get("gain_scale", 1.0))
         x = C.read_wav(job["mic"])
         m = echo_metrics(x, r["out"], job["play"], job["floor"], r["dump"])
         m["resid_over_floor"] = m["resid_dbfs"] - float(C.db(job["floor"]))
         return job["id"], m
     if job["kind"] == "syn":
-        r = run(job["mic"], job["ref"], params, feed=job["feed"], shadow=job["shadow"], dump=True)
+        r = run(job["mic"], job["ref"], params, feed=job["feed"], shadow=job["shadow"], dump=True,
+                gain_scale=job.get("gain_scale", 1.0))
         t = C.read_wav(job["shadow"])
         va = talker_mask(t, job["talk_floor"])
         m = nearend(t, r["shadow_out"], C.read_wav(job["echo_mic"]), job["play"], job["floor"], va,
@@ -400,8 +430,9 @@ def _run(args):
         m["level"] = job["level"]
         return job["id"], m
     # rdt: energy method (desk_aec.py "kept") vs the same clip's echo-only capture
-    r = run(job["mic"], job["ref"], params, feed=job["feed"])
-    re_ = run(job["echo_mic"], job["echo_ref"], params, feed=job["echo_feed"])
+    r = run(job["mic"], job["ref"], params, feed=job["feed"], gain_scale=job.get("gain_scale", 1.0))
+    re_ = run(job["echo_mic"], job["echo_ref"], params, feed=job["echo_feed"],
+               gain_scale=job.get("gain_scale", 1.0))
     di, do = C.read_wav(job["mic"]), r["out"]
     ei = C.shift(C.read_wav(job["echo_mic"]), -job["dlag"])
     eo = C.shift(re_["out"], -job["dlag"])

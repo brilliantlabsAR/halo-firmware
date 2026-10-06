@@ -13,13 +13,17 @@
  *    near-end-only component (the linear canceller's prediction depends on
  *    the reference alone)
  *  - a per-block dump (-d file.tsv): path, gate release, onset duck, ...
+ *  - the effective mic gain relative to gain 1 (-g scale), through
+ *    audio_aec_set_mic_gain_scale as the mic stream sets it on the device,
+ *    so a capture recorded at another gain replays with the gate keys
+ *    scaled as they were on the device (the tune set stays gain-1 values)
  *
  * The shadow and path hooks are not in audio_aec.c: calib_build.py inserts
  * them into a copy of the source (hook_source()) before compiling, so this
  * file only links against a hooked copy. Built with -DREPLAY_NO_TUNE for
  * sources older than frame.microphone.aec_tune (the 0.8.17 reference).
  *
- *   aec_replay [-t k=v,...] [-f s,e] [-s sh.wav -o sh_out.wav] [-d d.tsv] mic.wav ref.wav out.wav
+ *   aec_replay [-t k=v,...] [-g scale] [-f s,e] [-s sh.wav -o sh_out.wav] [-d d.tsv] mic.wav ref.wav out.wav
  *   aec_replay -k      list the aec_tune keys: name default min max type
  */
 #include <stdint.h>
@@ -129,11 +133,11 @@ static int16_t clip16(float v)
 
 int main(int argc, char **argv)
 {
-	const char *shp = NULL, *sho = NULL, *dmp = NULL, *tune = NULL;
+	const char *shp = NULL, *sho = NULL, *dmp = NULL, *tune = NULL, *gscale = NULL;
 	long fs = -1, fe = -1;
 	int c;
 
-	while ((c = getopt(argc, argv, "kt:f:s:o:d:")) != -1) {
+	while ((c = getopt(argc, argv, "kt:g:f:s:o:d:")) != -1) {
 		switch (c) {
 		case 'k':
 #ifndef REPLAY_NO_TUNE
@@ -164,6 +168,7 @@ int main(int argc, char **argv)
 			return 2;
 #endif
 		case 't': tune = optarg; break;
+		case 'g': gscale = optarg; break;
 		case 'f': if (sscanf(optarg, "%ld,%ld", &fs, &fe) != 2) return 2; break;
 		case 's': shp = optarg; break;
 		case 'o': sho = optarg; break;
@@ -172,7 +177,7 @@ int main(int argc, char **argv)
 		}
 	}
 	if (argc - optind < 3) {
-		fprintf(stderr, "usage: aec_replay [-t k=v,...] [-f s,e] [-s sh -o sh_out] "
+		fprintf(stderr, "usage: aec_replay [-t k=v,...] [-g scale] [-f s,e] [-s sh -o sh_out] "
 			"[-d dump] mic ref out\n");
 		return 2;
 	}
@@ -198,6 +203,17 @@ int main(int argc, char **argv)
 		apply_tune(tune);
 #else
 		fprintf(stderr, "tune: this build has no aec_tune\n");
+		return 2;
+#endif
+	}
+	if (gscale) {
+#ifndef REPLAY_NO_TUNE
+		if (audio_aec_set_mic_gain_scale(strtof(gscale, NULL)) != 0) {
+			fprintf(stderr, "gain scale: rejected (%s)\n", gscale);
+			return 2;
+		}
+#else
+		fprintf(stderr, "gain scale: this build has no mic gain scale\n");
 		return 2;
 #endif
 	}

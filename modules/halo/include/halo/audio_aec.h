@@ -168,6 +168,32 @@ void audio_aec_tune_get(struct audio_aec_tune *t);
 void audio_aec_tune_defaults(struct audio_aec_tune *t);
 
 /**
+ * @brief Tell the canceller the effective mic gain, relative to gain 1.
+ *
+ * The near-end gate's absolute keys (gate_kappa, gate_absfloor,
+ * gate_edge_abs) are expressed at mic gain 1; the mic thread multiplies
+ * them by this factor when it adopts a block's tunable set, and the
+ * mic-vs-reference power thresholds (double-talk adaptation freeze,
+ * divergence guard) by its square, so every decision is the same at any
+ * gain. audio_aec_tune_get() and aec_tune() keep
+ * returning the gain-1 values. A change mid-session also carries the
+ * filter and the mic-side power trackers over by the ratio of the new
+ * factor to the old (and its square), so a converged filter keeps
+ * cancelling. Called by the mic stream wherever it writes
+ * the PDM gain: scale = PDM_CH_GAIN raw / raw at gain 1 (704), i.e.
+ * (g + 1) / 2 for g >= 0. Published like audio_aec_tune_set (spinlock +
+ * generation, adopted at the next block); safe from any thread context.
+ * Device-global; 1.0 at boot.
+ *
+ * @param scale Factor in [0.001, 100] (the PDM gain steps give 0.045..5.5)
+ * @return 0, or -EINVAL (non-finite or out of range; nothing applied)
+ */
+int audio_aec_set_mic_gain_scale(float scale);
+
+/** @brief The last published mic gain scale (1.0 at boot). */
+float audio_aec_get_mic_gain_scale(void);
+
+/**
  * @brief Feed far-end reference PCM (what the speaker just emitted).
  *
  * ISR-safe: called from the speaker driver's DMA completion callback,
@@ -264,6 +290,9 @@ struct audio_aec_stats {
 			     *   idle preset it there (full). The onset duck
 			     *   re-arms on the next rising edge once it reaches
 			     *   the re-arm hold-off */
+	float mic_gain_scale; /**< effective mic gain relative to gain 1, as
+			       *   last published (audio_aec_set_mic_gain_scale);
+			       *   the gate's absolute keys run scaled by it */
 	float p_ref;        /**< smoothed high-passed reference power */
 	float p_err;        /**< smoothed high-passed error power */
 	float p_mic;        /**< smoothed high-passed mic power */

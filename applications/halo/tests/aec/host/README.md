@@ -164,6 +164,29 @@ over the held first half of that duck and rises ~9dB over the eased second
 half (it stayed flat when that duck borrowed the onset ease and `onset_ms`
 0 held it at full depth for the whole second).
 
+Check 24 covers the mic gain scale (`audio_aec_set_mic_gain_scale`,
+2026-10-06), which the mic stream publishes wherever it writes the PDM
+gain: f = the effective mic gain over gain 1. The AEC makes every decision
+gain-invariant with it: the near-end gate's amplitude keys (`gate_kappa`,
+`gate_absfloor`, `gate_edge_abs`, gain-1 values) scale by f, and the
+mic-vs-reference power thresholds by f^2: the adaptation-freeze
+double-talk test (`p_err < 2 p_ref`), the divergence guard on the filter
+energy (the filter is a mic / reference ratio) and the dead-end option A
+release. Each case runs one scenario three times from the same state
+(forked children): x1, the mic x2.5 in float (gain 4, no clipping) with
+the scale set to 2.5, and x2.5 without it. (a) A hot unit (echo x20 on a
+x0.3 mic) through a warm-up reply, an echo-only reply and the wearer over a
+reply: with the scale every gate decision matches x1 and the output
+matches it x2.5 to -64 dB (int16 rounding); without it 626/900 decisions
+differ and the gate is open on 294/300 echo-only blocks. (b) A cold start
+on a stronger-coupled unit (echo x55 on a x0.15 mic), echo only: x1 and
+x2.5 with the scale both converge to 14.1-14.2 dB with identical gate
+decisions; without it the echo-only p_err stays above 2 p_ref,
+adaptation freezes and nothing is removed (0.0 dB). `AEC_GS_NOAPI=1
+./test_aec_fd` leaves the scale unset and both must FAIL. It also checks
+the setter: diag reads back the factor, and NaN, inf, 0, negative and
+> 100 are rejected.
+
 The device builds audio_aec.c with `-O3 -ffast-math`, under which GCC
 assumes no NaN and folds a plain `!(v >= min && v <= max)` so that NaN
 passes it; `audio_aec_tune_check()` therefore tests the float bit pattern.

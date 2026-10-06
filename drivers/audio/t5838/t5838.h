@@ -387,6 +387,16 @@ void t5838_aad_sleep(const struct device *dev);
  */
 int dmic_set_gain(const struct device *dev, int8_t gain);
 
+/**
+ * @brief The PDM_CH_GAIN raw value dmic_set_gain() writes for a gain step
+ *
+ * 8.4 unsigned fixed point: 352 (22x) at step 0, 704 at step 1. Divide by
+ * dmic_gain_raw(1) for the amplitude factor relative to gain 1.
+ *
+ * @param[in] gain Gain step, -10..10 (clamped)
+ */
+uint16_t dmic_gain_raw(int gain);
+
 #ifdef __cplusplus
 }
 #endif

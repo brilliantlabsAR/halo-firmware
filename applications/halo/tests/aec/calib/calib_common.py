@@ -356,6 +356,17 @@ def norm(v):
     return round(float(v), 6)
 
 
+def mic_gain_scale(g):
+    """Mic gain step g relative to gain 1, as the firmware hands it to the
+    AEC (audio_aec_set_mic_gain_scale): PDM_CH_GAIN raw / raw at gain 1
+    (t5838 dmic_gain_raw: 352 (g + 1) for g >= 0, round(352 / (1 - g))
+    below). The AEC scales gate_kappa, gate_absfloor and gate_edge_abs by
+    it, so aec_tune sets are gain-1 values at any gain."""
+    g = max(-10, min(10, int(g)))
+    raw = (g + 1) * 352 if g >= 0 else (352 + (1 - g) // 2) // (1 - g)
+    return raw / 704.0
+
+
 def same(a, b):
     return abs(float(a) - float(b)) <= 1e-4 * max(1.0, abs(float(b)))
 

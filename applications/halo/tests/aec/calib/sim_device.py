@@ -127,14 +127,15 @@ class SimDevice:
                                            st["budget"], td, cid)
         return self.refs[cid]
 
-    def _aec(self, mic, ref_placed, feed):
+    def _aec(self, mic, ref_placed, feed, gain_scale=1.0):
         # old-gate firmware: the missing keys at their old values (off)
         table = C.apply(O.tree_defaults(), dict(C.NAMED["old-gate"], **self.tune)
                         if self.a.sim_old_gate else self.tune)
         with tempfile.TemporaryDirectory() as td:
             C.write_wav(os.path.join(td, "m.wav"), mic)
             C.write_wav(os.path.join(td, "r.wav"), ref_placed)
-            out = O.run(os.path.join(td, "m.wav"), os.path.join(td, "r.wav"), table, feed=feed)["out"]
+            out = O.run(os.path.join(td, "m.wav"), os.path.join(td, "r.wav"), table, feed=feed,
+                        gain_scale=gain_scale)["out"]
             # O.run re-aligns; the device output carries the AEC delay
             return C.shift(out, -C.AEC_DELAY)
 
@@ -168,9 +169,9 @@ class SimDevice:
         self._maybe_drop("readback")
         # PDM gain: a saved gain overrides start{gain=} (sim: 0 = nothing saved)
         g = self.saved_gain_v if self.saved_gain_v else st["mic_gain"]
-        x = x * 10 ** ((g - 1) * 6.0 / 20)
+        x = x * C.mic_gain_scale(g)
         mic = C.bandpass(x, 300, 3400)
-        out = self._aec(mic, np.roll(ref_placed, -24), feed) if aec else mic
+        out = self._aec(mic, np.roll(ref_placed, -24), feed, C.mic_gain_scale(g)) if aec else mic
         raw = C.lc3_encode(out)
         pcm = C.lc3_decode(raw)
         diag = []

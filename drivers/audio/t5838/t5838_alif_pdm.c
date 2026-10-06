@@ -892,12 +892,8 @@ static int alif_pdm_read(const struct device *dev, uint8_t stream, void **buffer
 	return ret;
 }
 
-int dmic_set_gain(const struct device *dev, int8_t gain)
+uint16_t dmic_gain_raw(int gain)
 {
-	struct t5838_drv_data *drv_data = dev->data;
-	const struct t5838_drv_cfg *drv_cfg = dev->config;
-	uint16_t raw_gain = 0;
-
 	if (gain < -10) {
 		gain = -10;
 	} else if (gain > 10) {
@@ -912,10 +908,16 @@ int dmic_set_gain(const struct device *dev, int8_t gain)
 	 * write raw 1..10 directly, 31-51 dB below g = 0 and in reverse order.
 	 */
 	if (gain < 0) {
-		raw_gain = (uint16_t)((352 + (1 - gain) / 2) / (1 - gain));
-	} else {
-		raw_gain = (uint16_t)((gain + 1) * 352);
+		return (uint16_t)((352 + (1 - gain) / 2) / (1 - gain));
 	}
+	return (uint16_t)((gain + 1) * 352);
+}
+
+int dmic_set_gain(const struct device *dev, int8_t gain)
+{
+	struct t5838_drv_data *drv_data = dev->data;
+	const struct t5838_drv_cfg *drv_cfg = dev->config;
+	uint16_t raw_gain = dmic_gain_raw(gain);
 
 	for (int i = 0; i < MAX_NUM_CHANNELS; i++) {
 		if (drv_data->channel_map & (1 << i)) {
