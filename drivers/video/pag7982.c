@@ -322,10 +322,14 @@ static int pag7982_hw_reset(const struct device *dev)
 		return -ENODEV;
 	}
 
+	/* PAG7982LT-02 datasheet v0.80: reset hold >= 100 us (table 16), and
+	 * at least 30 ms from reset release to the first I2C command (5.2; its
+	 * table says 20 ms). Was 150 ms + 200 ms, which made every camera wake
+	 * take ~0.4 s. */
 	gpio_pin_set_dt(&config->reset, 1U);
-	k_msleep(150);
+	k_msleep(1);
 	gpio_pin_set_dt(&config->reset, 0U);
-	k_msleep(200);
+	k_msleep(30);
 
 	data->is_initialized = false;
 
