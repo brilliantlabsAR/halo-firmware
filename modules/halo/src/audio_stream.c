@@ -1171,7 +1171,13 @@ int audio_aad_set_callback(audio_aad_callback_t callback, int threshold_db, int 
 				  sizeof(silent_period_ms));
 
 	} else {
+		/* Nobody wants wake events: stop the wake interrupt now rather
+		 * than letting the driver re-arm it a silent period after the
+		 * last event (the LPGPIO writes of that re-arm, landing in a
+		 * camera frame, overran the CPI). The next standby's
+		 * audio_aad_rearm() arms it again. */
 		t5838_aad_wake_handler_set(aad, NULL);
+		t5838_aad_wake_disable(aad);
 	}
 
 	return 0;

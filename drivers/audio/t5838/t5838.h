@@ -271,6 +271,8 @@ struct t5838_aad_drv_data {
 #elif defined(CONFIG_T5838_AAD_TRIGGER_GLOBAL_THREAD)
     struct k_work work;
 #endif
+	/* wake interrupt wanted: cleared by t5838_aad_wake_disable() */
+	bool armed;
 };
 #endif /* CONFIG_T5838_AAD_TRIGGER */
 
@@ -298,6 +300,15 @@ void t5838_aad_wake_handler_set(const struct device *dev, t5838_wake_handler_t h
  * @retval negative errno code if othewise.
  */
 int t5838_aad_wake_clear(const struct device *dev);
+
+/**
+ * @brief Stop listening for AAD wake events without leaving AAD mode.
+ *
+ * Disables the wake pin interrupt and cancels the re-enable that the wake
+ * handler schedules a silent period after each event. A later
+ * t5838_aad_*_mode_set() arms it again.
+ */
+int t5838_aad_wake_disable(const struct device *dev);
 
 /**
  * @brief Configure T5838 device into AAD A mode
