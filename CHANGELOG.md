@@ -26,6 +26,9 @@ release pages and tags are not publicly reachable.
   ready. `capture()` waits for a wake still in progress, so scripts that
   wake and capture straight away work as before. `power_save(true)` during
   a wake cancels it without waiting.
+- Waking the camera (`frame.camera.power_save(false)`) takes about 60 ms,
+  down from about 380 ms. The sensor driver held reset for 150 ms and then
+  waited 200 ms; the sensor's datasheet asks for at least 100 µs and 30 ms.
 
 ### Fixed
 
