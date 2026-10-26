@@ -29,6 +29,16 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- A photo taken within about a second of an acoustic (AAD) wake from
+  `frame.standby()` could fail with a capture error (`Capture error
+  occurred`, console `Frame Capture Error. int_st - 0x00000010`). The
+  microphone driver re-armed its wake interrupt a silent period after the
+  wake, and that register write (the pin block sits in a slow power domain)
+  made the camera controller's input FIFO overrun when a frame was being
+  transferred at that moment. The re-arm is skipped once
+  `frame.microphone.aad_callback(nil)` has cleared the callback; the next
+  standby arms it again.
+
 - A camera capture no longer freezes the Lua loop while the image is
   processed. The capture thread and the Lua REPL share a priority, and with
   time slicing off the ~0.5 s debayer/JPEG pass ran to completion before Lua

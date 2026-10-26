@@ -273,7 +273,12 @@ static void t5838_aad_thread_cb(const struct device *dev)
 	drv_data->int_handled = false;
 
 	k_msleep(drv_data->silent_period);
-	setup_wake_int(dev, true);
+	/* Re-arm only while still wanted. The re-enable is a VBAT-domain
+	 * register write; one landing in a camera frame (an AAD wake, then a
+	 * photo a second later) overran the CPI input FIFO. */
+	if (drv_data->armed) {
+		setup_wake_int(dev, true);
+	}
 }
 
 #ifdef CONFIG_T5838_AAD_TRIGGER_OWN_THREAD
@@ -433,7 +438,16 @@ int prv_aad_mode_set(const struct device *dev, struct t5838_address_data_pair *w
 		LOG_ERR("setup_wake_int, err: %d", err);
 		return err;
 	}
+	drv_data->armed = true;
 	return 0;
+}
+
+int t5838_aad_wake_disable(const struct device *dev)
+{
+	struct t5838_aad_drv_data *drv_data = dev->data;
+
+	drv_data->armed = false;
+	return setup_wake_int(dev, false);
 }
 
 /**
@@ -566,6 +580,7 @@ int t5838_aad_mode_disable(const struct device *dev)
 	}
 	drv_data->aad_enabled_mode = T5838_AAD_SELECT_NONE;
 	drv_data->aad_unlocked = false;
+	drv_data->armed = false;
 	pdm_data->aad_child_dev = NULL;
 	return 0;
 }
