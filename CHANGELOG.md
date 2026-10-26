@@ -11,24 +11,26 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.22] - 2026-10-26
+
 ### Added
 
-- `frame.camera.is_awake()` reports whether the camera has finished waking.
+- `frame.camera.is_awake()` reports whether the camera has finished waking (#89).
 
 ### Changed
 
 - The I2C bus shared by the camera, display and display bias supply runs at
   400 kHz (was the 100 kHz default), the fastest all three support. Waking
   the camera writes 48 sensor registers, which now takes 17 ms instead of
-  46 ms.
+  46 ms (#86).
 - `frame.camera.power_save(false)` returns at once and the camera wakes in
   the background; it used to block the Lua script until the camera was
   ready. `capture()` waits for a wake still in progress, so scripts that
   wake and capture straight away work as before. `power_save(true)` during
-  a wake cancels it without waiting.
+  a wake cancels it without waiting (#89).
 - Waking the camera (`frame.camera.power_save(false)`) takes about 60 ms,
   down from about 380 ms. The sensor driver held reset for 150 ms and then
-  waited 200 ms; the sensor's datasheet asks for at least 100 µs and 30 ms.
+  waited 200 ms; the sensor's datasheet asks for at least 100 µs and 30 ms (#91).
 
 ### Fixed
 
@@ -40,7 +42,7 @@ release pages and tags are not publicly reachable.
   made the camera controller's input FIFO overrun when a frame was being
   transferred at that moment. The re-arm is skipped once
   `frame.microphone.aad_callback(nil)` has cleared the callback; the next
-  standby arms it again.
+  standby arms it again (#90).
 
 - A camera capture no longer freezes the Lua loop while the image is
   processed. The capture thread and the Lua REPL share a priority, and with
@@ -49,16 +51,21 @@ release pages and tags are not publicly reachable.
   stopped sending audio for ~0.5 s per photo (the audio was buffered, not
   lost). Threads at priority 7 and below now share the CPU in 5 ms slices.
   On a dev kit the longest mic gap during a 640px photo went from ~0.5 s to
-  under 80 ms, and capture time was unchanged within 0.05 s.
+  under 80 ms, and capture time was unchanged within 0.05 s (#85).
 - `file:close()` raises an error when closing fails. Closing commits a
   written file (littlefs keeps the previous contents until then), and the
   error was only logged, so a write that could not be committed, for
   example for lack of space, looked successful while the old file stayed.
-  A file closed by the garbage collector still only logs the error.
+  A file closed by the garbage collector still only logs the error (#87).
 - After the camera was put to sleep (`frame.camera.power_save(true)`), or
   Halo went to standby, during a capture, the next capture could fail. A
   capture that is stopped part-way now leaves the camera ready for the
-  next one.
+  next one (#88).
+
+### Documentation
+
+- Skills/agent notes: reset the dev kit over SE-UART and capture the console
+  UART (#84).
 
 ## [0.8.21] - 2026-10-24
 
