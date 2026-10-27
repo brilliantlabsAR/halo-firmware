@@ -17,6 +17,7 @@
 LOG_MODULE_REGISTER(pag7982, CONFIG_VIDEO_LOG_LEVEL);
 
 #include "pag7982.h"
+#include <drivers/i2c_glitch_guard.h>
 
 struct pag7982_reg {
 	uint8_t addr;
@@ -395,7 +396,7 @@ static int pag7982_hw_power_off(const struct device *dev)
 	return 0;
 }
 
-static int pag7982_hw_init(const struct device *dev)
+static int pag7982_hw_init_unguarded(const struct device *dev)
 {
 	struct video_format fmt;
 	const struct pag7982_config *config = dev->config;
@@ -459,6 +460,20 @@ static int pag7982_hw_init(const struct device *dev)
 		pag7982_hw_power_off(dev);
 		return -EIO;
 	}
+
+	return ret;
+}
+
+/* Reset, identify and configure the sensor with the shared bus guarded: the
+ * display bias supply on the same bus must not power up in the middle of it
+ * (see i2c_glitch_guard.h). */
+static int pag7982_hw_init(const struct device *dev)
+{
+	int ret;
+
+	i2c_glitch_guard_lock();
+	ret = pag7982_hw_init_unguarded(dev);
+	i2c_glitch_guard_unlock();
 
 	return ret;
 }
@@ -608,7 +623,19 @@ static int pag7982_pm_action(const struct device *dev, enum pm_device_action act
 		if (!data->is_initialized) {
 			ret = pag7982_hw_init(dev);
 			if (ret != 0) {
-				LOG_ERR("Hardware init failed on resume: %d", ret);
+				/* A failed init has already put the sensor back in
+				 * reset. Anything that disturbed the shared bus
+				 * (another device powering up, a stray edge) is a
+				 * one-off: recover the bus and start over once. */
+				const struct pag7982_config *config = dev->config;
+
+				LOG_WRN("Hardware init failed on resume: %d, retrying", ret);
+				(void)i2c_recover_bus(config->i2c.bus);
+				k_msleep(10);
+				ret = pag7982_hw_init(dev);
+				if (ret != 0) {
+					LOG_ERR("Hardware init failed on resume: %d", ret);
+				}
 			}
 		}
 		break;

@@ -14,6 +14,7 @@
 #include <zephyr/sys/linear_range.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
+#include <drivers/i2c_glitch_guard.h>
 
 LOG_MODULE_REGISTER(regulator_tps65132, CONFIG_REGULATOR_LOG_LEVEL);
 
@@ -219,7 +220,7 @@ static int regulator_tps65132_common_disable(const struct device *dev)
 	return ret;
 }
 
-static int regulator_tps65132_enable(const struct device *dev)
+static int regulator_tps65132_enable_unguarded(const struct device *dev)
 {
 	const struct regulator_tps65132_config *config = dev->config;
 	const struct regulator_tps65132_common_config *common_config = config->parent->config;
@@ -291,7 +292,7 @@ done:
 	return ret;
 }
 
-static int regulator_tps65132_disable(const struct device *dev)
+static int regulator_tps65132_disable_unguarded(const struct device *dev)
 {
 	const struct regulator_tps65132_config *config = dev->config;
 	struct regulator_tps65132_common_data *common_data = config->parent->data;
@@ -305,6 +306,31 @@ static int regulator_tps65132_disable(const struct device *dev)
 	common_data->enabled--;
 
 	regulator_tps65132_common_disable(config->parent);
+
+	return ret;
+}
+
+/* Powering the chip or starting an output glitches the shared I2C bus (see
+ * i2c_glitch_guard.h): nothing else may use the bus from the first supply
+ * GPIO edge until the recovery at the end of the sequence. */
+static int regulator_tps65132_enable(const struct device *dev)
+{
+	int ret;
+
+	i2c_glitch_guard_lock();
+	ret = regulator_tps65132_enable_unguarded(dev);
+	i2c_glitch_guard_unlock();
+
+	return ret;
+}
+
+static int regulator_tps65132_disable(const struct device *dev)
+{
+	int ret;
+
+	i2c_glitch_guard_lock();
+	ret = regulator_tps65132_disable_unguarded(dev);
+	i2c_glitch_guard_unlock();
 
 	return ret;
 }
