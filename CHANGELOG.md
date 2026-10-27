@@ -11,6 +11,13 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- A camera wake that overlapped a display wake could fail (`camera failed to
+  wake: -5` or `-19`): the display bias supply's power-up glitches the I2C bus
+  it shares with the camera sensor. The two sequences are now serialized, and
+  a failed sensor init recovers the bus and retries once (#93).
+
 ## [0.8.22] - 2026-10-26
 
 ### Added
