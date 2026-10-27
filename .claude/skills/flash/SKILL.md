@@ -60,6 +60,14 @@ Control → Device reset). Give the device ~10 s, then scan for it. Dev kits
 only: production units have no SE-UART. To see what happened, keep the console
 UART logging while you reproduce it (`logs` skill, `uart_console.py`).
 
+This does **not** reach a dev kit in **deep sleep** (`frame.sleep()` or
+`frame.sleep(0)`, the 5 s button hold, or a shutdown): the console shows
+`halo_pm: Preparing deep sleep (BLE OFF)`, the SE's ISP link is down with
+it, and `maintenance` reports "Device did not respond" (hard maintenance
+mode just waits for a platform reset). Only the button or a power cycle
+wakes it, so guard every computed `frame.sleep()` delay in bench scripts
+(`if dl > 0 then frame.sleep(dl) end`).
+
 ## Recovering a non-booting device (BLE DFU mode)
 
 MCUboot enters **BLE DFU recovery mode** by itself when it finds no bootable
