@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.23] - 2026-10-28
+
 ### Fixed
 
 - A camera wake that overlapped a display wake could fail (`camera failed to
