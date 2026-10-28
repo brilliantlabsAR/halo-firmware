@@ -235,7 +235,7 @@ frame.get_eui()              -- EUI-64 hex string
 frame.get_se_revision()      -- Secure Enclave revision
 
 -- Power management
-frame.stay_awake([enabled])
+frame.stay_awake([enabled])  -- No-op (Frame SDK compatibility)
 frame.light_sleep([seconds])
 frame.standby([seconds])
 frame.wakeup_source()

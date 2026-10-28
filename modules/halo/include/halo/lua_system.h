@@ -45,11 +45,6 @@ extern "C" {
  *     print("Charging")
  * end
  * 
- * -- Stay awake mode
- * frame.stay_awake(true)  -- Prevent auto-sleep
- * frame.stay_awake(false) -- Allow auto-sleep
- * local is_awake = frame.stay_awake() -- Get current state
- * 
  * -- Get EUI-64 address
  * local eui = frame.get_eui() -- Returns 16-character hex string (e.g., "2CF7F1AABBCCDDEE")
  * @endcode

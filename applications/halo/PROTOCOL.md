@@ -188,7 +188,7 @@ System-level service APIs.
 | `light_sleep([seconds])` | `[seconds: number]` | `nil` | Enter light sleep mode |
 | `standby([seconds])` | `[seconds: number]` | `nil` | Enter standby sleep mode |
 | `yield()` | None | `nil` | Yield execution to other tasks |
-| `stay_awake([enabled])` | `[enabled: boolean]` | `boolean/nil` | Control system wake state |
+| `stay_awake([enabled])` | `[enabled: boolean]` | `boolean/nil` | No-op; kept for Frame SDK compatibility |
 | `reboot()` | None | None | Reboot the system |
 | `battery_level()` | None | `number` | Get battery level (0–100) |
 | `battery_voltage()` | None | `number` | Get battery voltage (mV) |
@@ -266,24 +266,14 @@ Enters deep sleep mode. In deep sleep mode, all peripherals are powered off, Blu
 
 #### `frame.stay_awake([enabled])`
 
-Controls whether the system stays awake.
+No-op on Halo, kept only so scripts written for Frame still run. On Frame it
+stopped the device sleeping in its charging cradle; Halo has no equivalent, so
+the call has no effect on sleep, standby or power-off.
 
 - **Parameters:**
-  - `[enabled: boolean]`:
-    - `true`: Prevents sleep
-    - `false`: Allows sleep
-- **Returns:** `nil`
-- **Example:**
-  ```lua
-  -- Prevent system from sleeping
-  frame.stay_awake(true)
-  
-  -- Allow system to sleep
-  frame.stay_awake(false)
-  
-  -- Get current wake state
-  local awake = frame.stay_awake()
-  ```
+  - `[enabled: boolean]`: accepted and ignored
+- **Returns:** `nil` when called with an argument; otherwise the last value
+  passed (`false` after a runtime restart), for compatibility
 
 #### `frame.battery_level()`
 

@@ -411,13 +411,8 @@ Enter ultra-low power mode (requires hardware reset to wake).
 ---
 
 #### `frame.stay_awake([enabled])`
-Prevent/allow automatic sleep.
-
-```lua
-frame.stay_awake(true)   -- prevent sleep
-frame.stay_awake(false)  -- allow sleep
-local awake = frame.stay_awake()  -- get state
-```
+No-op, kept for Frame SDK compatibility. On Frame it kept the device awake in
+its charging cradle; on Halo it does not affect sleep, standby or power-off.
 
 ---
 
@@ -590,21 +585,7 @@ end
 frame.light_sleep(60)
 ```
 
-### Example 3: Preventing Sleep During Critical Work
-
-```lua
--- Prevent auto-sleep during file operation
-frame.stay_awake(true)
-
-local file = io.open("/lfs/data.txt", "w")
-file:write("important data")
-file:close()
-
--- Re-enable sleep
-frame.stay_awake(false)
-```
-
-### Example 4: Button Callbacks
+### Example 3: Button Callbacks
 
 ```lua
 -- Single click - take photo
@@ -627,7 +608,7 @@ frame.button.long(function()
 end)
 ```
 
-### Example 5: C Driver with PM Callback
+### Example 4: C Driver with PM Callback
 
 ```c
 #include <halo/pm_manager.h>
