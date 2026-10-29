@@ -28,8 +28,10 @@ EOF_MARK = "<<diag-eof>>"
 
 
 async def read_file(halo, path):
+    """Contents of a file under /lfs (Lua paths are relative to it), or None."""
     ok = await halo.send_lua(
-        f'__d = frame.file.open("{path}", "r") print(__d and "open" or "none")',
+        f'local ok, f = pcall(frame.file.open, "{path}", "r") __d = ok and f or nil '
+        f'print(__d and "open" or "none")',
         await_print=True, timeout=10)
     if ok != "open":
         return None
@@ -72,26 +74,26 @@ async def main():
             if pairs:
                 body = "\\n".join(pairs) + "\\n"
                 await halo.send_lua(
-                    f'local f = frame.file.open("/lfs/diag.cfg", "w") f:write("{body}") f:close() print(1)',
+                    f'local f = frame.file.open("diag.cfg", "w") f:write("{body}") f:close() print(1)',
                     await_print=True, timeout=10)
                 print(f"# /lfs/diag.cfg: {' '.join(pairs)}", file=sys.stderr)
             else:
-                await halo.send_lua('pcall(frame.file.remove, "/lfs/diag.cfg") print(1)',
+                await halo.send_lua('pcall(frame.file.remove, "diag.cfg") print(1)',
                                     await_print=True, timeout=10)
                 print("# /lfs/diag.cfg removed (defaults)", file=sys.stderr)
         elif args.clear:
-            await halo.send_lua('pcall(frame.file.remove, "/lfs/diag.txt") '
-                                'pcall(frame.file.remove, "/lfs/diag.old") print(1)',
+            await halo.send_lua('pcall(frame.file.remove, "diag.txt") '
+                                'pcall(frame.file.remove, "diag.old") print(1)',
                                 await_print=True, timeout=10)
             print("# log cleared", file=sys.stderr)
         else:
-            cfg = await read_file(halo, "/lfs/diag.cfg")
+            cfg = await read_file(halo, "diag.cfg")
             print(f"# /lfs/diag.cfg: {cfg.split() if cfg else '(none: defaults)'}", file=sys.stderr)
             text = ""
-            for path in ("/lfs/diag.old", "/lfs/diag.txt"):
+            for path in ("diag.old", "diag.txt"):
                 part = await read_file(halo, path)
                 if part:
-                    text += f"===== {path}\n{part}"
+                    text += f"===== /lfs/{path}\n{part}"
             if not text:
                 print("# no log: is this a DIAG=1 build?", file=sys.stderr)
             print(text, end="")
@@ -101,11 +103,17 @@ async def main():
                 print(f"# saved {args.out}", file=sys.stderr)
     finally:
         if args.reboot:
-            await halo.send_lua("frame.system.reboot()", await_print=False)
+            try:
+                await halo.send_lua("frame.reboot()", await_print=False)
+            except Exception:
+                pass  # the device drops the link as it reboots
             print("# rebooting", file=sys.stderr)
         else:
             await halo.send_reset_signal()
-        await halo.disconnect()
+        try:
+            await halo.disconnect()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

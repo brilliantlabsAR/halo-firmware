@@ -124,8 +124,12 @@ static void cfg_read(void)
 	char path[32];
 	char text[256];
 	struct fs_file_t f;
+	struct fs_dirent st;
 
 	snprintf(path, sizeof(path), "%s/diag.cfg", halo_file_mount_point());
+	if (fs_stat(path, &st) != 0) {
+		return; /* no settings: the defaults (fs_open would log an error) */
+	}
 	fs_file_t_init(&f);
 	if (fs_open(&f, path, FS_O_READ) < 0) {
 		return;
