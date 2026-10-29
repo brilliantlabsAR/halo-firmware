@@ -22,7 +22,7 @@
 
 LOG_MODULE_REGISTER(lua_system, CONFIG_HALO_LOG_LEVEL);
 
-/* Static state for stay_awake functionality */
+/* Value echoed back by frame.stay_awake(); see lua_stay_awake() */
 static bool stay_awake = false;
 
 /* Interrupt flag for Ctrl+C during sleep */
@@ -195,7 +195,9 @@ static int lua_kyield(lua_State *L)
 /**
  * @brief Lua: frame.stay_awake([enabled])
  *
- * Get or set the stay_awake flag. When enabled, prevents automatic sleep.
+ * No-op kept for Frame SDK compatibility (on Frame it kept the device awake
+ * in its charging cradle). The value is stored only so the getter returns
+ * what was last set; nothing in power management reads it.
  *
  * @param L Lua state
  * @return 0 or 1 (returns current state if no argument provided)
@@ -213,10 +215,10 @@ static int lua_stay_awake(lua_State *L)
 		luaL_checktype(L, 1, LUA_TBOOLEAN);
 		stay_awake = lua_toboolean(L, 1);
 		LOG_DBG("Stay awake: %s", stay_awake ? "enabled" : "disabled");
-		/* Intentionally just a flag the app reads back: taking the
-		 * SOFT_OFF policy lock here would only block the explicit
-		 * power-off gesture (light/standby never consult that lock),
-		 * and the flag reset on runtime restart would leak the count. */
+		/* Intentionally a no-op: taking the SOFT_OFF policy lock
+		 * here would only block the explicit power-off gesture
+		 * (light/standby never consult that lock), and the reset on
+		 * runtime restart would leak the count. */
 		return 0;
 	}
 
