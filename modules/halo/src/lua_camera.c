@@ -15,6 +15,9 @@
 #include "lua.h"
 #include "lauxlib.h"
 
+#ifdef CONFIG_HALO_DIAG_LOG
+#include <halo/diag_log.h>
+#endif
 #include <halo/lua_camera.h>
 #include <halo/lua_service.h>
 #include <halo/lua_runtime.h>
@@ -313,7 +316,14 @@ static void camera_wake_run(void)
 	camera_state.wake_pending = false;
 
 	while (true) {
+#ifdef CONFIG_HALO_DIAG_LOG
+		int64_t wake_t = k_uptime_get();
+#endif
 		ret = camera_video_pm(PM_DEVICE_ACTION_RESUME);
+#ifdef CONFIG_HALO_DIAG_LOG
+		halo_diag_log("camera wake ret=%d %d ms vbat=%d", ret,
+			      (int)(k_uptime_get() - wake_t), halo_diag_vbat_cached_mv());
+#endif
 		if (ret != 0) {
 			/* Back to power save so the next power_save(false) retries
 			 * the resume instead of reporting "already active". */

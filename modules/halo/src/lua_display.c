@@ -17,6 +17,9 @@
 #include "lua.h"
 #include "lauxlib.h"
 
+#ifdef CONFIG_HALO_DIAG_LOG
+#include <halo/diag_log.h>
+#endif
 #include <halo/lua_display.h>
 #include <halo/lua_service.h>
 #include <halo/lua_runtime.h>
@@ -264,7 +267,14 @@ static int display_resume_handler(void)
 		enum pm_device_state pm_state;
 		ret = pm_device_state_get(display_state.panel, &pm_state);
 		if (ret == 0 && pm_state != PM_DEVICE_STATE_ACTIVE) {
+#ifdef CONFIG_HALO_DIAG_LOG
+			int64_t wake_t = k_uptime_get();
+#endif
 			ret = pm_device_action_run(display_state.panel, PM_DEVICE_ACTION_RESUME);
+#ifdef CONFIG_HALO_DIAG_LOG
+			halo_diag_log("display wake ret=%d %d ms vbat=%d", ret,
+				      (int)(k_uptime_get() - wake_t), halo_diag_vbat_cached_mv());
+#endif
 			if (ret != 0) {
 				LOG_ERR("Failed to resume panel: %d", ret);
 #if defined(CONFIG_HALO_AUDIO_STREAM)

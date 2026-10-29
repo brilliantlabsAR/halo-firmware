@@ -21,6 +21,18 @@ else()
     set(BUILD_EXTRAVERSION "debug")
 endif()
 
+# DIAG=1: the bring-up experiment build (diag.conf: /lfs/diag.txt event log and
+# the staged boot). Tagged in the version string so it can't pass for a release.
+if(DEFINED ENV{DIAG} AND "$ENV{DIAG}" STREQUAL "1")
+    message(STATUS "=== Diagnostic (staged boot) build ===")
+    set(EXTRA_CONF_FILE "${EXTRA_CONF_FILE};diag.conf" CACHE STRING "Extra config file" FORCE)
+    if(BUILD_EXTRAVERSION STREQUAL "")
+        set(BUILD_EXTRAVERSION "diag")
+    else()
+        set(BUILD_EXTRAVERSION "${BUILD_EXTRAVERSION}diag")
+    endif()
+endif()
+
 # Update VERSION file with correct EXTRAVERSION
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VERSION_CONTENT)
 string(REGEX REPLACE "EXTRAVERSION = [^\n]*" "EXTRAVERSION = ${BUILD_EXTRAVERSION}" VERSION_CONTENT "${VERSION_CONTENT}")

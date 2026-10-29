@@ -29,6 +29,9 @@ zephyr_library_sources_ifdef(CONFIG_HALO_LED_MANAGER src/led_manager.c)
 # Battery Manager Component
 zephyr_library_sources_ifdef(CONFIG_HALO_BATTERY_MANAGER src/battery_manager.c)
 
+# Diagnostic event log (bring-up experiments)
+zephyr_library_sources_ifdef(CONFIG_HALO_DIAG_LOG src/diag_log.c)
+
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_STREAM src/audio_stream.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_HPF src/audio_eq.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_AEC src/audio_aec.c)

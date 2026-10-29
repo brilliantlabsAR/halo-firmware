@@ -1245,4 +1245,28 @@ config HALO_BLE_AUDIO_SERVICE
 	  When enabled, the service will be automatically registered
 	  and available for BLE clients to stream audio.
 
+config HALO_DIAG_LOG
+	bool "Diagnostic event log in /lfs/diag.txt (bring-up experiments)"
+	depends on HALO_FILE_MANAGER
+	help
+	  One synced line per boot stage, camera/display wake and heartbeat,
+	  stamped with the uptime, so the file shows how far a unit got before
+	  it lost power or reset. Not for shipping firmware: every line is an
+	  /lfs write. Settings are read from /lfs/diag.cfg (key=value lines).
+
+config HALO_DIAG_LOG_MAX_BYTES
+	int "Diagnostic log size before it moves to diag.old"
+	default 32768
+	depends on HALO_DIAG_LOG
+
+config HALO_SLOW_BOOT
+	bool "Staged boot: one power-up at a time, with gaps (experiment)"
+	depends on HALO_DIAG_LOG && HALO_BLE_MANAGER && HALO_LUA_RUNTIME
+	help
+	  main() brings up Bluetooth, the startup sound, the boot logo (display
+	  and its bias supply) and the Lua app one at a time, with a gap after
+	  each, logging the battery before and after every stage. /lfs/diag.cfg
+	  keys: slow (1; 0 = the normal boot order, still logged), start_ms,
+	  gap_ms, sound, logo, heartbeat_s.
+
 endif # HALO

@@ -238,8 +238,11 @@ static void update_charge_led(void)
 #endif
 }
 
-/* Fetch battery data from sensor */
-static int fetch_battery_data(void)
+/* Fetch battery data from sensor. The vbat driver is not reentrant: the
+ * periodic work and halo_battery_update_now() callers go through this lock. */
+static K_MUTEX_DEFINE(fetch_lock);
+
+static int fetch_battery_data_locked(void)
 {
 	int ret;
 	uint8_t prev_level = bat_mgr_ctx.info.level;
@@ -308,6 +311,14 @@ static int fetch_battery_data(void)
 	}
 
 	return 0;
+}
+
+static int fetch_battery_data(void)
+{
+	k_mutex_lock(&fetch_lock, K_FOREVER);
+	int ret = fetch_battery_data_locked();
+	k_mutex_unlock(&fetch_lock);
+	return ret;
 }
 
 /* Sensor trigger handler for charging state changes */
