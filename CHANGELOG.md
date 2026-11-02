@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.24] - 2026-11-03
+
 ### Changed
 
 - Documented `frame.stay_awake()` as a no-op kept for Frame SDK compatibility.
