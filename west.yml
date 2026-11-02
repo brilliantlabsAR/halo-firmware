@@ -36,7 +36,7 @@ manifest:
     # committed (no manual patch step after `west update`).
     - name: zephyr
       url: https://github.com/brilliantlabsAR/halo-zephyr-alif
-      revision: 5430ef027ce59ccd93406e1cf492b3ce083c9eee
+      revision: ab1d94065586c1148381db079e8623276f8a7a96
       import:
         # In addition to the zephyr repository itself,
         # Alif SDK fetches the needed projects

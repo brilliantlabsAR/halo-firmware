@@ -16,6 +16,19 @@ release pages and tags are not publicly reachable.
 - Documented `frame.stay_awake()` as a no-op kept for Frame SDK compatibility.
   It never prevented sleep on Halo; the docs said it did.
 
+### Fixed
+
+- `frame.imu.raw()` could fail with `Failed to fetch magnetometer data: -5`
+  or `Failed to fetch accelerometer data: -2` while the BLE link was busy.
+  A sensor register read is a write of the register address without a STOP,
+  then a read, and the I2C controller ends the transfer with a STOP if its
+  command FIFO runs dry between the two. The driver queued the read from a
+  thread, which BLE work could hold off for longer than the last byte takes
+  on the bus. The Zephyr I2C driver now queues the read from the interrupt
+  handler, so a late wake-up no longer ends the transfer early. A unit that
+  failed 3 reads in 840 over BLE ran 12,000 with none (#97,
+  brilliantlabsAR/halo-zephyr-alif#3).
+
 ## [0.8.23] - 2026-10-28
 
 ### Fixed
