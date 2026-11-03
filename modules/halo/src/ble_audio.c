@@ -348,6 +348,9 @@ struct sink_channel {
 	audio_codec_ctx_t *lc3_decoder;   /**< LC3 decoder instance */
 	uint8_t stream_lid;               /**< Stream local ID */
 	bool enabled;                     /**< Channel is active */
+	uint32_t location_bf;             /**< ASE audio location (0 = unspecified) */
+	uint8_t slot;                     /**< Output slot: 0 = left, 1 = right */
+	bool filled;                      /**< Decoded into pcm_buffer, awaiting write */
 };
 
 /**
@@ -373,6 +376,16 @@ static struct {
 	int16_t *pcm_buffer;      /**< Interleaved output buffer */
 	int16_t *channel_buffer;  /**< Single channel temp buffer */
 	size_t pcm_frame_samples; /**< Samples per frame per channel */
+
+	/* Stereo frame assembly (see sink_frame_ready) */
+	uint32_t frame_ts;        /**< SDU timestamp (us) of the frame being filled */
+	bool frame_ts_valid;      /**< frame_ts is set: some slot is filled */
+	bool partner_missed;      /**< A channel's next SDU is from a later frame */
+	/* Pairing diagnostics, logged when the sink stops */
+	uint32_t pair_frames;     /**< Stereo frames written */
+	uint32_t pair_skew_max;   /**< Largest |timestamp skew| (us) within a frame */
+	uint32_t pair_stale;      /**< SDUs dropped as older than their partner */
+	uint32_t pair_missed;     /**< Frames flushed with a partner slot missing */
 
 	/* Decoder thread */
 	struct k_thread decoder_thread;
@@ -463,6 +476,183 @@ static struct {
 	.sdu_seq_num = 0,
 };
 
+#if AUDIO_OUTPUT_CHANNELS == 2
+/** Queued SDUs on a filled channel that mean its partner stopped delivering */
+#define SINK_PARTNER_DEAD_DEPTH 4
+
+/**
+ * @brief Decide whether the stereo frame in pcm_buffer is ready to write
+ *
+ * Each enabled channel decodes into its own slot (left or right). The frame
+ * is written once all enabled channels have filled; their SDUs come from
+ * separate CISes and can land in different decoder wakeups. A slot nobody
+ * fills gets a copy of the other one, so a single channel (a mono stream,
+ * or one ASE that did not configure) plays on both sides.
+ *
+ * A partner that misses a frame is detected by timestamp: its next SDU is
+ * from a later frame (sink_take_matching_sdu sets partner_missed), so a lost
+ * SDU costs one frame of mono. The partner's SDUs can reach their queue up
+ * to an interval after the filled channel's, so queue depth alone is not a
+ * miss; it only backs up a partner that stops delivering altogether, once
+ * the filled channel has SINK_PARTNER_DEAD_DEPTH more SDUs waiting.
+ *
+ * @return true if pcm_buffer holds a complete frame (filled flags cleared)
+ */
+static bool sink_frame_ready(void)
+{
+	bool slot_filled[2] = {false, false};
+	int enabled = 0;
+	int filled = 0;
+	bool partner_dead = false;
+
+	for (int ch = 0; ch < sink_datapath.channel_count; ch++) {
+		struct sink_channel *channel = &sink_datapath.channel[ch];
+
+		if (!channel->enabled || !channel->sdu_queue || !channel->lc3_decoder) {
+			channel->filled = false;
+			continue;
+		}
+		enabled++;
+		if (channel->filled) {
+			filled++;
+			slot_filled[channel->slot] = true;
+			if (k_msgq_num_used_get(&channel->sdu_queue->msgq) >=
+			    SINK_PARTNER_DEAD_DEPTH) {
+				partner_dead = true;
+			}
+		}
+	}
+
+	if (filled == 0) {
+		/* Nothing held (e.g. the only filled channel just stopped):
+		 * start the next frame from scratch.
+		 */
+		sink_datapath.frame_ts_valid = false;
+		sink_datapath.partner_missed = false;
+		return false;
+	}
+	if (filled < enabled && !partner_dead && !sink_datapath.partner_missed) {
+		return false;
+	}
+
+	sink_datapath.pair_frames++;
+	if (enabled > 1 && filled < enabled) {
+		sink_datapath.pair_missed++;
+	}
+	if (slot_filled[0] != slot_filled[1]) {
+		int const from = slot_filled[0] ? 0 : 1;
+
+		for (size_t i = 0; i < sink_datapath.pcm_frame_samples; i++) {
+			sink_datapath.pcm_buffer[i * 2 + (1 - from)] =
+				sink_datapath.pcm_buffer[i * 2 + from];
+		}
+	}
+
+	for (int ch = 0; ch < sink_datapath.channel_count; ch++) {
+		sink_datapath.channel[ch].filled = false;
+	}
+	sink_datapath.frame_ts_valid = false;
+	sink_datapath.partner_missed = false;
+	return true;
+}
+
+/**
+ * @brief Line a channel's queue head up with the stereo frame being filled
+ *
+ * The two sink channels are separate CISes of one CIG, so the SDUs of one
+ * frame carry the same SDU synchronization reference (timestamp). Pairing by
+ * queue head alone would let a single lost SDU shift every later frame by
+ * one on one side. Once some slot of the frame is filled, a queued SDU older
+ * than it is dropped; one from a later frame is left queued and marks the
+ * partner as missed, so the frame is flushed with the present slot copied.
+ *
+ * @return true if the queue head belongs to the frame being filled (or no
+ *         slot is filled yet), so the caller should take and decode it
+ */
+static bool sink_take_matching_sdu(struct sink_channel *channel)
+{
+	uint32_t const frame_us = sink_datapath.frame_duration_is_10ms ? 10000 : 7500;
+	gapi_isooshm_sdu_buf_t *p_sdu;
+
+	while (k_msgq_peek(&channel->sdu_queue->msgq, &p_sdu) == 0 && p_sdu) {
+		if (!sink_datapath.frame_ts_valid) {
+			return true;
+		}
+
+		int32_t const d = (int32_t)(p_sdu->timestamp - sink_datapath.frame_ts);
+
+		if (d > (int32_t)(frame_us / 2)) {
+			sink_datapath.partner_missed = true;
+			return false;
+		}
+		if (d >= -(int32_t)(frame_us / 2)) {
+			uint32_t const skew = (uint32_t)(d < 0 ? -d : d);
+
+			if (skew > sink_datapath.pair_skew_max) {
+				sink_datapath.pair_skew_max = skew;
+			}
+			return true;
+		}
+
+		/* Older than the frame being filled: drop it */
+		sink_datapath.pair_stale++;
+		if (k_msgq_get(&channel->sdu_queue->msgq, &p_sdu, K_NO_WAIT) == 0 && p_sdu) {
+			uint32_t const timestamp = p_sdu->timestamp;
+			uint16_t const seq_num = p_sdu->seq_num;
+
+			k_mem_slab_free(&channel->sdu_queue->slab, p_sdu);
+			iso_datapath_ctoh_notify_sdu_done(channel->iso_dp, timestamp, seq_num);
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief Give each live sink channel an output slot
+ *
+ * A channel whose ASE location names one side takes that side; the others
+ * take whichever slot is still free, so two channels never share a slot
+ * unless both explicitly name the same side.
+ */
+static void sink_assign_slots(void)
+{
+	bool used[2] = {false, false};
+
+	for (int ch = 0; ch < sink_datapath.channel_count; ch++) {
+		struct sink_channel *c = &sink_datapath.channel[ch];
+
+		if (c->stream_lid == 0xFF) {
+			continue;
+		}
+		if (c->location_bf == GAF_LOC_FRONT_LEFT_BIT) {
+			c->slot = 0;
+			used[0] = true;
+		} else if (c->location_bf == GAF_LOC_FRONT_RIGHT_BIT) {
+			c->slot = 1;
+			used[1] = true;
+		}
+	}
+	for (int ch = 0; ch < sink_datapath.channel_count; ch++) {
+		struct sink_channel *c = &sink_datapath.channel[ch];
+
+		if (c->stream_lid == 0xFF || c->location_bf == GAF_LOC_FRONT_LEFT_BIT ||
+		    c->location_bf == GAF_LOC_FRONT_RIGHT_BIT) {
+			continue;
+		}
+		c->slot = !used[0] ? 0 : (!used[1] ? 1 : (uint8_t)(ch & 1));
+		used[c->slot] = true;
+	}
+	for (int ch = 0; ch < sink_datapath.channel_count; ch++) {
+		struct sink_channel *c = &sink_datapath.channel[ch];
+
+		if (c->stream_lid != 0xFF) {
+			LOG_INF("Sink stream %u: location 0x%x -> %s slot", c->stream_lid,
+				(unsigned int)c->location_bf, c->slot ? "right" : "left");
+		}
+	}
+}
+#endif
+
 /**
  * @brief Decoder thread function
  *
@@ -493,6 +683,17 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 			if (!channel->enabled || !channel->sdu_queue || !channel->lc3_decoder) {
 				continue;
 			}
+#if AUDIO_OUTPUT_CHANNELS == 2
+			/* This channel's half of the frame is already decoded:
+			 * leave its next SDU queued until the frame is written.
+			 */
+			if (channel->filled) {
+				continue;
+			}
+			if (!sink_take_matching_sdu(channel)) {
+				continue;
+			}
+#endif
 
 			/* Get SDU from queue (non-blocking) */
 			p_sdu = NULL;
@@ -505,6 +706,7 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 			if (ret || !p_sdu) {
 				continue;
 			}
+#if AUDIO_OUTPUT_CHANNELS == 1
 			if (!p_sdu->sdu_len) {
 				/* Empty SDU, skip. Capture metadata before the free —
 				 * reading p_sdu after k_mem_slab_free is a use-after-free. */
@@ -515,6 +717,7 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 								  seq_num);
 				continue;
 			}
+#endif
 
 			got_data = true;
 
@@ -527,8 +730,12 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 				p_sdu->sdu_len = channel->sdu_queue->payload_size;
 			}
 
-			/* Decode LC3 frame */
-			bool bad_frame = (p_sdu->status != GAPI_ISOOSHM_SDU_STATUS_VALID);
+			/* Decode LC3 frame. In stereo an empty SDU still fills its
+			 * slot (with silence, below), so each channel consumes
+			 * exactly one SDU per frame.
+			 */
+			bool bad_frame = (p_sdu->status != GAPI_ISOOSHM_SDU_STATUS_VALID) ||
+					 (p_sdu->sdu_len == 0);
 
 			if (!bad_frame) {
 				ret = audio_lc3_decode_frame(
@@ -549,11 +756,15 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 			}
 
 #if AUDIO_OUTPUT_CHANNELS == 2
-			/* Stereo output: interleave mono to both L/R channels */
+			/* Stereo output: this channel fills its own slot */
 			for (size_t i = 0; i < sink_datapath.pcm_frame_samples; i++) {
-				sink_datapath.pcm_buffer[i * 2] = sink_datapath.channel_buffer[i];
-				sink_datapath.pcm_buffer[i * 2 + 1] =
+				sink_datapath.pcm_buffer[i * 2 + channel->slot] =
 					sink_datapath.channel_buffer[i];
+			}
+			channel->filled = true;
+			if (!sink_datapath.frame_ts_valid) {
+				sink_datapath.frame_ts = p_sdu->timestamp;
+				sink_datapath.frame_ts_valid = true;
 			}
 #else
 			/* Mono output: direct copy */
@@ -572,6 +783,11 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 			/* Notify ISO datapath that we processed an SDU */
 			iso_datapath_ctoh_notify_sdu_done(channel->iso_dp, timestamp, seq_num);
 		}
+
+#if AUDIO_OUTPUT_CHANNELS == 2
+		/* Write a frame once every enabled channel has filled its slot. */
+		got_data = sink_frame_ready();
+#endif
 
 		/* Write to speaker if we got data */
 		if (got_data && sink_datapath.speaker && sink_datapath.streaming) {
@@ -835,7 +1051,12 @@ static int audio_datapath_create_sink(struct audio_datapath_config const *const 
 		sink_datapath.channel[ch].lc3_decoder = NULL;
 		sink_datapath.channel[ch].stream_lid = 0xFF;
 		sink_datapath.channel[ch].enabled = false;
+		sink_datapath.channel[ch].slot = ch;
+		sink_datapath.channel[ch].location_bf = 0;
+		sink_datapath.channel[ch].filled = false;
 	}
+	sink_datapath.frame_ts_valid = false;
+	sink_datapath.partner_missed = false;
 
 	/* Initialize speaker with configured output channels */
 	sink_datapath.speaker = audio_speaker_init(cfg->sampling_rate_hz, 16, AUDIO_OUTPUT_CHANNELS,
@@ -896,7 +1117,8 @@ static int audio_datapath_create_sink(struct audio_datapath_config const *const 
  * @return 0 on success, negative error code on failure
  */
 static int audio_datapath_channel_create_sink(size_t const octets_per_frame,
-					      uint8_t const stream_lid)
+					      uint8_t const stream_lid,
+					      uint32_t const location_bf)
 {
 
 	if (!sink_datapath.initialized) {
@@ -923,6 +1145,12 @@ static int audio_datapath_channel_create_sink(size_t const octets_per_frame,
 	/* Store frame size */
 	sink_datapath.octets_per_frame = octets_per_frame;
 	channel->stream_lid = stream_lid;
+	channel->filled = false;
+
+	channel->location_bf = location_bf;
+#if AUDIO_OUTPUT_CHANNELS == 2
+	sink_assign_slots();
+#endif
 
 	/* Create SDU queue */
 	channel->sdu_queue = sdu_queue_create(SDU_QUEUE_LENGTH, octets_per_frame);
@@ -1060,6 +1288,16 @@ static int audio_datapath_channel_stop_sink(uint8_t const stream_lid)
 
 	/* Stop speaker if no active channels */
 	if (!any_active && sink_datapath.streaming) {
+#if AUDIO_OUTPUT_CHANNELS == 2
+		LOG_INF("Sink pairing: %u frames, max skew %u us, %u stale dropped, "
+			"%u partner-missed",
+			sink_datapath.pair_frames, sink_datapath.pair_skew_max,
+			sink_datapath.pair_stale, sink_datapath.pair_missed);
+		sink_datapath.pair_frames = 0;
+		sink_datapath.pair_skew_max = 0;
+		sink_datapath.pair_stale = 0;
+		sink_datapath.pair_missed = 0;
+#endif
 		if (sink_datapath.speaker) {
 			audio_speaker_stop(sink_datapath.speaker);
 		}
@@ -2070,8 +2308,13 @@ static void on_unicast_server_cb_enable_req(uint8_t const ase_lid,
 
 	/* Create audio channel based on direction */
 	if (p_ase->dir == ASE_DIR_SINK) {
+		uint32_t const location_bf =
+			p_ase->p_codec_cfg
+				? ((const bap_cfg_t *)p_ase->p_codec_cfg)->param.location_bf
+				: 0;
+
 		if (audio_datapath_channel_create_sink(audio_ctx.ase_config_sink.frame_octet,
-						       p_ase->stream_lid)) {
+						       p_ase->stream_lid, location_bf)) {
 			LOG_ERR("Failed to create sink channel");
 			rsp_code = BAP_UC_CP_RSP_CODE_UNSPECIFIED_ERROR;
 		}

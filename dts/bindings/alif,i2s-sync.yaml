@@ -33,4 +33,7 @@ properties:
 
   mono-mode:
     type: boolean
-    description: Enable mono mode for the I2S bus (only left channel is used)
+    description: |
+      Start the bus in mono: each sample is sent in both the left and right
+      slots. This is only the default; a stream can switch to stereo (one
+      sample per slot) at runtime with i2s_sync_configure().
