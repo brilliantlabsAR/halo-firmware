@@ -234,7 +234,7 @@ __ramfunc static int i2s_send(const struct device *dev, void *buf, size_t len)
 
 	size_t const bytes_per_sample = dev_cfg->bit_depth / 8U;
 
-	if ((len % (dev_cfg->channel_count * bytes_per_sample)) != 0) {
+	if ((len % (dev_data->runtime_cfg.channel_count * bytes_per_sample)) != 0) {
 		LOG_ERR("Invalid buffer size");
 		return -EINVAL;
 	}
@@ -365,7 +365,7 @@ __ramfunc static int i2s_recv(const struct device *dev, void *buf, size_t len)
 
 	size_t const bytes_per_sample = dev_cfg->bit_depth / 8U;
 
-	if ((len % (dev_cfg->channel_count * bytes_per_sample)) != 0) {
+	if ((len % (dev_data->runtime_cfg.channel_count * bytes_per_sample)) != 0) {
 		LOG_ERR("Invalid buffer size");
 		return -EINVAL;
 	}
@@ -548,8 +548,14 @@ static int configure_clock_source(const struct device *dev)
 {
 	const struct i2s_sync_config_priv *dev_cfg = dev->config;
 	struct i2s_sync_data *dev_data = dev->data;
-	/* Bit clock should be equal to channel_count * bit_depth * sample_rate */
-	uint32_t bclk = 2U * dev_data->runtime_cfg.channel_count * dev_data->runtime_cfg.bit_depth *
+	/* An I2S frame always carries two slots (left + right), whatever the
+	 * stream's channel count: mono duplicates its sample into both slots,
+	 * stereo fills them from consecutive samples. So the bit clock is
+	 * 2 * bit_depth * sample_rate. It used to scale with channel_count,
+	 * which played a stereo stream at twice the frame rate to make up for
+	 * the ISRs treating every stream as mono.
+	 */
+	uint32_t bclk = 2U * dev_data->runtime_cfg.bit_depth *
 			dev_data->runtime_cfg.sample_rate;
 	uint32_t div = I2S_CLK_SRC_HZ / bclk;
 	if ((div > I2S_CLK_DIVISOR_MAX) || (div < I2S_CLK_DIVISOR_MIN)) {
@@ -677,8 +683,10 @@ __ramfunc static void i2s_sync_tx_isr_handler(const struct device *dev)
 		/* Left channel is always output from first buffer position */
 		i2s_write_left_tx(i2s, (uint32_t)buf[dev_data->tx.idx]);
 
-		/* TODO Use correct config variable here! */
-		if (dev_cfg->channel_count == 1U) {
+		/* The stream's channel count is the runtime one (set by
+		 * i2s_sync_configure); the DT mono-mode is only its default.
+		 */
+		if (dev_data->runtime_cfg.channel_count == 1U) {
 			/* In mono mode, right channel is duplicated left channel data */
 			i2s_write_right_tx(i2s, (uint32_t)buf[dev_data->tx.idx]);
 		} else {
@@ -697,7 +705,7 @@ __ramfunc static void i2s_sync_tx_isr_handler(const struct device *dev)
 		}
 
 		dev_data->tx.idx++;
-		dev_data->tx.count += dev_cfg->channel_count;
+		dev_data->tx.count += dev_data->runtime_cfg.channel_count;
 		tx_free--;
 	}
 
@@ -740,7 +748,7 @@ __ramfunc static void i2s_sync_rx_isr_handler(const struct device *dev)
 		/* Left channel is always placed in first buffer position */
 		buf[dev_data->rx.idx] = (int16_t)i2s_read_left_rx(i2s);
 
-		if (dev_cfg->channel_count == 1U) {
+		if (dev_data->runtime_cfg.channel_count == 1U) {
 			/* In mono mode, right channel should be read and then discarded */
 			(void)i2s_read_right_rx(i2s);
 		} else {
@@ -759,7 +767,7 @@ __ramfunc static void i2s_sync_rx_isr_handler(const struct device *dev)
 		}
 
 		dev_data->rx.idx++;
-		dev_data->rx.count += dev_cfg->channel_count;
+		dev_data->rx.count += dev_data->runtime_cfg.channel_count;
 		rx_avail--;
 	}
 
