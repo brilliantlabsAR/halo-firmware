@@ -212,6 +212,9 @@ struct t5838_drv_data {
 	uint16_t gain[8];      // gain for each channel
 	uint32_t threshold[8]; // threshold selection for each channel
 	uint8_t num_channels;
+	/* DMA drain for this stream: set at configure, mono only (see
+	 * alif_pdm_configure). Stereo uses the almost-full ISR drain. */
+	bool use_dma;
 	volatile uint32_t discard_samples;
 
 #ifdef CONFIG_T5838_AAD_TRIGGER

@@ -351,7 +351,7 @@ static int alif_pdm_trigger_start(const struct device *dev)
 	sys_write32(drv_data->mode << PDM_CLK_MODE | drv_data->channel_map,
 		    (drv_cfg->regs + PDM_CONFIG_REGISTER));
 
-	if (drv_cfg->dma_dev != NULL) {
+	if (drv_data->use_dma) {
 		/* DMA drain: the watermark feeds the dma2 handshake. Enable
 		 * ONLY the overflow ERROR IRQ for loss visibility (it should
 		 * now read ~0); the ISR early-returns in DMA mode without
@@ -391,7 +391,7 @@ static int alif_pdm_trigger_stop(const struct device *dev)
 	const struct t5838_drv_cfg *drv_cfg = dev->config;
 	struct t5838_drv_data *drv_data = dev->data;
 
-	if (drv_cfg->dma_dev != NULL) {
+	if (drv_data->use_dma) {
 		/* clear active first so the completion callback won't re-arm,
 		 * then stop the channel
 		 */
@@ -474,7 +474,7 @@ static void alif_pdm_isr(const struct device *dev)
 
 	t5838_diag_isrs++;
 
-	if (drv_cfg->dma_dev != NULL) {
+	if (drv_data->use_dma) {
 		/* DMA owns the FIFO data registers. Only service the overflow
 		 * ERROR status here (read to clear the sticky bit + count) -
 		 * with the DMA draining it should essentially never fire, which
@@ -833,6 +833,21 @@ static int alif_pdm_configure(const struct device *dev, struct dmic_cfg *config)
 		if (drv_data->channel_map & (1 << i)) num_channels++;
 	}
 	drv_data->num_channels = num_channels;
+
+	/* The DMA drain is mono only. With two channels enabled its 32-bit
+	 * CH2_CH3 words come back with ch3 == ch2 bit for bit, so a stereo
+	 * capture is two copies of one mic. The
+	 * almost-full ISR drain reads both channels correctly, so stereo
+	 * falls back to it. The AEC, which is what needs the DMA drain's
+	 * overflow immunity, only runs on mono. USE_DMA routes the FIFO
+	 * watermark to the DMA handshake, so it is set per stream too.
+	 */
+	drv_data->use_dma = (drv_cfg->dma_dev != NULL) && (num_channels == 1);
+	sys_write32((drv_cfg->fir_bypass << PDM_BYPASS_FIR) |
+			    (drv_cfg->iir_bypass << PDM_BYPASS_IIR) |
+			    (drv_data->use_dma ? PDM_CTL1_USE_DMA : 0U),
+		    (drv_cfg->regs + PDM_CTL_REGISTER));
+
 	uint32_t sample_rate = alif_pdm_get_sample_rate(drv_data->mode);
 	drv_data->discard_samples = (uint32_t)(sample_rate * drv_cfg->discard_duration_ms / 1000.0 * num_channels);
 
