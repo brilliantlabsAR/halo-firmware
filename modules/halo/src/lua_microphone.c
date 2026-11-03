@@ -952,8 +952,16 @@ static int lua_microphone_start(lua_State *L)
 		halo_malloc(CONFIG_HALO_LUA_MICROPHONE_RING_BUFFER_SIZE, HALO_MEM_REGION_EXTERNAL);
 
 	if (!mic_state.ringbuf_data) {
+		/* The external heap normally holds nothing but this buffer, so
+		 * report its state: a leak shows as used bytes, fragmentation as
+		 * free bytes that still could not fit the request. */
+		halo_mem_stats_t ext = {0};
+
+		halo_mem_get_stats(HALO_MEM_REGION_EXTERNAL, &ext);
 		mic_cleanup_resources();
-		return luaL_error(L, "Failed to allocate ring buffer");
+		return luaL_error(L, "Failed to allocate ring buffer (%d bytes, ext used %d free %d)",
+				  (int)CONFIG_HALO_LUA_MICROPHONE_RING_BUFFER_SIZE,
+				  (int)ext.used_size, (int)ext.free_size);
 	}
 
 	ring_buf_init(&mic_state.ringbuf, CONFIG_HALO_LUA_MICROPHONE_RING_BUFFER_SIZE,

@@ -39,6 +39,30 @@ enum camera_thread_stage {
 	CAM_STAGE_STOPPING,
 };
 
+/* Names for the stage recorded with a capture error, so an error report
+ * from the field reads without the source. */
+static const char *camera_stage_name(enum camera_thread_stage stage)
+{
+	switch (stage) {
+	case CAM_STAGE_IDLE:
+		return "idle";
+	case CAM_STAGE_WAIT_TRIGGER:
+		return "wait-trigger";
+	case CAM_STAGE_WAKING:
+		return "waking";
+	case CAM_STAGE_WARMUP:
+		return "stream-start";
+	case CAM_STAGE_DEQUEUE:
+		return "dequeue";
+	case CAM_STAGE_PROCESS:
+		return "process";
+	case CAM_STAGE_STOPPING:
+		return "stopping";
+	default:
+		return "unknown";
+	}
+}
+
 /*
  * Guard bytes appended to every DMA pixel buffer allocation.
  *
@@ -103,6 +127,8 @@ static struct {
 	bool ready;
 	bool initialized;
 	volatile bool capture_error;
+	volatile int capture_errno;
+	volatile enum camera_thread_stage capture_error_stage;
 	volatile enum camera_thread_stage thread_stage;
 
 	/* Background wake: power_save(false) hands the video device's resume
@@ -519,11 +545,15 @@ capture_cancel:
 		continue;
 
 capture_error:
+		camera_state.capture_errno = ret;
+		camera_state.capture_error_stage = camera_state.thread_stage;
 		camera_state.thread_stage = CAM_STAGE_STOPPING;
 		camera_stream_reset();
 		camera_state.ready = false;
 		camera_state.capture_error = true;
-		LOG_ERR("Capture error - flag set for Lua thread");
+		LOG_ERR("Capture error - flag set for Lua thread (%s, err %d)",
+			camera_stage_name(camera_state.capture_error_stage),
+			camera_state.capture_errno);
 	}
 
 	camera_state.thread_stage = CAM_STAGE_IDLE;
@@ -655,6 +685,8 @@ static void camera_cleanup_resources(void)
 	if (!thread_stopped_cleanly) {
 		/* Keep buffers if the worker did not stop cleanly. */
 		camera_state.ready = false;
+		camera_state.capture_errno = ret;
+		camera_state.capture_error_stage = camera_state.thread_stage;
 		camera_state.capture_error = true;
 		return;
 	}
@@ -881,7 +913,9 @@ static int lua_camera_image_ready(lua_State *L)
 	/* Check if capture thread reported an error */
 	if (camera_state.capture_error) {
 		camera_state.capture_error = false;
-		return luaL_error(L, "Capture error occurred");
+		return luaL_error(L, "Capture error occurred (%s, err %d)",
+				  camera_stage_name(camera_state.capture_error_stage),
+				  camera_state.capture_errno);
 	}
 
 	lua_pushboolean(L, camera_state.ready);
