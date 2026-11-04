@@ -80,6 +80,25 @@ config HALO_MEM_EXTERNAL_SRAM_SIZE
 
 endif # HALO_MEM_MANAGER
 
+config HALO_MRAM_GUARD
+	bool "MPU read-only guard over the boot partition and SE area of MRAM"
+	default y
+	depends on ARM_MPU && CPU_CORTEX_M55 && !MCUBOOT
+	depends on !MPU_STACK_GUARD && !USERSPACE
+	help
+	  MRAM commits plain CPU stores, and the SoC maps all of it read-write
+	  for the flash driver (MPU_ALLOW_FLASH_WRITE). This splits that MPU
+	  region so the boot partition (the bootloader at 0x80000000) and the
+	  SE-reserved area (ATOC, DEVICE, SES) are read-only to the M55. The SE
+	  writes MRAM through its own bus master, so station and ISP writes of
+	  the bootloader are unaffected.
+
+	  The guard programs two otherwise-unused MPU regions once at boot.
+	  MPU_STACK_GUARD and USERSPACE reprogram every region above the
+	  static ones on each context switch, which would silently drop the
+	  guard, so it is not available with them. It is not built into
+	  MCUboot, which is only updated through the station.
+
 # File Manager Component (always enabled with HALO)
 config HALO_FILE_MANAGER
 	bool

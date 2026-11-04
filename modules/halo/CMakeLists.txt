@@ -17,6 +17,9 @@ zephyr_library_sources_ifdef(CONFIG_HALO_MEM_MANAGER src/mem_manager.c)
 # File Manager Component
 zephyr_library_sources_ifdef(CONFIG_HALO_FILE_MANAGER src/file_manager.c)
 
+# MPU write guard over the boot partition and the SE area of MRAM
+zephyr_library_sources_ifdef(CONFIG_HALO_MRAM_GUARD src/mram_guard.c)
+
 # Power Manager Component
 zephyr_library_sources_ifdef(CONFIG_HALO_PM_MANAGER src/pm_manager.c)
 
