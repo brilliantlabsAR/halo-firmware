@@ -11,6 +11,27 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.25] - 2026-11-04
+
+### Added
+
+- The app maps the MRAM boot partition (the bootloader at `0x80000000`) and
+  the Secure Enclave's reserved area read-only to the application core. A
+  stray write there now raises an MPU fault instead of changing MRAM. OTA
+  updates can no longer write the bootloader; writing it at the station over
+  the Secure Enclave is unaffected. `CONFIG_HALO_MRAM_GUARD`, on by default;
+  not yet applied in MCUboot (#101).
+
+### Fixed
+
+- `frame.microphone.start{channels=2}` returned two identical channels. Stereo
+  capture uses the interrupt-driven drain again; mono capture keeps the DMA
+  drain (#99).
+- Stereo playback played as mono on both speakers. `frame.speaker` streams
+  with `channels=2` now play left and right on their own sides, and the LE
+  Audio sink routes each channel to the side its audio location names,
+  pairing the two channels by SDU timestamp. Mono playback is unchanged (#100).
+
 ## [0.8.24] - 2026-11-03
 
 ### Changed
