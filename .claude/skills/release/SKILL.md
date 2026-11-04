@@ -92,6 +92,36 @@ lightweight). It should match the built commit; an **empty string** means
 the build's `git describe` silently failed (CI images of 0.8.8 and earlier
 all have this — fixed by the `safe.directory` line in the workflow). The
 MCUboot image hash `ota_flash.py` prints is the other provenance anchor.
+
+### Pre-release test battery (required before tagging)
+
+With the release image confirmed on the dev kit, run both unattended device
+suites against it. Neither needs a human; together they take about 40 min.
+Run them one after the other, never at the same time: both hold the BLE link.
+
+1. **Firmware suite** — `applications/halo/tests/run_tests.py` (the
+   `auto` set; see that directory's README for the tags and pass rule):
+   ```
+   alif/applications/halo/tests/run_tests.py --name "<dev kit>" -v
+   ```
+2. **Python SDK suite** — from a `brilliant_sdk` checkout on its up-to-date
+   `main` (`<sdk>/python`). It tests the SDK as it stands against this
+   firmware:
+   ```
+   (cd <sdk>/python && uv sync --all-packages --all-extras && uv run pytest -q)   # hardware-free
+   python3 <sdk>/python/tools/run_device_tests.py --name "<dev kit>" --out <dir>
+   ```
+   `run_device_tests.py` runs the SDK's standalone device scripts that end on
+   their own, bounds the polling ones, and runs the pytest device modules
+   with `BRILLIANT_DEVICE=1`.
+
+Both must finish with no failures, or each failure must be explained and
+tracked (a known SDK-side issue, a flaky BLE drop that passes on a rerun with
+`--only`). Record the pass/fail counts and the commits tested (firmware
+build commit, SDK `main` commit) in the release PR or the hand-off. The
+interactive tests (button, taps, AAD, camera, standby) are not part of the
+battery; run them by hand when a release touches those features.
+
 Then roll out to production units as desired (their `main.lua` apps
 survive OTA).
 
