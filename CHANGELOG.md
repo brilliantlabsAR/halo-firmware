@@ -11,19 +11,31 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.26] - 2026-11-08
+
 ### Added
 
 - `frame.speaker.invert()` sets the polarity of each speaker, for a unit
   assembled with one speaker wired backwards (its speakers play out of phase,
   so it sounds quieter and off-centre). It applies to everything the speakers
   play, mono and stereo, and can be changed mid-sound for listening tests.
-  The saved setting is restored at boot.
+  The saved setting is restored at boot. The default stays normal polarity
+  (#105).
 
 ### Changed
 
 - The factory reset when entering ship mode (15 s hold) keeps the per-unit
   calibration: the display pan (`frame.display.set_pan()`) and the speaker
-  polarity. Everything else on the filesystem is still erased.
+  polarity. Everything else on the filesystem is still erased (#105).
+- Camera capture errors now name the capture stage and errno (enqueue, stream
+  start or dequeue timeout) instead of "Capture error occurred". A failed
+  microphone ring-buffer allocation reports the request size and the external
+  heap's used and free bytes (#104).
+
+### Documentation
+
+- The release process requires the firmware and Python SDK device test
+  suites before tagging (#103).
 
 ## [0.8.25] - 2026-11-04
 
