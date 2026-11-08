@@ -190,6 +190,78 @@ int halo_file_format(void)
 	return 0;
 }
 
+/* Settings a factory reset keeps (see HALO_SETTINGS_KEY_* in file_manager.h) */
+static const char *const calibration_keys[] = {
+	HALO_SETTINGS_KEY_DISPLAY_PAN_X,
+	HALO_SETTINGS_KEY_DISPLAY_PAN_Y,
+	HALO_SETTINGS_KEY_SPEAKER_POLARITY,
+};
+
+#define CALIBRATION_VALUE_MAX 8
+
+struct calibration_value {
+	uint8_t data[CALIBRATION_VALUE_MAX];
+	ssize_t len; /* 0 = not set (or deleted), < 0 = unreadable */
+};
+
+/* The file backend filters duplicates: this sees only the newest copy of the
+ * key, and is not called at all when that copy is a deletion. The len == 0
+ * case is handled anyway, in case a backend passes deletions through.
+ */
+static int calibration_loader(const char *key, size_t len, settings_read_cb read_cb,
+			      void *cb_arg, void *param)
+{
+	struct calibration_value *v = param;
+
+	if (settings_name_next(key, NULL) != 0) {
+		return 0;
+	}
+
+	if (len > sizeof(v->data)) {
+		v->len = -ENOMEM;
+		return 0;
+	}
+
+	v->len = (len == 0) ? 0 : read_cb(cb_arg, v->data, len);
+	return 0;
+}
+
+int halo_file_factory_reset(void)
+{
+	struct calibration_value saved[ARRAY_SIZE(calibration_keys)] = {0};
+	int ret;
+
+	for (size_t i = 0; i < ARRAY_SIZE(calibration_keys); i++) {
+		settings_load_subtree_direct(calibration_keys[i], calibration_loader, &saved[i]);
+		if (saved[i].len < 0) {
+			LOG_WRN("Calibration %s unreadable (%d), not kept", calibration_keys[i],
+				(int)saved[i].len);
+		}
+	}
+
+	ret = halo_file_format();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* A failed write-back loses that value but leaves a good, empty file
+	 * system, so it does not fail the reset (the caller would refuse to ship).
+	 */
+	for (size_t i = 0; i < ARRAY_SIZE(calibration_keys); i++) {
+		if (saved[i].len <= 0) {
+			continue;
+		}
+		ret = settings_save_one(calibration_keys[i], saved[i].data, saved[i].len);
+		if (ret != 0) {
+			LOG_ERR("Failed to restore calibration %s: %d", calibration_keys[i], ret);
+		} else {
+			LOG_INF("Kept calibration %s", calibration_keys[i]);
+		}
+	}
+
+	return 0;
+}
+
 int halo_settings_get(const char *key, void *data, size_t size)
 {
 	struct settings_ctx ctx = {

@@ -48,6 +48,8 @@ LED:  ████  (Solid ON - Charging, ready to pair)
 
 **Ship Mode (15 second hold) will:**
 1. **Clear all BLE pairing information** - you will need to re-pair with your device
+   (the factory reset erases the filesystem, keeping only the per-unit calibration:
+   display position and speaker polarity)
 2. **Completely shut down the device** - **requires charger connection to wake up**
 
 **To wake up from ship mode, you MUST connect the charger** - the device cannot be woken up by button press alone.
@@ -218,7 +220,7 @@ power-off blip at 2s and keep holding until you hear it at 5s.
 ```
 
 **Warning:**
-- **Ship mode will clear all BLE pairing information** (the factory reset wipes the filesystem) - you will need to re-pair with your device after waking up
+- **Ship mode will clear all BLE pairing information** (the factory reset wipes the filesystem, keeping only the display position and speaker polarity calibration) - you will need to re-pair with your device after waking up
 - **Ship mode cannot be entered while the charger is connected** - the 15 second hold is ignored while charging
 - Device will pass through pairing mode at 5 seconds (the pairing window opens and the LED starts blinking; bonds are kept at this stage)
 - Device will shut down completely at 15 seconds

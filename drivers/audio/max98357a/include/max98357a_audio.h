@@ -141,6 +141,24 @@ struct max98357a_protect_tuning {
 void max98357a_audio_set_display_active(bool active);
 
 /**
+ * @brief Set the polarity of each speaker (I2S slot).
+ *
+ * For a unit assembled with one speaker wired backwards: inverting that side
+ * puts the two speakers back in phase. Only the relative polarity is
+ * audible, so inverting either side fixes it. Applied to every sample as it
+ * leaves the I2S TX path, so mono (one sample on both slots) and stereo
+ * streams both get it, from the next sample on, mid-stream included. Not
+ * persisted - the caller restores it at boot.
+ *
+ * @retval 0 on success, negative error from the I2S driver otherwise
+ */
+int max98357a_audio_set_polarity(const struct device *dev, bool invert_left, bool invert_right);
+
+/** @brief Read back the polarity set by max98357a_audio_set_polarity(). */
+void max98357a_audio_get_polarity(const struct device *dev, bool *invert_left,
+				  bool *invert_right);
+
+/**
  * @brief Set the per-stream energy-budget override (percent, 0 = none).
  *
  * Clamped to [10, MAX98357A_AUDIO_PROTECT_STREAM_BUDGET_MAX]. Any

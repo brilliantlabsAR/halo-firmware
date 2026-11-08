@@ -1181,6 +1181,7 @@ Audio playback module supporting PCM and LC3.
 | `speaker.stop()` | None | `nil` | Stop playback |
 | `speaker.stats([reset])` | `[reset: boolean]` | `table` | Playback accounting counters |
 | `speaker.le_audio([cfg])` | `[cfg: table]` | `table` | Get or set the budget and pre-gain for LE Audio system audio |
+| `speaker.invert([cfg])` | `[cfg: table]` | `table` | Get or set each speaker's polarity (saved per-unit calibration) |
 
 #### `frame.speaker.start(cfg)`
 
@@ -1350,6 +1351,49 @@ control (VCS) still sets the volume.
   print(levels.budget, levels.gain)
 
   frame.speaker.le_audio({gain = 3})
+  ```
+
+#### `frame.speaker.invert([cfg])`
+
+Gets or sets the polarity of each speaker. This is for a unit assembled
+with one speaker wired backwards: its two speakers play out of phase, so
+centred sound and bass partly cancel and the sound is quieter and
+off-centre. Inverting one side puts them back in phase. Only the polarity of
+one speaker relative to the other is audible, so inverting either side
+fixes it.
+
+The setting applies to everything the speakers play (`frame.speaker`
+streams, `frame.sound`, the startup sound and LE Audio), mono and stereo,
+from the next sample on. Change it while a sound plays to compare the two
+settings by ear.
+
+A saved setting is restored at boot. It is per-unit calibration, like the
+display pan: `frame.file.remove_all()` keeps it, and so does the factory
+reset when the device enters ship mode.
+
+- **Parameters:**
+  - `[cfg: table]` - If provided, the new setting:
+
+  | Field | Type | Default | Description |
+  |-------|------|---------|-------------|
+  | `left` | boolean | unchanged | `true` inverts the left speaker |
+  | `right` | boolean | unchanged | `true` inverts the right speaker |
+  | `save` | boolean | `true` | `false` applies the setting until the next reboot only, for listening tests |
+
+- **Returns:** `table` - The polarity in effect, `{left = boolean, right = boolean}`
+- **Errors:**
+  - Throws an error if `left`, `right` or `save` is not a boolean
+- **Example:**
+  ```lua
+  -- Compare by ear while a sound plays, without saving
+  frame.speaker.invert({right = true, save = false})
+  frame.speaker.invert({right = false, save = false})
+
+  -- Save the setting that sounded louder and more centred
+  frame.speaker.invert({right = true})
+
+  local p = frame.speaker.invert()
+  print(p.left, p.right)
   ```
 
 #### `frame.speaker.stats([reset])`
@@ -2082,7 +2126,7 @@ Sets the display pan/shift offset to move content within a [-50, 50] pixel range
   frame.display.set_pan(-20, 10)   -- 20 pixels left, 10 pixels down
   ```
 
-**Note:** Pan settings are automatically saved to NVS and restored after system reboot or wake from sleep.
+**Note:** Pan settings are automatically saved to NVS and restored after system reboot or wake from sleep. They are per-unit calibration: `frame.file.remove_all()` keeps them, and so does the factory reset when the device enters ship mode.
 
 #### `frame.display.get_pan()`
 

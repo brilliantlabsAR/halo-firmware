@@ -22,6 +22,7 @@
 #include <zephyr/types.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
+#include <zephyr/sys/util.h>
 
 enum i2s_sync_status {
 	I2S_SYNC_STATUS_OK = 0,
@@ -164,6 +165,30 @@ static inline int i2s_sync_configure(const struct device *dev, const struct i2s_
 {
 	return i2s_sync_set_config(dev, cfg);
 }
+
+/** Invert (negate) the left TX slot. */
+#define I2S_SYNC_TX_INVERT_LEFT  BIT(0)
+/** Invert (negate) the right TX slot. */
+#define I2S_SYNC_TX_INVERT_RIGHT BIT(1)
+
+/**
+ * @brief Set which TX slots are sent inverted (polarity flipped).
+ *
+ * Applied in the TX path to every sample as it is written to its slot, so it
+ * covers mono streams (one sample sent to both slots) and stereo streams
+ * alike, and takes effect on the next sample, mid-stream included. It
+ * survives reconfiguration and stream stop/start. -32768 inverts to 32767.
+ *
+ * @param dev  i2s_sync device
+ * @param mask I2S_SYNC_TX_INVERT_LEFT and/or I2S_SYNC_TX_INVERT_RIGHT, or 0
+ *
+ * @retval 0 on success, -EINVAL for an unknown bit, -ENOTSUP for a nonzero
+ *         mask on an instance that transmits by DMA (no per-sample hook)
+ */
+int i2s_sync_set_tx_invert(const struct device *dev, uint8_t mask);
+
+/** @brief Get the TX slot inversion mask set by i2s_sync_set_tx_invert(). */
+uint8_t i2s_sync_get_tx_invert(const struct device *dev);
 
 #include <syscalls/i2s_sync.h>
 

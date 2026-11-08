@@ -308,8 +308,8 @@ static int display_resume_handler(void)
 	int8_t pan_x = 0; /* default: centered */
 	int8_t pan_y = 0;
 
-	halo_settings_get("display/pan_x", &pan_x, sizeof(pan_x));
-	halo_settings_get("display/pan_y", &pan_y, sizeof(pan_y));
+	halo_settings_get(HALO_SETTINGS_KEY_DISPLAY_PAN_X, &pan_x, sizeof(pan_x));
+	halo_settings_get(HALO_SETTINGS_KEY_DISPLAY_PAN_Y, &pan_y, sizeof(pan_y));
 
 	if (pan_x != 0 || pan_y != 0) {
 		vga020_set_pan(display_state.panel, pan_x, pan_y);
@@ -1364,8 +1364,8 @@ static int lua_display_set_pan(lua_State *L)
 #endif
 
 	/* Save pan settings to NVS first. */
-	halo_settings_set("display/pan_x", &x_offset, sizeof(x_offset));
-	halo_settings_set("display/pan_y", &y_offset, sizeof(y_offset));
+	halo_settings_set(HALO_SETTINGS_KEY_DISPLAY_PAN_X, &x_offset, sizeof(x_offset));
+	halo_settings_set(HALO_SETTINGS_KEY_DISPLAY_PAN_Y, &y_offset, sizeof(y_offset));
 
 	/* If display is in power save, apply settings on resume. */
 	if (!display_service.is_active) {
@@ -1393,8 +1393,8 @@ static int lua_display_get_pan(lua_State *L)
 	int8_t pan_y = 0;
 
 	/* Read from NVS */
-	halo_settings_get("display/pan_x", &pan_x, sizeof(pan_x));
-	halo_settings_get("display/pan_y", &pan_y, sizeof(pan_y));
+	halo_settings_get(HALO_SETTINGS_KEY_DISPLAY_PAN_X, &pan_x, sizeof(pan_x));
+	halo_settings_get(HALO_SETTINGS_KEY_DISPLAY_PAN_Y, &pan_y, sizeof(pan_y));
 
 #if CONFIG_CANVAS_ROTATE_90 || CONFIG_CANVAS_ROTATE_270
 	// Swap x and y for 90/270 degree rotation

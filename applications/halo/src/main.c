@@ -12,6 +12,9 @@
 
 #include <halo/mem_manager.h>
 #include <halo/file_manager.h>
+#ifdef CONFIG_HALO_AUDIO_STREAM
+#include <halo/audio_stream.h>
+#endif
 #include <halo/pm_manager.h>
 #include <halo/led_manager.h>
 
@@ -144,6 +147,10 @@ int main(void)
 		__ASSERT(false, "Failed to initialize file manager: %d", ret);
 		return ret;
 	}
+#ifdef CONFIG_HALO_AUDIO_STREAM
+	/* Before the startup sound, so it plays with this unit's polarity */
+	(void)audio_speaker_polarity_load();
+#endif
 #endif
 
 #ifdef CONFIG_HALO_BLE_MANAGER
