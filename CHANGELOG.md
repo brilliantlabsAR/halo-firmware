@@ -11,6 +11,17 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.27] - 2026-11-09
+
+### Fixed
+
+- LE Audio takes the speaker and microphone only while the phone has a stream
+  enabled. It took them as soon as the phone configured a stream, and kept
+  them until the phone released it. A phone can configure a stream and leave
+  it idle (Android does this for its active device, and after a call), and
+  then `frame.speaker`, `frame.microphone` and system sounds failed with "may
+  be occupied by LE Audio" although nothing was playing (#107).
+
 ## [0.8.26] - 2026-11-08
 
 ### Added
