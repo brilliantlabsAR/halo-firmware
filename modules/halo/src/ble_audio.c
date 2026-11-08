@@ -165,6 +165,7 @@ struct ase_instance {
 	uint8_t ase_lid;         /**< ASE local index */
 	uint8_t stream_lid;      /**< Stream local index */
 	uint8_t dir;             /**< Stream direction: Source or Sink */
+	uint8_t state;           /**< Last BAP_UC_ASE_STATE_* reported for this ASE */
 	void *p_codec_cfg;       /**< Allocated codec configuration */
 	void *p_enable_metadata; /**< Allocated metadata from enable request */
 	void *p_update_metadata; /**< Allocated metadata from update_metadata request */
@@ -2001,6 +2002,83 @@ static void on_unicast_server_cb_bond_data(uint8_t const conidx, uint8_t const c
 }
 
 /**
+ * @brief Is any ASE of this direction enabled (ENABLING, STREAMING or DISABLING)?
+ */
+static bool ase_dir_active(uint8_t const dir)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(audio_ctx.ase); i++) {
+		struct ase_instance const *const p_ase = &audio_ctx.ase[i];
+
+		if (p_ase->dir == dir && (p_ase->state == BAP_UC_ASE_STATE_ENABLING ||
+					  p_ase->state == BAP_UC_ASE_STATE_STREAMING ||
+					  p_ase->state == BAP_UC_ASE_STATE_DISABLING)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief Claim the speaker or microphone for an ASE that is being enabled
+ *
+ * The datapath holds the hardware as AUDIO_OWNER_LE_AUDIO, which locks out
+ * Lua and system sounds, so it's created only when the client enables an ASE.
+ * A client can leave ASEs in QOS_CONFIGURED for as long as it likes without
+ * streaming (Android parks its active device there), and that must not hold
+ * the hardware.
+ */
+static int audio_datapath_claim(uint8_t const dir)
+{
+	int ret = 0;
+
+	if (dir == ASE_DIR_SINK && !sink_datapath.initialized) {
+		ret = audio_datapath_create_sink(&audio_ctx.ase_config_sink.datapath_config);
+		if (ret == 0) {
+			LOG_INF("LE Audio sink: speaker claimed");
+		}
+	} else if (dir == ASE_DIR_SOURCE && !source_datapath.initialized) {
+		ret = audio_datapath_create_source(&audio_ctx.ase_config_src.datapath_config);
+		if (ret == 0) {
+			LOG_INF("LE Audio source: microphone claimed");
+		}
+	}
+	return ret;
+}
+
+/**
+ * @brief Release the speaker or microphone once no ASE of that direction is enabled
+ *
+ * Called when an ASE leaves the enabled states: after a Disable (QOS_CONFIGURED),
+ * a Release (IDLE or CODEC_CONFIGURED once RELEASING completes) or a lost link.
+ */
+static void audio_datapath_release_unused(uint8_t const dir)
+{
+	if (ase_dir_active(dir)) {
+		return;
+	}
+	if (dir == ASE_DIR_SINK && sink_datapath.initialized) {
+		audio_datapath_cleanup_sink();
+		LOG_INF("LE Audio sink: speaker released");
+	} else if (dir == ASE_DIR_SOURCE && source_datapath.initialized) {
+		audio_datapath_cleanup_source();
+		LOG_INF("LE Audio source: microphone released");
+	}
+}
+
+/**
+ * @brief Release the hardware of an ASE's direction if unused (both directions if unknown)
+ */
+static void audio_datapath_release_for_ase(struct ase_instance const *const p_ase)
+{
+	if (!p_ase || p_ase->dir == ASE_DIR_SINK) {
+		audio_datapath_release_unused(ASE_DIR_SINK);
+	}
+	if (!p_ase || p_ase->dir == ASE_DIR_SOURCE) {
+		audio_datapath_release_unused(ASE_DIR_SOURCE);
+	}
+}
+
+/**
  * @brief ASE state change callback
  *
  * This is the main state machine callback. Handle audio datapath
@@ -2012,37 +2090,34 @@ static void on_unicast_server_cb_bond_data(uint8_t const conidx, uint8_t const c
 static void on_unicast_server_cb_ase_state(uint8_t const ase_lid, uint8_t const conidx,
 					   uint8_t const state, bap_qos_cfg_t *const p_qos_cfg)
 {
+	struct ase_instance *const p_ase = get_ase_context_by_lid(ase_lid);
+	/* The state is meaningful only while the ASE is bound to a connection:
+	 * record an unbound ASE (link lost) as not enabled, whatever it reports. */
+	bool const unbound = (conidx == GAF_INVALID_LID);
+
+	LOG_DBG("ASE %u (%s) state %u, con %u", ase_lid,
+		!p_ase ? "?" : (p_ase->dir == ASE_DIR_SINK ? "snk" : "src"), state, conidx);
+
+	if (p_ase) {
+		p_ase->state = unbound ? BAP_UC_ASE_STATE_IDLE : state;
+	}
+
+	if (unbound) {
+		audio_datapath_release_for_ase(p_ase);
+		if (state != BAP_UC_ASE_STATE_RELEASING) {
+			return;
+		}
+	}
 
 	switch (state) {
-	case BAP_UC_ASE_STATE_IDLE: {
-		/* ASE released - clean up the datapath for this ASE's direction only,
-		 * so releasing a microphone stream doesn't tear down an active
-		 * speaker stream (and vice versa) during bidirectional use */
-		struct ase_instance *const p_ase = get_ase_context_by_lid(ase_lid);
-
-		if (!p_ase || p_ase->dir == ASE_DIR_SINK) {
-			audio_datapath_cleanup_sink();
-		}
-		if (!p_ase || p_ase->dir == ASE_DIR_SOURCE) {
-			audio_datapath_cleanup_source();
-		}
+	case BAP_UC_ASE_STATE_IDLE:
+	case BAP_UC_ASE_STATE_CODEC_CONFIGURED:
+	case BAP_UC_ASE_STATE_QOS_CONFIGURED:
+		/* Not enabled: give back the hardware unless another ASE of the
+		 * same direction is still enabled (one speaker channel of a
+		 * stereo pair, say). The datapath is created at Enable. */
+		audio_datapath_release_for_ase(p_ase);
 		break;
-	}
-
-	case BAP_UC_ASE_STATE_QOS_CONFIGURED: {
-		/* QoS configured - create audio datapath */
-		struct ase_instance *const p_ase = get_ase_context_by_lid(ase_lid);
-		if (!p_ase) {
-			break;
-		}
-
-		if (p_ase->dir == ASE_DIR_SINK) {
-			audio_datapath_create_sink(&audio_ctx.ase_config_sink.datapath_config);
-		} else if (p_ase->dir == ASE_DIR_SOURCE) {
-			audio_datapath_create_source(&audio_ctx.ase_config_src.datapath_config);
-		}
-		break;
-	}
 
 	case BAP_UC_ASE_STATE_ENABLING:
 		/* Enabling - waiting for client to establish CIS */
@@ -2051,11 +2126,14 @@ static void on_unicast_server_cb_ase_state(uint8_t const ase_lid, uint8_t const 
 	case BAP_UC_ASE_STATE_RELEASING:
 		/* Confirm release */
 		bap_uc_srv_release_cfm(ase_lid, BAP_UC_CP_RSP_CODE_SUCCESS, 0, true);
+		/* The hardware is released at IDLE, not here. Tearing the datapath
+		 * down blocks this thread for ~90 ms while the client is releasing
+		 * and about to drop the link, and that delay makes the ROM more
+		 * likely to leave the ASE stuck in RELEASING (Alif ACS-3033). */
 		break;
 
 	case BAP_UC_ASE_STATE_STREAMING: {
 		/* Streaming started - start audio channel via work queue */
-		struct ase_instance *const p_ase = get_ase_context_by_lid(ase_lid);
 		if (!p_ase) {
 			LOG_ERR("No ASE context for lid %u", ase_lid);
 			break;
@@ -2306,6 +2384,14 @@ static void on_unicast_server_cb_enable_req(uint8_t const ase_lid,
 		       sizeof(p_ase_metadata->add_metadata.len) + metadata_len);
 	}
 
+	/* Claim the hardware (create the datapath) on the first enabled ASE of
+	 * this direction, then add this ASE's channel to it. */
+	if (audio_datapath_claim(p_ase->dir)) {
+		LOG_ERR("Failed to claim audio hardware for ASE %u", ase_lid);
+		rsp_code = BAP_UC_CP_RSP_CODE_INSUFFICIENT_RESOURCES;
+		goto bap_cfg_metadata_cfm;
+	}
+
 	/* Create audio channel based on direction */
 	if (p_ase->dir == ASE_DIR_SINK) {
 		uint32_t const location_bf =
@@ -2327,6 +2413,12 @@ static void on_unicast_server_cb_enable_req(uint8_t const ase_lid,
 	}
 
 bap_cfg_metadata_cfm:
+	/* A rejected Enable leaves the ASE in QOS_CONFIGURED: don't keep the
+	 * hardware for it. */
+	if (p_ase && rsp_code != BAP_UC_CP_RSP_CODE_SUCCESS) {
+		audio_datapath_release_unused(p_ase->dir);
+	}
+
 	/* Store enable metadata in ASE context for later release */
 	if (p_ase && p_ase_metadata) {
 		p_ase->p_enable_metadata = p_ase_metadata;
@@ -2607,6 +2699,7 @@ static int audio_configure_stack(void)
 			audio_ctx.ase[iter].dir = (iter < uc_srv_cfg.nb_ase_chars_sink)
 							  ? ASE_DIR_SINK
 							  : ASE_DIR_SOURCE;
+			audio_ctx.ase[iter].state = BAP_UC_ASE_STATE_IDLE;
 			audio_ctx.ase[iter].p_codec_cfg = NULL;
 			audio_ctx.ase[iter].p_enable_metadata = NULL;
 			audio_ctx.ase[iter].p_update_metadata = NULL;
@@ -2960,6 +3053,9 @@ int halo_ble_audio_init(bool reset)
 
 	/* Skip BAP/TMAP/PACS/VCS configuration if not reset (already configured in ROM) */
 	if (!reset) {
+		for (size_t i = 0; i < ARRAY_SIZE(audio_ctx.ase); i++) {
+			audio_ctx.ase[i].state = BAP_UC_ASE_STATE_IDLE;
+		}
 		audio_ctx.pacs_record_count = 0;
 		audio_ctx.initialized = BLE_AUDIO_INIT_MAGIC;
 		return 0;
@@ -3027,6 +3123,12 @@ int halo_ble_audio_deinit(void)
 	/* Clean up audio datapaths */
 	audio_datapath_cleanup_sink();
 	audio_datapath_cleanup_source();
+
+	/* audio_ctx is noinit and a warm init skips the ASE setup: don't let a
+	 * stale enabled state keep the hardware claimed after the next init. */
+	for (size_t i = 0; i < ARRAY_SIZE(audio_ctx.ase); i++) {
+		audio_ctx.ase[i].state = BAP_UC_ASE_STATE_IDLE;
+	}
 
 	/* Clean up PACS records */
 	for (uint8_t i = 0; i < audio_ctx.pacs_record_count; i++) {
