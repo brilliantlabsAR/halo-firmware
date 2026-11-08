@@ -55,6 +55,8 @@ struct i2s_sync_data {
 		uint32_t bit_depth;
 		uint8_t channel_count;
 	} runtime_cfg;
+	/* I2S_SYNC_TX_INVERT_* slots to send inverted; read by the TX ISR */
+	volatile uint8_t tx_invert;
 };
 
 struct i2s_sync_dma_ch {
@@ -671,6 +673,14 @@ static int i2s_sync_init(const struct device *dev)
 	return 0;
 }
 
+/* Negate a sample for a polarity-inverted slot; -32768 has no positive
+ * 16-bit counterpart, so it saturates to 32767.
+ */
+static inline int16_t i2s_sync_invert(int16_t s)
+{
+	return (s == INT16_MIN) ? INT16_MAX : (int16_t)-s;
+}
+
 __ramfunc static void i2s_sync_tx_isr_handler(const struct device *dev)
 {
 	const struct i2s_sync_config_priv *dev_cfg = dev->config;
@@ -678,31 +688,46 @@ __ramfunc static void i2s_sync_tx_isr_handler(const struct device *dev)
 	struct i2s_t *i2s = dev_cfg->paddr;
 	int16_t *buf = (int16_t *)dev_data->tx.buf;
 	uint32_t tx_free = I2S_FIFO_TRG_LEVEL;
+	const uint8_t invert = dev_data->tx_invert;
 
 	while (buf && tx_free && (dev_data->tx.count < dev_data->tx.samples)) {
 		/* Left channel is always output from first buffer position */
-		i2s_write_left_tx(i2s, (uint32_t)buf[dev_data->tx.idx]);
+		int16_t left = buf[dev_data->tx.idx];
+		int16_t right;
 
 		/* The stream's channel count is the runtime one (set by
 		 * i2s_sync_configure); the DT mono-mode is only its default.
 		 */
 		if (dev_data->runtime_cfg.channel_count == 1U) {
 			/* In mono mode, right channel is duplicated left channel data */
-			i2s_write_right_tx(i2s, (uint32_t)buf[dev_data->tx.idx]);
+			right = left;
 		} else {
 #ifdef CONFIG_I2S_SYNC_BUFFER_FORMAT_SEQUENTIAL
 			/* For sequential buffer format, right channel comes from the second half of
 			 * buffer
 			 */
-			i2s_write_right_tx(
-				i2s, (uint32_t)buf[dev_data->tx.idx + (dev_data->tx.samples / 2)]);
+			right = buf[dev_data->tx.idx + (dev_data->tx.samples / 2)];
 #else
 			/* For interleaved buffer format, right channel comes from next sample of
 			 * buffer. Buffer index must be incremented.
 			 */
-			i2s_write_right_tx(i2s, (uint32_t)buf[++dev_data->tx.idx]);
+			right = buf[++dev_data->tx.idx];
 #endif
 		}
+
+		/* Per-slot polarity (a unit assembled with one speaker wired
+		 * backwards). Applied after the mono duplication, so a mono
+		 * stream gets it too.
+		 */
+		if (invert & I2S_SYNC_TX_INVERT_LEFT) {
+			left = i2s_sync_invert(left);
+		}
+		if (invert & I2S_SYNC_TX_INVERT_RIGHT) {
+			right = i2s_sync_invert(right);
+		}
+
+		i2s_write_left_tx(i2s, (uint32_t)left);
+		i2s_write_right_tx(i2s, (uint32_t)right);
 
 		dev_data->tx.idx++;
 		dev_data->tx.count += dev_data->runtime_cfg.channel_count;
@@ -823,6 +848,33 @@ __ramfunc static void i2s_sync_isr(const struct device *dev)
 			LOG_ERR("I2S:%s RX overrun!", dev->name);
 		}
 	}
+}
+
+int i2s_sync_set_tx_invert(const struct device *dev, uint8_t mask)
+{
+	const struct i2s_sync_config_priv *dev_cfg = dev->config;
+	struct i2s_sync_data *dev_data = dev->data;
+
+	if (mask & ~(I2S_SYNC_TX_INVERT_LEFT | I2S_SYNC_TX_INVERT_RIGHT)) {
+		return -EINVAL;
+	}
+
+	/* DMA TX feeds the FIFO straight from the buffer, bypassing the ISR
+	 * where the inversion happens.
+	 */
+	if (dev_cfg->dma_tx.enabled && mask != 0) {
+		return -ENOTSUP;
+	}
+
+	dev_data->tx_invert = mask;
+	return 0;
+}
+
+uint8_t i2s_sync_get_tx_invert(const struct device *dev)
+{
+	const struct i2s_sync_data *dev_data = dev->data;
+
+	return dev_data->tx_invert;
 }
 
 static const struct i2s_sync_driver_api i2s_sync_api = {.register_cb = i2s_register_cb,

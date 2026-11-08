@@ -559,6 +559,76 @@ int audio_speaker_set_stream_gain(audio_speaker_t *spk, int gain_db10)
 #endif
 }
 
+#define SPEAKER_POLARITY_INVERT_LEFT  BIT(0)
+#define SPEAKER_POLARITY_INVERT_RIGHT BIT(1)
+
+int audio_speaker_set_polarity(bool invert_left, bool invert_right, bool persist)
+{
+#if defined(CONFIG_MAX98357A_AUDIO)
+	const struct device *spk = DEVICE_DT_GET(DT_CHOSEN(zephyr_speaker));
+	bool old_left;
+	bool old_right;
+
+	max98357a_audio_get_polarity(spk, &old_left, &old_right);
+
+	int ret = max98357a_audio_set_polarity(spk, invert_left, invert_right);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (persist) {
+		uint8_t mask = (invert_left ? SPEAKER_POLARITY_INVERT_LEFT : 0) |
+			       (invert_right ? SPEAKER_POLARITY_INVERT_RIGHT : 0);
+
+		ret = halo_settings_set(HALO_SETTINGS_KEY_SPEAKER_POLARITY, &mask, sizeof(mask));
+		if (ret != 0) {
+			/* Not saved: put the old polarity back, so a failure
+			 * leaves nothing changed.
+			 */
+			LOG_ERR("Failed to save speaker polarity: %d", ret);
+			(void)max98357a_audio_set_polarity(spk, old_left, old_right);
+			return ret;
+		}
+	}
+	return 0;
+#else
+	ARG_UNUSED(persist);
+	return (invert_left || invert_right) ? -ENOTSUP : 0;
+#endif
+}
+
+int audio_speaker_get_polarity(bool *invert_left, bool *invert_right)
+{
+#if defined(CONFIG_MAX98357A_AUDIO)
+	max98357a_audio_get_polarity(DEVICE_DT_GET(DT_CHOSEN(zephyr_speaker)), invert_left,
+				     invert_right);
+	return 0;
+#else
+	ARG_UNUSED(invert_left);
+	ARG_UNUSED(invert_right);
+	return -ENOTSUP;
+#endif
+}
+
+int audio_speaker_polarity_load(void)
+{
+	uint8_t mask = 0;
+
+	/* Leaves mask at 0 (normal polarity) when nothing is saved */
+	halo_settings_get(HALO_SETTINGS_KEY_SPEAKER_POLARITY, &mask, sizeof(mask));
+	if (mask & ~(SPEAKER_POLARITY_INVERT_LEFT | SPEAKER_POLARITY_INVERT_RIGHT)) {
+		LOG_WRN("Ignoring invalid saved speaker polarity 0x%02x", mask);
+		return -EINVAL;
+	}
+	if (mask != 0) {
+		LOG_INF("Speaker polarity: left %s, right %s",
+			(mask & SPEAKER_POLARITY_INVERT_LEFT) ? "inverted" : "normal",
+			(mask & SPEAKER_POLARITY_INVERT_RIGHT) ? "inverted" : "normal");
+	}
+	return audio_speaker_set_polarity(mask & SPEAKER_POLARITY_INVERT_LEFT,
+					  mask & SPEAKER_POLARITY_INVERT_RIGHT, false);
+}
+
 int audio_speaker_get_volume(audio_speaker_t *spk)
 {
 	if (spk) {

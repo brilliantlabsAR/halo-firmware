@@ -47,6 +47,31 @@ const char *halo_file_mount_point(void);
  */
 int halo_file_format(void);
 
+/*
+ * Per-unit calibration settings: values set once for the hardware as
+ * assembled (factory test), not user data. halo_file_factory_reset() keeps
+ * them; frame.file.remove_all() keeps every setting anyway.
+ */
+#define HALO_SETTINGS_KEY_DISPLAY_PAN_X    "display/pan_x"    /* int8_t */
+#define HALO_SETTINGS_KEY_DISPLAY_PAN_Y    "display/pan_y"    /* int8_t */
+#define HALO_SETTINGS_KEY_SPEAKER_POLARITY "audio/polarity"   /* uint8_t invert mask */
+
+/**
+ * @brief Factory reset: format the file system, keeping calibration
+ *
+ * Reads the per-unit calibration settings (HALO_SETTINGS_KEY_DISPLAY_PAN_X,
+ * _PAN_Y, _SPEAKER_POLARITY) into RAM, formats the file system
+ * (halo_file_format()), then writes back the ones that were set. Everything
+ * else - files, user settings, bonds - is erased.
+ *
+ * A value that fails to write back is logged and lost; the file system is
+ * still good, so that does not fail the reset.
+ *
+ * @return 0 on success, or the format error (calibration is lost with
+ *         everything else then)
+ */
+int halo_file_factory_reset(void);
+
 /**
  * @brief Remove all files and folders (except settings)
  *

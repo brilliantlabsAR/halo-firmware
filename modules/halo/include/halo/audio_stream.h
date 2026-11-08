@@ -251,6 +251,38 @@ int audio_speaker_set_stream_budget(audio_speaker_t *spk, int budget_percent);
 void audio_speaker_notify_display_active(bool active);
 
 /**
+ * @brief Set the polarity of each speaker
+ *
+ * For a unit assembled with one speaker wired backwards: inverting that side
+ * puts the speakers back in phase (only the relative polarity is audible, so
+ * either side works). Independent of speaker ownership and streams: it
+ * applies to every sound from the next sample on, mono and stereo, and holds
+ * until changed.
+ *
+ * @param invert_left  send the left speaker inverted
+ * @param invert_right send the right speaker inverted
+ * @param persist      also save it (HALO_SETTINGS_KEY_SPEAKER_POLARITY), so it
+ *                     is restored at boot and survives a factory reset
+ * @return 0 on success, negative errno on failure
+ */
+int audio_speaker_set_polarity(bool invert_left, bool invert_right, bool persist);
+
+/**
+ * @brief Read back the speaker polarity currently applied
+ *
+ * @return 0 on success, -ENOTSUP without a speaker driver
+ */
+int audio_speaker_get_polarity(bool *invert_left, bool *invert_right);
+
+/**
+ * @brief Apply the saved speaker polarity (call once at boot, after
+ *        halo_file_init())
+ *
+ * @return 0 on success (including nothing saved), negative errno on failure
+ */
+int audio_speaker_polarity_load(void);
+
+/**
  * @brief Get speaker volume
  *
  * @param spk Speaker handle

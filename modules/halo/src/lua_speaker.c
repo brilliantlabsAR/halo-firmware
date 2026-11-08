@@ -902,6 +902,75 @@ static int lua_speaker_volume(lua_State *L)
 	}
 }
 
+/* Read an optional boolean field of the table at index 1: nil leaves *out
+ * unchanged. Returns false for a value that is neither boolean nor nil.
+ */
+static bool get_opt_bool_field(lua_State *L, const char *name, bool *out)
+{
+	lua_getfield(L, 1, name);
+	bool ok = true;
+
+	if (lua_isboolean(L, -1)) {
+		*out = lua_toboolean(L, -1);
+	} else if (!lua_isnil(L, -1)) {
+		ok = false;
+	}
+	lua_pop(L, 1);
+	return ok;
+}
+
+/**
+ * @brief frame.speaker.invert([config])
+ *
+ * Get or set speaker polarity, for a unit assembled with one speaker wired
+ * backwards: inverting that side puts the speakers back in phase (only the
+ * relative polarity is audible, so inverting either side fixes it). Applies
+ * to every sound, mono and stereo, from the next sample on - change it while
+ * a sound plays to A/B it. A saved value is restored at boot and survives a
+ * factory reset (wipe-and-ship) and frame.file.remove_all().
+ *
+ * @param config Optional table: left, right (booleans, true = inverted; a
+ *               missing field keeps its current value) and save (boolean,
+ *               default true; false applies it until reboot only)
+ * @return table {left, right} of the polarity now applied
+ */
+static int lua_speaker_invert(lua_State *L)
+{
+	bool left = false;
+	bool right = false;
+
+	if (audio_speaker_get_polarity(&left, &right) != 0) {
+		return luaL_error(L, "Speaker polarity not supported");
+	}
+
+	if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+		luaL_checktype(L, 1, LUA_TTABLE);
+
+		bool save = true;
+
+		if (!get_opt_bool_field(L, "left", &left) ||
+		    !get_opt_bool_field(L, "right", &right) ||
+		    !get_opt_bool_field(L, "save", &save)) {
+			return luaL_error(L, "left, right and save must be booleans");
+		}
+
+		int ret = audio_speaker_set_polarity(left, right, save);
+
+		if (ret != 0) {
+			return luaL_error(L, "Failed to set speaker polarity: %d", ret);
+		}
+		LOG_INF("Speaker polarity set: left %s, right %s%s", left ? "inverted" : "normal",
+			right ? "inverted" : "normal", save ? " (saved)" : "");
+	}
+
+	lua_createtable(L, 0, 2);
+	lua_pushboolean(L, left);
+	lua_setfield(L, -2, "left");
+	lua_pushboolean(L, right);
+	lua_setfield(L, -2, "right");
+	return 1;
+}
+
 #define STAT(name, val)                                                        \
 	do {                                                                   \
 		lua_pushinteger(L, (lua_Integer)(val));                        \
@@ -1156,6 +1225,7 @@ HALO_LUA_SERVICE_DEFINE(speaker_service, speaker_service_event_handler, NULL, fa
  *   - stop() - Stop speaker
  *   - play(data) - Direct playback
  *   - volume(level) - Set volume
+ *   - invert([config]) - Per-speaker polarity (saved calibration)
  *   - stats([reset]) - Playback accounting
  *   - le_audio([config]) - LE Audio sink budget/pre-gain
  */
@@ -1193,6 +1263,7 @@ int lua_open_speaker_library(lua_State *L)
 						 {"stop", lua_speaker_stop},
 						 {"play", lua_speaker_play},
 						 {"volume", lua_speaker_volume},
+						 {"invert", lua_speaker_invert},
 						 {"stats", lua_speaker_stats},
 #ifdef CONFIG_HALO_BLE_AUDIO_SINK_ENABLE
 						 {"le_audio", lua_speaker_le_audio},

@@ -11,6 +11,20 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `frame.speaker.invert()` sets the polarity of each speaker, for a unit
+  assembled with one speaker wired backwards (its speakers play out of phase,
+  so it sounds quieter and off-centre). It applies to everything the speakers
+  play, mono and stereo, and can be changed mid-sound for listening tests.
+  The saved setting is restored at boot.
+
+### Changed
+
+- The factory reset when entering ship mode (15 s hold) keeps the per-unit
+  calibration: the display pan (`frame.display.set_pan()`) and the speaker
+  polarity. Everything else on the filesystem is still erased.
+
 ## [0.8.25] - 2026-11-04
 
 ### Added

@@ -261,9 +261,11 @@ static void button_event_cb_long_press_level3(const struct device *dev, enum but
 	/* Stop any LED activity */
 	halo_led_clear_state(HALO_LED_PRIORITY_HIGH);
 
-	/* Factory reset: wipe the entire filesystem */
+	/* Factory reset: wipe the entire filesystem, keeping only the per-unit
+	 * calibration (display pan, speaker polarity) set at the factory.
+	 */
 	LOG_WRN("Performing factory reset (formatting filesystem)...");
-	int ret = halo_file_format();
+	int ret = halo_file_factory_reset();
 
 	/* The filesystem is gone either way now, so the noinit bond table is
 	 * already inconsistent with flash. Invalidate it here, before handing

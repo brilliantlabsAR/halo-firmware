@@ -301,6 +301,29 @@ void max98357a_audio_set_display_active(bool active)
 #endif
 }
 
+int max98357a_audio_set_polarity(const struct device *dev, bool invert_left, bool invert_right)
+{
+	const struct max98357a_audio_config *cfg = dev->config;
+	uint8_t mask = (invert_left ? I2S_SYNC_TX_INVERT_LEFT : 0) |
+		       (invert_right ? I2S_SYNC_TX_INVERT_RIGHT : 0);
+
+	return i2s_sync_set_tx_invert(cfg->i2s_dev, mask);
+}
+
+void max98357a_audio_get_polarity(const struct device *dev, bool *invert_left,
+				  bool *invert_right)
+{
+	const struct max98357a_audio_config *cfg = dev->config;
+	uint8_t mask = i2s_sync_get_tx_invert(cfg->i2s_dev);
+
+	if (invert_left) {
+		*invert_left = (mask & I2S_SYNC_TX_INVERT_LEFT) != 0;
+	}
+	if (invert_right) {
+		*invert_right = (mask & I2S_SYNC_TX_INVERT_RIGHT) != 0;
+	}
+}
+
 void max98357a_audio_set_stream_budget(int budget_percent)
 {
 #if IS_ENABLED(CONFIG_MAX98357A_AUDIO_PROTECTION_EQ)
