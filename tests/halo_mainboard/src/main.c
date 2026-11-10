@@ -28,6 +28,7 @@
 #include <zephyr/device.h>
 #include <zephyr/audio/dmic.h>
 #include <zephyr/drivers/counter.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/regulator.h>
 #include <zephyr/drivers/sensor.h>
@@ -966,27 +967,163 @@ static void t_mic(struct ft_ctx *c)
 		  pair_diff ? "distinct" : "identical", rate, n);
 }
 
+/* ---- I2C bus health ------------------------------------------------------------ */
+
+/* Both buses are on port 2 pads: I2C0 SCL/SDA = P2_4/P2_5, I2C1 SDA/SCL =
+ * P2_6/P2_7. The GPIO input register reads the pad level whatever the pin
+ * is muxed to (the I2C pinctrl enables the input buffer), so this samples
+ * the lines without touching the mux or the controller. */
+#define I2C0_SCL_PIN 4
+#define I2C0_SDA_PIN 5
+#define I2C1_SDA_PIN 6
+#define I2C1_SCL_PIN 7
+
+/* Time allowed for both lines to read high, e.g. after a pull-up rail
+ * comes on */
+#define I2C_LINES_TIMEOUT_MS 50
+
+struct i2c_lines {
+	int scl;
+	int sda;
+	int rise_ms;
+};
+
+static void i2c_lines_read(int scl_pin, int sda_pin, struct i2c_lines *l)
+{
+	const struct device *gpio = DEVICE_DT_GET(DT_NODELABEL(gpio2));
+	const int64_t t0 = k_uptime_get();
+	gpio_port_value_t port;
+
+	l->scl = l->sda = -1;
+	for (;;) {
+		if (gpio_port_get_raw(gpio, &port) != 0) {
+			break;
+		}
+		l->scl = (port >> scl_pin) & 1;
+		l->sda = (port >> sda_pin) & 1;
+		l->rise_ms = k_uptime_get() - t0;
+		if ((l->scl && l->sda) || l->rise_ms >= I2C_LINES_TIMEOUT_MS) {
+			break;
+		}
+		k_msleep(1);
+	}
+}
+
+static const char *i2c_lines_fault(const struct i2c_lines *l)
+{
+	if (l->scl < 0) {
+		return "lines_unread";
+	}
+	if (!l->scl && !l->sda) {
+		return "lines_low";
+	}
+	if (!l->scl) {
+		return "scl_low";
+	}
+	if (!l->sda) {
+		return "sda_low";
+	}
+	return NULL;
+}
+
+/* ---- Sensor bus I2C0 ----------------------------------------------------------- */
+
+static void t_i2c0(struct ft_ctx *c)
+{
+	/* The sensor pull-ups are on sen_1v8, which is off between tests. The
+	 * imu and mag tests judge the parts; this only judges the bus lines. */
+	const struct device *rail = DEVICE_DT_GET(DT_NODELABEL(sen_1v8));
+	struct i2c_lines l;
+	int err = regulator_enable(rail);
+
+	if (err) {
+		ft_report(c, "i2c0", FT_FAIL, "fault=sen_1v8 err=%d", err);
+		return;
+	}
+	i2c_lines_read(I2C0_SCL_PIN, I2C0_SDA_PIN, &l);
+	regulator_disable(rail);
+
+	const char *fault = i2c_lines_fault(&l);
+
+	ft_report(c, "i2c0", fault ? FT_FAIL : FT_PASS, "scl=%d sda=%d rise_ms=%d%s%s", l.scl,
+		  l.sda, l.rise_ms, fault ? " fault=" : "", fault ? fault : "");
+}
+
 /* ---- Display/camera flex parts on I2C1 ---------------------------------------- */
+
+/* -EIO is the driver's NAK. Anything else means the transfer never ran:
+ * -EBUSY (controller held busy), -EAGAIN (timed out), ... */
+static int i2c1_probe(const struct device *bus, uint16_t addr, char *out, size_t n)
+{
+	uint8_t b;
+	int err = i2c_read(bus, &b, 1, addr);
+
+	if (err == 0) {
+		snprintf(out, n, "ack");
+	} else if (err == -EIO) {
+		snprintf(out, n, "nak(%d)", err);
+	} else {
+		snprintf(out, n, "err(%d)", err);
+	}
+	return err;
+}
 
 static void t_i2c1(struct ft_ctx *c)
 {
 	/* TPS65132 bias PMIC, PAG7982 camera, VGA020 display. None is expected
-	 * on a bare main board, so no ACK is a SKIP, not a FAIL. */
+	 * on a bare main board, so clean NAKs everywhere are a SKIP. A bus that
+	 * cannot run a transfer (stuck line, controller held busy, timeout)
+	 * reads as "no ACK" too, so those are told apart and are a FAIL. The
+	 * pull-ups are on cam_1v8, which is always on.
+	 *
+	 * i2c_recover_bus() runs only after a fault, to report whether the bus
+	 * comes back: run before the controller's first transfer it can leave
+	 * the controller busy after the next NAK (seen on a healthy board). */
 	static const uint16_t addrs[] = {0x3e, 0x40, 0x54};
 	const struct device *bus = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-	char detail[64];
+	struct i2c_lines l;
+	char detail[200];
+	char word[ARRAY_SIZE(addrs)][16];
+	int err[ARRAY_SIZE(addrs)];
 	size_t len = 0;
 	int acks = 0;
+	int faults = 0;
 
+	i2c_lines_read(I2C1_SCL_PIN, I2C1_SDA_PIN, &l);
 	for (size_t i = 0; i < ARRAY_SIZE(addrs); i++) {
-		uint8_t b;
-		bool ack = i2c_read(bus, &b, 1, addrs[i]) == 0;
-
-		acks += ack;
-		len += snprintf(&detail[len], sizeof(detail) - len, "%s0x%02x=%s", i ? " " : "",
-				addrs[i], ack ? "ack" : "nak");
+		err[i] = i2c1_probe(bus, addrs[i], word[i], sizeof(word[i]));
+		acks += err[i] == 0;
+		faults += err[i] != 0 && err[i] != -EIO;
+		len += snprintf(&detail[len], sizeof(detail) - len, "0x%02x=%s ", addrs[i],
+				word[i]);
 	}
-	ft_report(c, "i2c1", acks ? FT_PASS : FT_SKIP, "%s", detail);
+	len += snprintf(&detail[len], sizeof(detail) - len, "scl=%d sda=%d", l.scl, l.sda);
+
+	if (faults) {
+		/* Does the bus come back? Report the retry, keep the FAIL */
+		int rec = i2c_recover_bus(bus);
+		int still = 0;
+
+		for (size_t i = 0; i < ARRAY_SIZE(addrs); i++) {
+			if (err[i] != 0 && err[i] != -EIO) {
+				int e = i2c1_probe(bus, addrs[i], word[i], sizeof(word[i]));
+
+				still += e != 0 && e != -EIO;
+			}
+		}
+		len += snprintf(&detail[len], sizeof(detail) - len, " recover=%d retry=%s", rec,
+				still ? "fault" : "ok");
+	}
+
+	const char *fault = i2c_lines_fault(&l);
+
+	if (!fault && faults) {
+		fault = "xfer";
+	}
+	if (fault) {
+		snprintf(&detail[len], sizeof(detail) - len, " fault=%s", fault);
+	}
+	ft_report(c, "i2c1", fault ? FT_FAIL : acks ? FT_PASS : FT_SKIP, "%s", detail);
 }
 
 /* ---- Sequencing -------------------------------------------------------------- */
@@ -1010,6 +1147,7 @@ static const struct ft_test tests[] = {
 	{"imu", t_imu},
 	{"mag", t_mag},
 	{"mic", t_mic},
+	{"i2c0", t_i2c0},
 	{"i2c1", t_i2c1},
 };
 
