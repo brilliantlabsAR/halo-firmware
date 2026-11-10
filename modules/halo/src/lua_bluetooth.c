@@ -14,6 +14,9 @@
 #include <halo/lua_runtime.h>
 #include <halo/ble_manager.h>
 #include <halo/ble_lua.h>
+#ifdef CONFIG_HALO_BLE_AUDIO_SERVICE
+#include <halo/ble_audio.h>
+#endif
 
 
 LOG_MODULE_REGISTER(lua_bluetooth, CONFIG_HALO_LOG_LEVEL);
@@ -255,6 +258,76 @@ static int lua_bluetooth_connection_interval(lua_State *L)
 	return 0;
 }
 
+#ifdef CONFIG_HALO_BLE_AUDIO_SERVICE
+/**
+ * @brief Lua: frame.bluetooth.le_audio([on | {speaker=bool, mic=bool}])
+ *
+ * Makes standard LE Audio (the phone streaming media or calls to the
+ * speaker, or capturing the mic) available or not, without disconnecting.
+ * A boolean sets both directions; a table sets the ones it names. An
+ * unavailable direction advertises no available audio contexts and refuses
+ * new streams; a stream already running is left to the phone to stop.
+ * The setting lasts until reboot.
+ *
+ * Always returns {speaker=bool, mic=bool, speaker_active=bool,
+ * mic_active=bool}: *_active means LE Audio holds that hardware right now
+ * (an ASE is enabling, streaming or disabling), so frame.speaker or
+ * frame.microphone can't have it.
+ */
+static int lua_bluetooth_le_audio(lua_State *L)
+{
+	struct halo_ble_audio_availability st;
+
+	halo_ble_audio_get_available(&st);
+
+	if (!lua_isnoneornil(L, 1)) {
+		bool sink = st.sink_available;
+		bool source = st.source_available;
+
+		if (lua_isboolean(L, 1)) {
+			sink = source = lua_toboolean(L, 1);
+		} else if (lua_istable(L, 1)) {
+			lua_getfield(L, 1, "speaker");
+			if (!lua_isnil(L, -1)) {
+				if (!lua_isboolean(L, -1)) {
+					return luaL_error(L, "speaker must be a boolean");
+				}
+				sink = lua_toboolean(L, -1);
+			}
+			lua_pop(L, 1);
+			lua_getfield(L, 1, "mic");
+			if (!lua_isnil(L, -1)) {
+				if (!lua_isboolean(L, -1)) {
+					return luaL_error(L, "mic must be a boolean");
+				}
+				source = lua_toboolean(L, -1);
+			}
+			lua_pop(L, 1);
+		} else {
+			return luaL_argerror(L, 1, "expected a boolean or {speaker=, mic=}");
+		}
+
+		int ret = halo_ble_audio_set_available(sink, source);
+
+		if (ret < 0) {
+			return luaL_error(L, "LE Audio availability update failed: %d", ret);
+		}
+		halo_ble_audio_get_available(&st);
+	}
+
+	lua_createtable(L, 0, 4);
+	lua_pushboolean(L, st.sink_available);
+	lua_setfield(L, -2, "speaker");
+	lua_pushboolean(L, st.source_available);
+	lua_setfield(L, -2, "mic");
+	lua_pushboolean(L, st.sink_active);
+	lua_setfield(L, -2, "speaker_active");
+	lua_pushboolean(L, st.source_active);
+	lua_setfield(L, -2, "mic_active");
+	return 1;
+}
+#endif
+
 /**
  * @brief Lua: frame.bluetooth.receive_buffer_size([bytes])
  *
@@ -410,6 +483,11 @@ int lua_open_bluetooth_library(lua_State *L)
 
 	lua_pushcfunction(L, lua_bluetooth_receive_buffer_size);
 	lua_setfield(L, -2, "receive_buffer_size");
+
+#ifdef CONFIG_HALO_BLE_AUDIO_SERVICE
+	lua_pushcfunction(L, lua_bluetooth_le_audio);
+	lua_setfield(L, -2, "le_audio");
+#endif
 
 	/* Set 'bluetooth' table in 'frame' */
 	lua_setfield(L, -2, "bluetooth");

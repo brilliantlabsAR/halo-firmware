@@ -2001,6 +2001,12 @@ static void on_unicast_server_cb_bond_data(uint8_t const conidx, uint8_t const c
 {
 }
 
+/* Runtime availability of each direction (frame.bluetooth.le_audio()).
+ * Not persisted: every boot starts with both available.
+ */
+static bool sink_available = IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SINK_ENABLE);
+static bool src_available = IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE);
+
 /**
  * @brief Is any ASE of this direction enabled (ENABLING, STREAMING or DISABLING)?
  */
@@ -2357,6 +2363,7 @@ static void on_unicast_server_cb_enable_req(uint8_t const ase_lid,
 					    bap_cfg_metadata_ptr_t *const p_metadata)
 {
 	uint8_t rsp_code = BAP_UC_CP_RSP_CODE_SUCCESS;
+	uint8_t reason = 0;
 	size_t const metadata_len =
 		p_metadata->p_add_metadata ? p_metadata->p_add_metadata->len : 0;
 	size_t const size = sizeof(bap_cfg_metadata_t) + metadata_len;
@@ -2382,6 +2389,19 @@ static void on_unicast_server_cb_enable_req(uint8_t const ase_lid,
 	if (metadata_len) {
 		memcpy(&p_ase_metadata->add_metadata, p_metadata->p_add_metadata,
 		       sizeof(p_ase_metadata->add_metadata.len) + metadata_len);
+	}
+
+	/* frame.bluetooth.le_audio() turned this direction off: its Available
+	 * Audio Contexts are 0, and BAP has the server refuse an Enable whose
+	 * Streaming Audio Contexts are not available.
+	 */
+	if ((p_ase->dir == ASE_DIR_SINK && !sink_available) ||
+	    (p_ase->dir == ASE_DIR_SOURCE && !src_available)) {
+		LOG_INF("ASE %u: Enable refused, LE Audio %s is off", ase_lid,
+			p_ase->dir == ASE_DIR_SINK ? "speaker" : "mic");
+		rsp_code = BAP_UC_CP_RSP_CODE_REJECTED_METADATA;
+		reason = BAP_METADATA_TYPE_STREAM_CONTEXTS;
+		goto bap_cfg_metadata_cfm;
 	}
 
 	/* Claim the hardware (create the datapath) on the first enabled ASE of
@@ -2424,7 +2444,7 @@ bap_cfg_metadata_cfm:
 		p_ase->p_enable_metadata = p_ase_metadata;
 	}
 
-	bap_uc_srv_enable_cfm(ase_lid, rsp_code, 0, p_ase_metadata);
+	bap_uc_srv_enable_cfm(ase_lid, rsp_code, reason, p_ase_metadata);
 }
 
 /**
@@ -2887,6 +2907,14 @@ static int audio_configure_stack(void)
 			LOG_ERR("PACS is not ready!");
 			return -1;
 		}
+
+		/* A warm re-init keeps frame.bluetooth.le_audio()'s setting:
+		 * reconfiguring PACS reset the available contexts.
+		 */
+		if (sink_available != IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SINK_ENABLE) ||
+		    src_available != IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE)) {
+			(void)halo_ble_audio_set_available(sink_available, src_available);
+		}
 	}
 
 	/* ------------------------------------------------------------------------------------ */
@@ -3090,20 +3118,59 @@ uint16_t halo_ble_audio_get_tmap_roles(void)
 void halo_ble_audio_get_context_types(uint16_t *sink_context_bf, uint16_t *src_context_bf)
 {
 	if (sink_context_bf) {
-#ifdef CONFIG_HALO_BLE_AUDIO_SINK_ENABLE
-		*sink_context_bf = BAP_CONTEXT_TYPE_ALL;
-#else
-		*sink_context_bf = 0;
-#endif
+		*sink_context_bf = sink_available ? BAP_CONTEXT_TYPE_ALL : 0;
 	}
 
 	if (src_context_bf) {
-#ifdef CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE
-		*src_context_bf = BAP_CONTEXT_TYPE_ALL;
-#else
-		*src_context_bf = 0;
-#endif
+		*src_context_bf = src_available ? BAP_CONTEXT_TYPE_ALL : 0;
 	}
+}
+
+int halo_ble_audio_set_available(bool sink, bool source)
+{
+	if (!IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SINK_ENABLE)) {
+		sink = false;
+	}
+	if (!IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE)) {
+		source = false;
+	}
+
+	sink_available = sink;
+	src_available = source;
+
+	uint16_t sink_bf;
+	uint16_t src_bf;
+	uint16_t err = GAF_ERR_NO_ERROR;
+
+	halo_ble_audio_get_context_types(&sink_bf, &src_bf);
+
+	/* Available Audio Contexts for every connection (and later ones).
+	 * The PACS server notifies a client that subscribed to it. Streams
+	 * already enabled are left alone: the client decides whether to stop
+	 * them, and Enable is refused for an unavailable direction.
+	 */
+	alif_ble_mutex_lock(K_FOREVER);
+	if (bap_capa_srv_is_configured()) {
+		err = bap_capa_srv_set_context(BAP_CAPA_CONTEXT_TYPE_AVA, GAP_INVALID_CONIDX,
+					       sink_bf, src_bf);
+	}
+	alif_ble_mutex_unlock();
+
+	LOG_INF("LE Audio available: speaker %s, mic %s (contexts 0x%04x/0x%04x, err %u)",
+		sink ? "on" : "off", source ? "on" : "off", sink_bf, src_bf, err);
+
+	return (err == GAF_ERR_NO_ERROR) ? 0 : -EIO;
+}
+
+void halo_ble_audio_get_available(struct halo_ble_audio_availability *out)
+{
+	if (!out) {
+		return;
+	}
+	out->sink_available = sink_available;
+	out->source_available = src_available;
+	out->sink_active = ase_dir_active(ASE_DIR_SINK);
+	out->source_active = ase_dir_active(ASE_DIR_SOURCE);
 }
 
 /**

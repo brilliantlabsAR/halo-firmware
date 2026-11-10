@@ -265,7 +265,18 @@ frame.bluetooth.send(data)
 frame.bluetooth.receive_callback(callback)
 frame.bluetooth.receive_buffer_size([bytes])
 frame.bluetooth.connection_interval([ms])
+frame.bluetooth.le_audio([on | {speaker=bool, mic=bool}])
 ```
+
+`le_audio()` makes standard LE Audio (a phone streaming media or a call to
+the speaker, or capturing the microphone) available or not, without
+disconnecting. A boolean sets both directions; a table sets only the ones it
+names. An unavailable direction publishes no available audio contexts (PACS)
+and refuses new streams. A stream that is already running is not stopped:
+the phone decides. The setting lasts until reboot. It always returns
+`{speaker=, mic=, speaker_active=, mic_active=}`, where `*_active` means LE
+Audio holds that hardware right now, so `frame.speaker` or
+`frame.microphone` can't have it.
 
 ### Display (`frame.display`)
 
