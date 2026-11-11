@@ -386,6 +386,15 @@ int audio_microphone_read(audio_microphone_t *mic, void **buffer, size_t *len);
 void audio_microphone_free_buffer(audio_microphone_t *mic, void *buffer);
 
 /**
+ * @brief Ratio of the PDM hardware rate to the delivered rate
+ *
+ * 2 while an 8 kHz stream runs the PDM at 16 kHz (blocks are low-passed and
+ * decimated in audio_microphone_read()), else 1. Driver sample counters run
+ * at the hardware rate; divide them by this to get delivered frames.
+ */
+int audio_microphone_halve_rate(void);
+
+/**
  * @brief Set microphone gain
  *
  * @param mic Microphone handle

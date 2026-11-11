@@ -185,59 +185,98 @@ static void mic_log_first_ring_put(uint32_t bytes)
  * far below any voice content. Per-channel state, interleaved buffer.
  */
 #define MIC_DCB_R 0.997f
-static float mic_dcb_yprev[MAX_MIC_CHANNELS];
-static int16_t mic_dcb_xprev[MAX_MIC_CHANNELS];
+/* Start-up: the mic's DC level settles for ~200 ms after a start (it begins
+ * ~10000 counts at gain 0 above its final value and decays with a ~40 ms time
+ * constant). A 3.8-7.6 Hz blocker primed to the first sample follows that
+ * decay into a ~5000-count, ~100 ms "plateau" at the start of every capture.
+ * So the blocker is two cascaded one-pole stages that start at a corner of
+ * MIC_DCB_START_HZ, hold it for MIC_DCB_HOLD_MS, then ramp to MIC_DCB_R over
+ * MIC_DCB_RAMP_MS. Measured on raw captures: the start-up excursion drops
+ * from ~5000 to ~300 counts, gone within the first 20 ms block.
+ */
+#define MIC_DCB_START_HZ 80.0f
+#define MIC_DCB_HOLD_MS  100
+#define MIC_DCB_RAMP_MS  100
+static float mic_dcb_yprev[2][MAX_MIC_CHANNELS];
+static float mic_dcb_xprev[2][MAX_MIC_CHANNELS];
+static uint32_t mic_dcb_frames; /* frames since start, saturating */
 /* Warm-start latch: on the first block after a mic start, xprev is primed to
  * that block's first sample per channel so the blocker emits 0 for the initial
  * DC level and only tracks CHANGES from it. Starting from xprev=0 instead makes
- * the blocker differentiate the start-up DC step (the post-discard PDM
- * settling tail, ~700 counts - see the t5838 discard-duration-ms) into a
- * transient the voice band-pass then rings on: an audible start-up "tick" on
- * the AEC/voice feed even though the raw pop is already snipped. See
- * mic_dc_block. */
+ * the blocker differentiate the start-up DC step into a transient the voice
+ * band-pass then rings on: an audible start-up "tick" on the AEC/voice feed.
+ * See mic_dc_block. */
 static bool mic_dcb_primed;
 
 static void mic_dc_block_reset(void)
 {
-	for (int ch = 0; ch < MAX_MIC_CHANNELS; ch++) {
-		mic_dcb_yprev[ch] = 0.0f;
-		mic_dcb_xprev[ch] = 0;
+	for (int st = 0; st < 2; st++) {
+		for (int ch = 0; ch < MAX_MIC_CHANNELS; ch++) {
+			mic_dcb_yprev[st][ch] = 0.0f;
+			mic_dcb_xprev[st][ch] = 0.0f;
+		}
 	}
+	mic_dcb_frames = 0;
 	mic_dcb_primed = false;
 }
 
-static void mic_dc_block(int16_t *buf, size_t num_samples, int channels)
+/* Pole for the frame `n` frames after a start (see MIC_DCB_START_HZ) */
+static float mic_dcb_pole(uint32_t n, int fs)
 {
-	if (channels < 1 || channels > MAX_MIC_CHANNELS) {
+	uint32_t hold = (uint32_t)fs * MIC_DCB_HOLD_MS / 1000;
+	uint32_t ramp = (uint32_t)fs * MIC_DCB_RAMP_MS / 1000;
+	float r_start = 1.0f - 6.2831853f * MIC_DCB_START_HZ / (float)fs;
+
+	if (n < hold) {
+		return r_start;
+	}
+	if (n >= hold + ramp) {
+		return MIC_DCB_R;
+	}
+	float k = (float)(n - hold) / (float)ramp;
+
+	return r_start + (MIC_DCB_R - r_start) * k;
+}
+
+static void mic_dc_block(int16_t *buf, size_t num_samples, int channels, int fs)
+{
+	if (channels < 1 || channels > MAX_MIC_CHANNELS || fs <= 0) {
 		return;
 	}
-	/* Warm-start (see mic_dcb_primed): prime xprev to the first sample of
-	 * each channel so y[0] = x[0] - xprev + R*yprev = 0 - the blocker begins
-	 * in DC steady state instead of stepping up from zero. Runs once per mic
-	 * start; interleaved, so the first `channels` samples are the first
-	 * sample of each channel. */
+	/* Warm-start (see mic_dcb_primed): prime both stages so the blocker
+	 * begins in DC steady state instead of stepping up from zero. Runs once
+	 * per mic start; interleaved, so the first `channels` samples are the
+	 * first sample of each channel. */
 	if (!mic_dcb_primed && num_samples >= (size_t)channels) {
 		for (int c = 0; c < channels; c++) {
-			mic_dcb_xprev[c] = buf[c];
+			mic_dcb_xprev[0][c] = (float)buf[c];
+			mic_dcb_xprev[1][c] = 0.0f;
 		}
 		mic_dcb_primed = true;
 	}
+	uint32_t settled = (uint32_t)fs * (MIC_DCB_HOLD_MS + MIC_DCB_RAMP_MS) / 1000;
+	float r = mic_dcb_pole(mic_dcb_frames, fs);
 	int ch = 0;
+
 	for (size_t i = 0; i < num_samples; i++) {
-		int16_t x = buf[i];
-		float y = (float)x - (float)mic_dcb_xprev[ch] +
-			  MIC_DCB_R * mic_dcb_yprev[ch];
-		mic_dcb_xprev[ch] = x;
-		mic_dcb_yprev[ch] = y;
-		int32_t yi = (int32_t)(y >= 0.0f ? y + 0.5f : y - 0.5f);
-		if (yi > INT16_MAX) {
-			yi = INT16_MAX;
-		} else if (yi < INT16_MIN) {
-			yi = INT16_MIN;
+		float v = (float)buf[i];
+
+		for (int st = 0; st < 2; st++) {
+			float y = v - mic_dcb_xprev[st][ch] + r * mic_dcb_yprev[st][ch];
+
+			mic_dcb_xprev[st][ch] = v;
+			mic_dcb_yprev[st][ch] = y;
+			v = y;
 		}
-		buf[i] = (int16_t)yi;
+		int32_t yi = (int32_t)(v >= 0.0f ? v + 0.5f : v - 0.5f);
+
+		buf[i] = (int16_t)CLAMP(yi, INT16_MIN, INT16_MAX);
 		if (++ch >= channels) {
 			ch = 0;
+			if (mic_dcb_frames < settled) {
+				mic_dcb_frames++;
+				r = mic_dcb_pole(mic_dcb_frames, fs);
+			}
 		}
 	}
 }
@@ -464,9 +503,10 @@ static void mic_thread_fn(void *arg1, void *arg2, void *arg3)
 			 * frames (= per-channel samples) already
 			 */
 			size_t loss =
-				(size_t)(dropped - mic_drop_seen) /
-					mic_state.channel_count +
-				(size_t)(lost_est - mic_lost_est_seen);
+				((size_t)(dropped - mic_drop_seen) /
+					 mic_state.channel_count +
+				 (size_t)(lost_est - mic_lost_est_seen)) /
+				audio_microphone_halve_rate();
 
 			if (loss > 0) {
 				audio_aec_note_mic_loss(loss);
@@ -484,7 +524,7 @@ static void mic_thread_fn(void *arg1, void *arg2, void *arg3)
 		/* Strip the residual DC bias on the AEC output before encoding,
 		 * downstream of every AEC stage (see mic_dc_block). */
 		mic_dc_block((int16_t *)buffer, len / sizeof(int16_t),
-			     mic_state.channel_count);
+			     mic_state.channel_count, mic_state.sample_rate);
 
 		/* Voice mode: band-pass to the AEC's working band so out-of-band
 		 * echo can't reach the server VAD (see mic_voice_bandpass). */
@@ -785,7 +825,7 @@ static int lua_microphone_start(lua_State *L)
 	int sample_rate = 8000;
 	int bit_depth = 16;
 	int channels = 1;
-	int gain = AUDIO_MIC_DEFAULT_GAIN;
+	int gain = AUDIO_MIC_GAIN_SAVED;
 	int lc3_duration = 1000;
 	int lc3_bitrate = 16000;
 

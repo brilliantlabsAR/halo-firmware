@@ -715,6 +715,34 @@ static bool mic_first_dmic_read_logged;
 /* Calculate block size based on configuration */
 #define MIC_BLOCK_SIZE_CALC(rate, bits, ch, ms) ((rate) * (bits) * (ch) / 8 * (ms) / 1000)
 
+/* 8 kHz capture runs the PDM at 16 kHz and halves the rate here.
+ *
+ * The LPPDM decimates with a bare CIC: nothing below the output rate stops
+ * content above Nyquist from folding back (its FIR runs after decimation, at
+ * the output rate). At 8 kHz a 5 kHz tone came back at 3 kHz at full level,
+ * so speech energy in 4-8 kHz (sibilants, breath) landed in the voice band
+ * as a harsh, scratchy layer. At 16 kHz that 4-8 kHz band is still in band,
+ * and this half-band low-pass removes it before keeping every second sample.
+ *
+ * 47-tap half-band, designed at 16 kHz: passband 0-3.5 kHz within
+ * +/-0.016 dB, at least 54.8 dB down from 4.5 kHz. Half-band taps at even
+ * offsets from the centre are zero; the centre tap is 0.5. MIC_HB_SIDE holds
+ * the taps at offsets +/-1, +/-3, ... +/-23. Group delay: 23 input samples
+ * (1.4 ms).
+ */
+#define MIC_HB_SIDE  12
+#define MIC_HB_HALF  (2 * MIC_HB_SIDE - 1) /* centre offset: 23 */
+#define MIC_HB_HIST  (2 * MIC_HB_HALF)     /* input history per channel: 46 */
+#define MIC_HB_MAX_FRAMES 320               /* 20 ms at 16 kHz */
+#define MIC_HB_MAX_CH 2
+static const float mic_hb_side[MIC_HB_SIDE] = {
+	3.172321320e-01f, -1.029053479e-01f, 5.844742805e-02f, -3.840673342e-02f,
+	2.666641399e-02f, -1.885881089e-02f, 1.331484783e-02f, -9.250779636e-03f,
+	6.246100646e-03f, -4.037276842e-03f, 2.450437285e-03f, -1.806033077e-03f,
+};
+static int16_t mic_hb_work[MIC_HB_MAX_CH][MIC_HB_HIST + MIC_HB_MAX_FRAMES];
+static bool mic_hb_primed;
+
 struct audio_microphone {
 	const struct device *dmic;
 	struct dmic_cfg config;
@@ -723,7 +751,9 @@ struct audio_microphone {
 	size_t block_size;
 	size_t block_count;
 	bool is_started;
-	int gain;  /* Current gain level (0-100) */
+	int gain;  /* Current gain step (-10 to 10) */
+	int channels;
+	bool halve_rate; /* PDM at 2x the requested rate, see mic_hb_side */
 };
 
 /* Microphone singleton management */
@@ -804,9 +834,20 @@ audio_microphone_t *audio_microphone_init(int sample_rate, int bit_depth, int ch
 		return NULL;
 	}
 
+	/* 8 kHz runs the PDM at 16 kHz and decimates in audio_microphone_read()
+	 * (see mic_hb_side); blocks are sized for the hardware rate.
+	 */
+	int hw_rate = sample_rate;
+
+	mic_singleton.microphone.channels = channels;
+	if (sample_rate == 8000 && bit_depth == 16 && channels <= MIC_HB_MAX_CH) {
+		hw_rate = 16000;
+		mic_singleton.microphone.halve_rate = true;
+	}
+
 	/* Calculate block size */
 	mic_singleton.microphone.block_size =
-		MIC_BLOCK_SIZE_CALC(sample_rate, bit_depth, channels, MIC_BLOCK_INTERVAL_MS);
+		MIC_BLOCK_SIZE_CALC(hw_rate, bit_depth, channels, MIC_BLOCK_INTERVAL_MS);
 
 	/* Scale block count down at high rates to keep total slab memory bounded */
 	mic_singleton.microphone.block_count = MIC_MEM_BLOCK_COUNT;
@@ -849,7 +890,7 @@ audio_microphone_t *audio_microphone_init(int sample_rate, int bit_depth, int ch
 
 	struct pcm_stream_cfg stream_cfg = {
 		.pcm_width = bit_depth,
-		.pcm_rate = sample_rate,
+		.pcm_rate = hw_rate,
 		.mem_slab = &mic_singleton.microphone.slab,
 		.block_size = mic_singleton.microphone.block_size,
 	};
@@ -910,11 +951,69 @@ int audio_microphone_start(audio_microphone_t *mic)
 
 	mic_hw_start_ms = k_uptime_get_32();
 	mic_first_dmic_read_logged = false;
+	mic_hb_primed = false;
 	LOG_DBG("Mic DMIC start at uptime %u ms (block interval %d ms)",
 		mic_hw_start_ms, MIC_BLOCK_INTERVAL_MS);
 
 	mic->is_started = true;
 	return 0;
+}
+
+/* Low-pass and decimate one interleaved int16 block by 2, in place; returns
+ * the new size in bytes. Each channel's history carries across blocks; the
+ * first block after a start primes it with that block's first sample so the
+ * filter starts at the DC level instead of ramping up from zero.
+ */
+static uint32_t mic_halve_rate(void *buffer, uint32_t size, int channels)
+{
+	int16_t *pcm = buffer;
+	uint32_t frames = size / (sizeof(int16_t) * channels);
+
+	if (frames > MIC_HB_MAX_FRAMES) {
+		frames = MIC_HB_MAX_FRAMES;
+	}
+	frames &= ~1u;
+
+	for (int c = 0; c < channels; c++) {
+		int16_t *w = mic_hb_work[c];
+
+		if (!mic_hb_primed) {
+			for (int i = 0; i < MIC_HB_HIST; i++) {
+				w[i] = pcm[c];
+			}
+		}
+		for (uint32_t i = 0; i < frames; i++) {
+			w[MIC_HB_HIST + i] = pcm[i * channels + c];
+		}
+	}
+	mic_hb_primed = true;
+
+	for (int c = 0; c < channels; c++) {
+		int16_t *w = mic_hb_work[c];
+
+		for (uint32_t j = 0; j < frames / 2; j++) {
+			/* centre of the window ending at the newest sample of pair j */
+			const int16_t *x = &w[MIC_HB_HIST + 2 * j + 1 - MIC_HB_HALF];
+			float acc = 0.5f * (float)x[0];
+
+			for (int k = 0; k < MIC_HB_SIDE; k++) {
+				int d = 2 * k + 1;
+
+				acc += mic_hb_side[k] * (float)(x[-d] + x[d]);
+			}
+			int32_t v = (int32_t)(acc >= 0.0f ? acc + 0.5f : acc - 0.5f);
+
+			pcm[j * channels + c] = (int16_t)CLAMP(v, INT16_MIN, INT16_MAX);
+		}
+		memmove(w, &w[frames], MIC_HB_HIST * sizeof(int16_t));
+	}
+
+	return (frames / 2) * channels * sizeof(int16_t);
+}
+
+int audio_microphone_halve_rate(void)
+{
+	return mic_singleton.microphone.halve_rate ? 2 : 1;
 }
 
 int audio_microphone_read(audio_microphone_t *mic, void **buffer, size_t *len)
@@ -936,6 +1035,9 @@ int audio_microphone_read(audio_microphone_t *mic, void **buffer, size_t *len)
 		return ret;
 	}
 
+	if (mic->halve_rate) {
+		size = mic_halve_rate(*buffer, size, mic->channels);
+	}
 	*len = size;
 
 	if (!mic_first_dmic_read_logged) {
