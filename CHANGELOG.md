@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.28] - 2026-11-11
+
 ### Added
 
 - `frame.bluetooth.le_audio([on | {speaker=, mic=}])` makes LE Audio
@@ -18,10 +20,10 @@ release pages and tags are not publicly reachable.
   It sets the PACS Available Audio Contexts (notified to the client) and
   refuses an ASE Enable for a direction that is off; running streams are left
   alone. It returns the state plus whether LE Audio holds the speaker or mic
-  right now. Not persisted.
+  right now. Not persisted (#111).
 - `frame.sound.play()` and `frame.sound.play_async()` take `budget=` (10-100)
   and `gain=` (0-12 dB) options for that sound, as `frame.speaker.start{}`
-  does.
+  does (#112).
 
 ### Changed
 
@@ -29,11 +31,17 @@ release pages and tags are not publicly reachable.
   from an absent part. `i2c1` reports each address as `ack`, `nak(-5)` or
   `err(<errno>)` with the bus line levels, and fails on a stuck line or a
   transfer that never ran (busy, timeout) instead of reporting a SKIP. A new
-  `i2c0` test checks that the sensor bus lines come up with `sen_1v8`.
+  `i2c0` test checks that the sensor bus lines come up with `sen_1v8`
+  (#110).
 - `frame.microphone.start{gain=}` sets the gain for that stream even when a
   gain has been saved with `frame.microphone.gain()`; the saved gain applies
   only when `gain=` is omitted. `frame.microphone.gain()` returns the running
-  stream's gain while one runs.
+  stream's gain while one runs (#113).
+
+### Documentation
+
+- The flash skill notes that the dev-kit reset over SE-UART cannot reach a
+  dev kit in deep sleep (#109).
 
 ## [0.8.27] - 2026-11-09
 
