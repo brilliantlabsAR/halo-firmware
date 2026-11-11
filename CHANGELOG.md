@@ -11,6 +11,15 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Added
+
+- `frame.bluetooth.le_audio([on | {speaker=, mic=}])` makes LE Audio
+  available or unavailable per direction at runtime, without disconnecting.
+  It sets the PACS Available Audio Contexts (notified to the client) and
+  refuses an ASE Enable for a direction that is off; running streams are left
+  alone. It returns the state plus whether LE Audio holds the speaker or mic
+  right now. Not persisted.
+
 ### Changed
 
 - The main-board factory test (`tests/halo_mainboard`) tells an I2C bus fault

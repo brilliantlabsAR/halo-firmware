@@ -90,6 +90,35 @@ uint16_t halo_ble_audio_get_tmap_roles(void);
  */
 void halo_ble_audio_get_context_types(uint16_t *sink_context_bf, uint16_t *src_context_bf);
 
+/** LE Audio availability and activity, per direction */
+struct halo_ble_audio_availability {
+	bool sink_available;   /**< Speaker (sink) contexts are advertised as available */
+	bool source_available; /**< Microphone (source) contexts are available */
+	bool sink_active;      /**< A sink ASE is enabling, streaming or disabling: LE Audio holds the speaker */
+	bool source_active;    /**< A source ASE is enabling, streaming or disabling: LE Audio holds the mic */
+};
+
+/**
+ * @brief Make LE Audio available or unavailable, per direction, at runtime
+ *
+ * Sets the PACS Available Audio Contexts for all connections (0 for an
+ * unavailable direction, all supported contexts otherwise) and refuses an
+ * ASE Enable for an unavailable direction. A stream already enabled is not
+ * torn down. Not persisted: every boot starts with both available.
+ *
+ * @param sink   Speaker (sink) available
+ * @param source Microphone (source) available
+ * @return 0 on success, -EIO if the PACS server refused the update
+ */
+int halo_ble_audio_set_available(bool sink, bool source);
+
+/**
+ * @brief Read the runtime availability and whether LE Audio holds the hardware
+ *
+ * @param out Receives the state
+ */
+void halo_ble_audio_get_available(struct halo_ble_audio_availability *out);
+
 /**
  * @brief Get the speaker levels applied to LE Audio sink streams
  *
