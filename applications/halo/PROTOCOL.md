@@ -2349,6 +2349,8 @@ The optional `options` table accepts:
 - `duration_ms`: number — playback duration in ms (default `1000`).
 - `volume: number` — 0–100 (default `20`).
 - `sample_rate: number` — output sample rate in Hz, `8000` or `16000` only (default `16000`).
+- `budget: number` — 10–100, energy-budget override for this sound, as in `speaker.start{budget=}` (default: the speaker's configured budget).
+- `gain: number` — 0–12 dB pre-gain into the speaker limiter for this sound, as in `speaker.start{gain=}` (default `0`).
 
 #### `frame.sound.play(name [, options])`
 
