@@ -319,6 +319,8 @@ frame.microphone.diag(cmd)        -- diagnostics: 'stats' -> table, 'zero' -> re
 frame.microphone.aec_tune([t])    -- AEC barge-in tunables: get table, set {k=v}, or 'defaults' (not persisted)
 ```
 
+**Gain:** `start{gain=}` (-10 to 10) applies to that stream only and is not saved. Without it, the stream uses the gain saved by `gain(value)` (or by a phone over AICS), else 1. While a stream runs, `gain()` returns its gain; otherwise it returns the gain a `start{}` without `gain=` would use.
+
 **AEC / voice mode (Halo only):** `aec()` cancels speaker echo from the mic feed; `voice()` band-passes the mic output to a speech band (~300–3400 Hz). They are two **independent, opt-in** stages on the mic path (`mic → [aec] → [voice] → encode`), **both off by default** — pair them so out-of-band echo can't reach a server VAD (the self-interruption fix); `voice` alone just band-limits the raw mic. Set the initial state declaratively at `start{aec=, voice=}` (the reset point each session) or toggle live via the setters, which mirror `gain()`. `diag('stats'|'zero')` exposes canceller instrumentation for test scripts. `aec_tune()` reads and sets the canceller's barge-in tunables at runtime (keys, ranges and tradeoffs in PROTOCOL.md); values are device-global and reset at boot.
 
 **Startup latency:** After `start()`, the first useful `read()` may return `""` while PDM/DMIC settles and the first DMA block is captured. This applies after standby resume too (mic is stopped and the ring buffer is cleared). `read()` is **non-blocking**: no data yet → `""`; partial data → returns up to `size` bytes (LC3 is byte-accurate FIFO). Scripts should poll in the main loop or use a one-off delay/pump where first-packet timing matters.

@@ -1472,7 +1472,7 @@ Initializes the microphone.
   | `channels` | number | 1 | 1 (mono) or 2 (stereo) |
   | `duration` | number | 1000 | LC3 frame duration (µs/10, matching the Alif LC3 enum: 750 = 7.5 ms, 1000 = 10 ms) |
   | `bitrate` | number | 16000 | LC3 bitrate (multiple of 8000, ≤96000) |
-  | `gain` | number | 1 | Gain step (-10 to 10; not dB, see `microphone.gain()`). A saved gain takes precedence |
+  | `gain` | number | 1 | Gain step (-10 to 10; not dB, see `microphone.gain()`) for this stream only, not saved. Omitted: the saved gain, else 1 |
   | `aec` | boolean | false | Echo cancellation for this session (Halo only; see `microphone.aec()`). Off = raw mic. Can also be toggled live. |
   | `voice` | boolean | false | Voice-band mode (Halo only; see `microphone.voice()`). Independent of `aec`; can also be toggled live. |
 
@@ -1554,7 +1554,8 @@ Reads audio data from the microphone ring buffer. Works for both PCM and LC3 mod
 
 #### `frame.microphone.gain([val])`
 
-Gets or sets microphone gain. Can be called without initialization to get current setting.
+Gets or sets microphone gain. While a stream runs, the getter returns that stream's gain;
+otherwise it returns the gain a `start{}` without `gain=` would use (the saved gain, else 1).
 
 Gain is a step from -10 to 10, not a value in dB. Step `g` scales the
 microphone signal by `1 + g` relative to step 0 when positive and by
@@ -1565,8 +1566,9 @@ microphone signal by `1 + g` relative to step 0 when positive and by
 |---|---|---|---|---|---|---|---|
 | dB relative to step 0 | ±6.0 | ±9.5 | ±12.0 | ±14.0 | ±15.6 | ±18.1 | ±20.8 |
 
-A gain set here is saved and survives reboots, and a saved gain takes precedence over
-`start{gain=}`: the microphone starts at the saved gain whenever one exists.
+A gain set here is saved and survives reboots. An explicit `start{gain=}` takes precedence
+for that stream and is not saved; a `start{}` without `gain=`, and the LE Audio source,
+use the saved gain. (In 0.8.27 and earlier a saved gain overrode `start{gain=}`.)
 
 With nothing saved and no `start{gain=}`, the microphone runs at gain **1** (also the
 LE Audio source's gain, and the AICS gain's initial value; 0.8.18 and earlier used 0).

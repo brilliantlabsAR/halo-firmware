@@ -1455,7 +1455,7 @@ static int audio_datapath_create_source(struct audio_datapath_config const *cons
 
 	/* Initialize microphone with configured input channels */
 	source_datapath.microphone = audio_microphone_init(
-		cfg->sampling_rate_hz, 16, AUDIO_INPUT_CHANNELS, AUDIO_MIC_DEFAULT_GAIN,
+		cfg->sampling_rate_hz, 16, AUDIO_INPUT_CHANNELS, AUDIO_MIC_GAIN_SAVED,
 		AUDIO_OWNER_LE_AUDIO);
 	if (!source_datapath.microphone) {
 		LOG_ERR("Failed to initialize microphone");

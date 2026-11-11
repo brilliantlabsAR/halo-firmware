@@ -864,11 +864,16 @@ audio_microphone_t *audio_microphone_init(int sample_rate, int bit_depth, int ch
 		return NULL;
 	}
 
-	/* Set gain */
-	int saved_gain = gain; /* use provided gain as default */
-	if (halo_settings_get("audio/gain", &saved_gain, sizeof(saved_gain)) != 0) {
-		/* Use provided gain if not saved */
-		saved_gain = gain;
+	/* Set gain: an explicit step wins; otherwise the saved one, else the
+	 * default. The explicit step is not saved. A missing key still
+	 * returns 0 and leaves the output untouched, so seed the default.
+	 */
+	int saved_gain = gain;
+	if (gain == AUDIO_MIC_GAIN_SAVED) {
+		saved_gain = AUDIO_MIC_DEFAULT_GAIN;
+		if (halo_settings_get("audio/gain", &saved_gain, sizeof(saved_gain)) != 0) {
+			saved_gain = AUDIO_MIC_DEFAULT_GAIN;
+		}
 	}
 	if (saved_gain < -10) {
 		saved_gain = -10;
