@@ -33,6 +33,7 @@ zephyr_library_sources_ifdef(CONFIG_HALO_LED_MANAGER src/led_manager.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_BATTERY_MANAGER src/battery_manager.c)
 
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_STREAM src/audio_stream.c)
+zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_STREAM src/audio_dc_block.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_HPF src/audio_eq.c)
 zephyr_library_sources_ifdef(CONFIG_HALO_AUDIO_AEC src/audio_aec.c)
 if(CONFIG_HALO_AUDIO_AEC)

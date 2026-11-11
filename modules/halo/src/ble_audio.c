@@ -59,6 +59,7 @@
 #include "halo/ble_audio.h"
 #include "halo/mem_manager.h"
 #include "halo/audio_stream.h"
+#include "halo/audio_dc_block.h"
 
 /* Alif LE Audio datapath components (local copies) */
 #include "iso_datapath_ctoh.h"
@@ -800,6 +801,12 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
 	}
 }
 
+/* DC blocker on the source (mic) PCM before LC3, as on the Lua capture path:
+ * removes the mic's DC bias and the start-up pop while it settles (see
+ * audio_dc_block.c). Encoder thread only; reset before the mic starts, while
+ * the thread is not processing (`streaming` is still false). */
+static struct audio_dc_block source_dcb;
+
 /**
  * @brief Encoder thread function
  *
@@ -840,6 +847,11 @@ static void source_encoder_thread_func(void *p1, void *p2, void *p3)
 			k_sleep(K_MSEC(1));
 			continue;
 		}
+
+		audio_dc_block_process(&source_dcb, (int16_t *)mic_buffer,
+				       mic_buffer_len / sizeof(int16_t),
+				       source_datapath.channel_count,
+				       (int)source_datapath.sampling_rate_hz);
 
 		/* MICS/AICS mute: keep the ISO stream cadence but transmit silence,
 		 * as required by the Microphone Control Profile */
@@ -1607,6 +1619,7 @@ static int audio_datapath_channel_start_source(uint8_t const stream_lid)
 
 	/* Start microphone if not already streaming */
 	if (!source_datapath.streaming && source_datapath.microphone) {
+		audio_dc_block_reset(&source_dcb);
 		ret = audio_microphone_start(source_datapath.microphone);
 		if (ret != 0) {
 			LOG_ERR("Failed to start microphone: %d", ret);
