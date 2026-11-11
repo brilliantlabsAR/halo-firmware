@@ -11,15 +11,17 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.29] - 2026-11-11
+
 ### Fixed
 
 - 8 kHz microphone capture no longer folds 4-8 kHz sound into the voice band.
   The PDM decimator has no anti-alias filter, so 8 kHz streams now run it at
-  16 kHz and low-pass and decimate in firmware.
+  16 kHz and low-pass and decimate in firmware (#115).
 - The microphone no longer starts with a pop. The mic's DC level takes about
   200 ms to settle after a start, and the DC blocker followed it slowly; it now
   starts at 80 Hz and slows to its usual corner (below 20 Hz) over the first
-  200 ms.
+  200 ms (#115).
 
 ## [0.8.28] - 2026-11-11
 
