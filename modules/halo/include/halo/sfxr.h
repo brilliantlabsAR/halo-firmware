@@ -93,6 +93,8 @@ struct halo_sfxr_play_options {
 	int duration_ms;
 	int volume;
 	audio_owner_t owner;
+	int budget;  /* 10-100 energy-budget override; 0 = speaker default */
+	int gain_db; /* 0-12 dB pre-gain into the limiter; 0 = unity */
 };
 
 void halo_sfxr_reset(struct halo_sfxr_params *params);

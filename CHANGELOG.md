@@ -19,6 +19,9 @@ release pages and tags are not publicly reachable.
   refuses an ASE Enable for a direction that is off; running streams are left
   alone. It returns the state plus whether LE Audio holds the speaker or mic
   right now. Not persisted.
+- `frame.sound.play()` and `frame.sound.play_async()` take `budget=` (10-100)
+  and `gain=` (0-12 dB) options for that sound, as `frame.speaker.start{}`
+  does.
 
 ### Changed
 

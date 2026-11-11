@@ -70,6 +70,16 @@ static void lua_sound_read_args(lua_State *L, int options_index, uint32_t *seed,
 		opts->duration_ms =
 			get_optional_int_field(L, options_index, "duration_ms", opts->duration_ms);
 		opts->volume = get_optional_int_field(L, options_index, "volume", opts->volume);
+		opts->budget = get_optional_int_field(L, options_index, "budget", 0);
+		opts->gain_db = get_optional_int_field(L, options_index, "gain", 0);
+	}
+
+	/* Same ranges as frame.speaker.start{} */
+	if (opts->budget != 0 && (opts->budget < 10 || opts->budget > 100)) {
+		luaL_error(L, "budget must be 10-100");
+	}
+	if (opts->gain_db < 0 || opts->gain_db > 12) {
+		luaL_error(L, "gain must be 0-12 dB");
 	}
 
 	/* The speaker only supports these rates (mirrors frame.speaker.start). */
@@ -108,6 +118,10 @@ static int lua_sound_push_result(lua_State *L, const char *name, int ret)
  * Examples:
  *   frame.sound.play("laser")                                  -- random each call
  *   frame.sound.play("powerup", {seed=84, duration_ms=1000, volume=20})
+ *   frame.sound.play("blip", {volume=100, gain=3, budget=50})
+ *
+ * budget (10-100) and gain (0-12 dB) apply to this call only, as in
+ * frame.speaker.start{}; without them the speaker defaults apply.
  */
 static int lua_sound_play(lua_State *L)
 {

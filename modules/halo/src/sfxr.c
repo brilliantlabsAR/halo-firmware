@@ -813,6 +813,8 @@ static int halo_sfxr_play_internal(const struct halo_sfxr_params *params,
 		if (options->owner != AUDIO_OWNER_NONE) {
 			opts.owner = options->owner;
 		}
+		opts.budget = options->budget;
+		opts.gain_db = options->gain_db;
 	}
 
 	if (opts.sample_rate != 8000 && opts.sample_rate != 16000) {
@@ -822,6 +824,12 @@ static int halo_sfxr_play_internal(const struct halo_sfxr_params *params,
 		return -EINVAL;
 	}
 	if (opts.volume < 0 || opts.volume > 100) {
+		return -EINVAL;
+	}
+	if (opts.budget != 0 && (opts.budget < 10 || opts.budget > 100)) {
+		return -EINVAL;
+	}
+	if (opts.gain_db < 0 || opts.gain_db > 12) {
 		return -EINVAL;
 	}
 
@@ -856,6 +864,17 @@ static int halo_sfxr_play_internal(const struct halo_sfxr_params *params,
 	ret = audio_speaker_set_volume_transient(speaker, opts.volume);
 	if (ret != 0) {
 		goto out;
+	}
+
+	/* Per-call budget and pre-gain, as frame.speaker.start{} takes them.
+	 * audio_speaker_init() reset both to the defaults, and the budget
+	 * must land before the stream starts.
+	 */
+	if (opts.budget > 0) {
+		(void)audio_speaker_set_stream_budget(speaker, opts.budget);
+	}
+	if (opts.gain_db > 0) {
+		(void)audio_speaker_set_stream_gain(speaker, opts.gain_db * 10);
 	}
 
 	ret = audio_speaker_start(speaker);
