@@ -326,12 +326,21 @@ typedef struct audio_microphone audio_microphone_t;
 /**
  * @brief Default microphone gain step when none is saved or requested
  *
- * Used by start{} without gain=, the LE Audio source and the AICS initial
- * state; a saved gain (frame.microphone.gain(), AICS) still wins. Gain 1 is
+ * Used when nothing is saved (see AUDIO_MIC_GAIN_SAVED) and as the AICS
+ * initial state. Gain 1 is
  * the reference gain of the echo canceller's gate thresholds (they are
  * expressed at gain 1 and scaled with the effective gain).
  */
 #define AUDIO_MIC_DEFAULT_GAIN 1
+
+/**
+ * @brief Gain argument for audio_microphone_init(): use the saved gain
+ *
+ * Selects the gain saved by frame.microphone.gain() or AICS, or
+ * AUDIO_MIC_DEFAULT_GAIN when none is saved. start{} without gain= and the
+ * LE Audio source pass it; an explicit gain step (-10 to 10) is used as is.
+ */
+#define AUDIO_MIC_GAIN_SAVED INT32_MIN
 
 /**
  * @brief Initialize microphone device
@@ -339,7 +348,8 @@ typedef struct audio_microphone audio_microphone_t;
  * @param sample_rate Sample rate (Hz)
  * @param bit_depth Bit depth (8 or 16)
  * @param channels Number of channels (1=mono, 2=stereo)
- * @param gain Gain step (-10 to 10) when no gain is saved; a saved gain wins
+ * @param gain Gain step (-10 to 10), or AUDIO_MIC_GAIN_SAVED for the saved
+ *             gain (default if none is saved)
  * @param owner Resource owner (AUDIO_OWNER_LUA or AUDIO_OWNER_LE_AUDIO)
  * @return Microphone handle, or NULL on failure (already owned by another)
  */

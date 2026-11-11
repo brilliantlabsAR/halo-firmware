@@ -30,6 +30,10 @@ release pages and tags are not publicly reachable.
   `err(<errno>)` with the bus line levels, and fails on a stuck line or a
   transfer that never ran (busy, timeout) instead of reporting a SKIP. A new
   `i2c0` test checks that the sensor bus lines come up with `sen_1v8`.
+- `frame.microphone.start{gain=}` sets the gain for that stream even when a
+  gain has been saved with `frame.microphone.gain()`; the saved gain applies
+  only when `gain=` is omitted. `frame.microphone.gain()` returns the running
+  stream's gain while one runs.
 
 ## [0.8.27] - 2026-11-09
 

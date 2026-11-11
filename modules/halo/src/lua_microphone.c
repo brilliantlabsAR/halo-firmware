@@ -829,12 +829,11 @@ static int lua_microphone_start(lua_State *L)
 	lua_getfield(L, 1, "gain");
 	if (lua_isnumber(L, -1)) {
 		gain = lua_tointeger(L, -1);
+		if (gain < -10 || gain > 10) {
+			return luaL_error(L, "Gain must be -10 to 10");
+		}
 	}
 	lua_pop(L, 1);
-
-	if (gain < -10 || gain > 10) {
-		return luaL_error(L, "Gain must be -10 to 10");
-	}
 
 	/* AEC and voice-band are two independent, opt-in post-processing stages
 	 * on the mic path: raw mic -> [aec] -> [voice band-pass] -> encode. Both
@@ -998,7 +997,8 @@ static int lua_microphone_start(lua_State *L)
 
 	LOG_DBG("Mic Lua start at uptime %u ms", mic_lua_start_ms);
 	LOG_DBG("Microphone started: %s %dHz %dbit gain=%ddB bitrate=%d",
-		mic_state.use_lc3 ? "LC3" : "PCM", sample_rate, bit_depth, gain,
+		mic_state.use_lc3 ? "LC3" : "PCM", sample_rate, bit_depth,
+		audio_microphone_get_gain(mic_state.microphone),
 		mic_state.use_lc3 ? lc3_bitrate : 0);
 
 	return 0;
@@ -1036,8 +1036,11 @@ static int lua_microphone_gain(lua_State *L)
 {
 	/* Check if argument provided (setter) or not (getter) */
 	if (lua_gettop(L) == 0) {
-		/* Getter: return current gain */
-		int gain = audio_microphone_get_gain(NULL);
+		/* Getter: the running stream's gain, else the saved or
+		 * default gain the next start{} without gain= would use
+		 */
+		int gain = audio_microphone_get_gain(
+			mic_state.is_streaming ? mic_state.microphone : NULL);
 		LOG_DBG("Microphone gain get: %d", gain);
 		lua_pushinteger(L, gain);
 		return 1;
