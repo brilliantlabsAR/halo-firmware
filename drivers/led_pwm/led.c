@@ -31,37 +31,53 @@ struct led_pwm_config {
 
 #ifdef USE_TIMER
 static int led_pwm_set_brightness(const struct device *dev, uint32_t led, uint8_t value);
+static int led_pwm_set_permille(const struct device *dev, uint32_t led, uint16_t permille);
 static uint8_t blink_value = 0;
-static uint32_t delay_on = 0; 
-static uint32_t delay_off = 0; 
+static uint32_t delay_on = 0;
+static uint32_t delay_off = 0;
 
 /* Breathing state */
 static bool breathing_mode = false;
-static uint8_t breathing_brightness = 5;
+static uint8_t breathing_idx = 0;
 static bool breathing_up = true;
 
-#define BREATHING_STEP_MS      20    /* Time between brightness steps */
-#define BREATHING_MIN          5     /* Minimum brightness (visible threshold) */
-#define BREATHING_MAX          90    /* Maximum brightness */
+#define BREATHING_STEP_MS      25    /* Time between brightness steps */
+
+/*
+ * One half of the breathing cycle as PWM duty in permille: a raised-cosine
+ * ramp in perceived lightness (CIE L*) from L* 50 up to L* 100, converted to
+ * duty. At 25 ms per step the whole cycle (up and back down) takes 3 s.
+ * The floor (L* 50, 18% duty) stays clearly lit so the LED never looks off,
+ * and the swing up to full brightness keeps it distinct from solid on.
+ *
+ * Regenerate with, for i = 0..60:
+ *   L = 50 + 50 * (1 - cos(pi * i / 60)) / 2;  duty = ((L + 16) / 116)^3
+ */
+static const uint16_t breathing_permille[] = {
+	184, 184, 185, 187, 189, 191, 195, 198, 203, 208, 214, 220, 227, 235, 243, 253,
+	262, 273, 285, 297, 310, 324, 338, 354, 370, 387, 405, 423, 442, 462, 483, 504,
+	526, 548, 570, 593, 616, 640, 663, 687, 710, 734, 756, 779, 801, 822, 843, 863,
+	882, 899, 916, 931, 945, 958, 969, 978, 986, 992, 996, 999, 1000,
+};
+
+#define BREATHING_LAST (ARRAY_SIZE(breathing_permille) - 1)
 
 static void blink_timeout(struct k_timer *timer) {
     const struct device *dev = k_timer_user_data_get(timer);
-    
+
     if (breathing_mode) {
-        /* Simple breathing: just go up and down */
+        /* Walk the table up to full brightness and back down to the floor */
         if (breathing_up) {
-            breathing_brightness++;
-            if (breathing_brightness >= BREATHING_MAX) {
+            if (++breathing_idx >= BREATHING_LAST) {
                 breathing_up = false;
             }
         } else {
-            breathing_brightness--;
-            if (breathing_brightness <= BREATHING_MIN) {
+            if (--breathing_idx == 0) {
                 breathing_up = true;
             }
         }
-        
-        led_pwm_set_brightness(dev, 0, breathing_brightness);
+
+        led_pwm_set_permille(dev, 0, breathing_permille[breathing_idx]);
 		/* Periodic timer handles rescheduling for breathing */
     } else {
 		/* Guard against stale timer expiry after leaving breathing mode.
@@ -101,9 +117,9 @@ static int led_pwm_blink(const struct device *dev, uint32_t led,
 		delay_off = 0;
 		blink_value = 0;
         breathing_mode = true;
-        breathing_brightness = BREATHING_MIN;
+        breathing_idx = 0;
         breathing_up = true;
-        led_pwm_set_brightness(dev, 0, BREATHING_MIN);
+        led_pwm_set_permille(dev, 0, breathing_permille[0]);
 		/* Start periodic timer for breathing cadence */
 		k_timer_start(&blink_timer, K_MSEC(BREATHING_STEP_MS), K_MSEC(BREATHING_STEP_MS));
         return 0;
@@ -153,20 +169,27 @@ static int led_pwm_blink(const struct device *dev, uint32_t led,
 static int led_pwm_set_brightness(const struct device *dev,
 				  uint32_t led, uint8_t value)
 {
-	const struct led_pwm_config *config = dev->config;
-	const struct pwm_dt_spec *dt_led;
-
-	if (led >= config->num_leds || value > 100) {
+	if (value > 100) {
 		return -EINVAL;
 	}
 
-	/* Map to duty cycle (active-low LED). */
-	value = 100 - value;
+	return led_pwm_set_permille(dev, led, value * 10);
+}
+
+static int led_pwm_set_permille(const struct device *dev, uint32_t led, uint16_t permille)
+{
+	const struct led_pwm_config *config = dev->config;
+	const struct pwm_dt_spec *dt_led;
+
+	if (led >= config->num_leds || permille > 1000) {
+		return -EINVAL;
+	}
 
 	dt_led = &config->led[led];
 
-	return pwm_set_pulse_dt(&config->led[led],
-			(uint32_t) ((uint64_t) dt_led->period * value / 100));
+	/* Map to duty cycle (active-low LED). */
+	return pwm_set_pulse_dt(dt_led,
+			(uint32_t) ((uint64_t) dt_led->period * (1000 - permille) / 1000));
 }
 
 static int led_pwm_on(const struct device *dev, uint32_t led)

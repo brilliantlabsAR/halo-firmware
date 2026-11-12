@@ -227,13 +227,14 @@ static void update_charge_led(void)
 		/* Not charging: LED off */
 		halo_led_clear_state(HALO_LED_PRIORITY_MEDIUM);
 	} else if (bat_mgr_ctx.info.level >= 97) {
-		/* Fully charged (>= 97%): LED solid on */
-		halo_led_set_state(HALO_LED_STATE_ON, HALO_LED_PRIORITY_MEDIUM);
-		LOG_DBG("LED: fully charged (%d%%), solid ON", bat_mgr_ctx.info.level);
+		/* Fully charged (>= 97%): LED breathing. Blinks are taken by
+		 * pairing and by recovery mode, so "full" breathes instead. */
+		halo_led_set_state(HALO_LED_STATE_BREATHING, HALO_LED_PRIORITY_MEDIUM);
+		LOG_DBG("LED: fully charged (%d%%), breathing", bat_mgr_ctx.info.level);
 	} else {
-		/* Charging: LED breathing effect (smooth fade in/out) */
-		halo_led_set_state(HALO_LED_STATE_CHARGING, HALO_LED_PRIORITY_MEDIUM);
-		LOG_DBG("LED: charging (%d%%), breathing", bat_mgr_ctx.info.level);
+		/* Charging: LED solid on, easy to see at a glance */
+		halo_led_set_state(HALO_LED_STATE_ON, HALO_LED_PRIORITY_MEDIUM);
+		LOG_DBG("LED: charging (%d%%), solid ON", bat_mgr_ctx.info.level);
 	}
 #endif
 }
