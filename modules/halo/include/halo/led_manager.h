@@ -20,7 +20,7 @@ typedef enum {
 	HALO_LED_STATE_ON,            /**< LED on */
 	HALO_LED_STATE_BLINK_SLOW,    /**< Slow blink (1Hz) */
 	HALO_LED_STATE_BLINK_FAST,    /**< Fast blink (2Hz) */
-	HALO_LED_STATE_CHARGING,      /**< Charging indicator */
+	HALO_LED_STATE_BREATHING,     /**< Breathing (fully charged on the charger) */
 	HALO_LED_STATE_PAIRING,       /**< Pairing mode indicator */
 } halo_led_state_t;
 

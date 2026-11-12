@@ -118,7 +118,7 @@ static void update_led(void)
 		led_blink(led_mgr_ctx.led_dev, 0, BLINK_FAST_ON_MS, BLINK_FAST_OFF_MS);
 		break;
 
-	case HALO_LED_STATE_CHARGING:
+	case HALO_LED_STATE_BREATHING:
 		/* Breathing effect - blink(0,0) triggers breathing mode in driver */
 		led_blink(led_mgr_ctx.led_dev, 0, 0, 0);
 		break;

@@ -152,7 +152,7 @@ TIMEOUT         →    PM_WAKEUP_RTC
 | `HALO_LED_STATE_ON` | On | Solid on |
 | `HALO_LED_STATE_BLINK_SLOW` | 1Hz | 500ms on, 500ms off |
 | `HALO_LED_STATE_BLINK_FAST` | 2Hz | 250ms on, 250ms off |
-| `HALO_LED_STATE_CHARGING` | Solid on | Charging indicator |
+| `HALO_LED_STATE_BREATHING` | Breathing, 3s cycle | Fully charged on the charger (never fully off) |
 | `HALO_LED_STATE_PAIRING` | 1Hz | Pairing mode (same as BLINK_SLOW) |
 
 ### LED Priority System
@@ -180,6 +180,7 @@ Operation              LED Pattern
 --------------------   ----------------------------------------------
 Normal                 Off or application controlled
 Charging               █████ (Solid ON)
+Fully charged          ▁▃▆█▆▃▁▃▆█ (Breathing, 3s cycle, never fully off)
 Recovery Mode          ████____████____ (1s ON, 1s OFF)
 Pairing Mode           ██__██__ (0.5s ON, 0.5s OFF)
 Deep Sleep             ____ (OFF)

@@ -243,6 +243,7 @@ power-off blip at 2s and keep holding until you hear it at 5s.
 | State | LED Pattern | Description |
 |-------|-------------|-------------|
 | Charging | `████` (Constant ON) | Device is charging |
+| Fully charged | `▁▃▆█▆▃▁▃▆█` (Breathing, 3s) | On the charger and at 97% or more; never fully off |
 | Booting | `████` (Constant ON) | Device is starting up (2-3s) |
 | Recovery Mode | `████____████____` | 1s blink - Factory reset mode |
 | Pairing Mode | `██__██__██__` | 0.5s blink - Pairing mode |
