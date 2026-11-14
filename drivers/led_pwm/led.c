@@ -187,6 +187,14 @@ static int led_pwm_set_permille(const struct device *dev, uint32_t led, uint16_t
 
 	dt_led = &config->led[led];
 
+	/* Full brightness would be a pulse of zero, which the PWM driver treats
+	 * as "disable the output". If that is the first request after boot the
+	 * output has never been enabled and the LED stays dark (seen as no
+	 * charging LED when booting with the charger connected). Stop one step
+	 * short so full brightness always takes the normal enable path.
+	 */
+	permille = MIN(permille, 999);
+
 	/* Map to duty cycle (active-low LED). */
 	return pwm_set_pulse_dt(dt_led,
 			(uint32_t) ((uint64_t) dt_led->period * (1000 - permille) / 1000));
