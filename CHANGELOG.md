@@ -17,6 +17,12 @@ release pages and tags are not publicly reachable.
   the mic's DC bias. The DC blocker 0.8.29 added for Lua capture (fast
   start-up corner, then below 20 Hz) now also runs on the LE Audio source
   path before LC3 encoding.
+- The camera's reset line now reaches the sensor. P1_4, the camera reset
+  pin, was also listed as I2S0 SDI (unused on Halo) in the I2S0 pin group,
+  which took the pad over after GPIO1 had set it up, so the sensor only ever
+  saw its own power-on reset. Every camera wake now resets the sensor as the
+  driver intends; a sensor that did not answer after a cold boot or a
+  hardware reset until the device was rebooted comes up on the first wake.
 
 ## [0.8.29] - 2026-11-11
 
