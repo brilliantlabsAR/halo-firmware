@@ -414,10 +414,15 @@ ns: &ns {
 			read_enable = < 0x0 >;
 		}; 
     };
+	/*
+	 * No SDI: the only I2S0 device is the speaker amplifier (output), and
+	 * P1_4 is the camera's reset line (pag7982 reset-gpios, GPIO1). Listing
+	 * it here muxed the pad to I2S0 SDI after GPIO1 had claimed it, so the
+	 * camera driver's reset pulses never reached the sensor.
+	 */
 	pinctrl_i2s0:pinctrl_i2s0 {
 		group0 {
-			pinmux = < PIN_P1_4__I2S0_SDI_A >,
-				 < PIN_P1_5__I2S0_SDO_A >,
+			pinmux = < PIN_P1_5__I2S0_SDO_A >,
 				 < PIN_P1_6__I2S0_SCLK_A >,
 				 < PIN_P1_7__I2S0_WS_A >;
 		};
