@@ -359,6 +359,14 @@ static int vga020_hw_init(const struct device *dev)
 	int ret = 0;
 	const struct vga020_config *config = dev->config;
 	struct vga020_data *data = dev->data;
+	/* Only regulators that actually came up are released on rollback: a
+	 * regulator_disable() for one whose enable failed would drive the
+	 * regulator core's reference count below zero, after which every later
+	 * regulator_enable() returns 0 without touching the hardware and the
+	 * panel can never be brought up again until reboot. */
+	bool vdd_on = false;
+	bool vpos_on = false;
+	bool veng_on = false;
 
 	if (data->is_initialized) {
 		return 0; /* Already initialized */
@@ -372,11 +380,21 @@ static int vga020_hw_init(const struct device *dev)
 
 	if (config->vdd_reg) {
 		ret = regulator_enable(config->vdd_reg);
+		if (ret < 0) {
+			LOG_ERR("VDD regulator enable failed: %d", ret);
+			goto err_rollback;
+		}
+		vdd_on = true;
 		k_msleep(10);
 	}
 
 	if (config->vpos_reg) {
 		ret = regulator_enable(config->vpos_reg);
+		if (ret < 0) {
+			LOG_ERR("VPOS regulator enable failed: %d", ret);
+			goto err_rollback;
+		}
+		vpos_on = true;
 		k_msleep(10);
 	}
 
@@ -388,6 +406,11 @@ static int vga020_hw_init(const struct device *dev)
 
 	if (config->veng_reg) {
 		ret = regulator_enable(config->veng_reg);
+		if (ret < 0) {
+			LOG_ERR("VENG regulator enable failed: %d", ret);
+			goto err_rollback;
+		}
+		veng_on = true;
 	}
 
 	k_msleep(100);
@@ -437,14 +460,14 @@ err_rollback:
 		data->attached = false;
 	}
 #endif
-	if (config->vdd_reg) {
-		regulator_disable(config->vdd_reg);
+	if (veng_on) {
+		regulator_disable(config->veng_reg);
 	}
-	if (config->vpos_reg) {
+	if (vpos_on) {
 		regulator_disable(config->vpos_reg);
 	}
-	if (config->veng_reg) {
-		regulator_disable(config->veng_reg);
+	if (vdd_on) {
+		regulator_disable(config->vdd_reg);
 	}
 	if (config->reset_gpio.port != NULL) {
 		gpio_pin_set_dt(&config->reset_gpio, 1);
