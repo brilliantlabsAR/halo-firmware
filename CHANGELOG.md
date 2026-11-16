@@ -11,18 +11,35 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.30] - 2026-11-17
+
+### Changed
+
+- The charging LED is solid while charging and breathes once the battery is
+  full (97% or more); it was the other way round, and the dim end of the
+  breath made a charging device look off. The breathing ramp follows
+  perceived lightness (a raised cosine from CIE L* 50 to 100) rather than a
+  linear PWM duty from 5% to 90%, so the dim end stays visibly lit and the
+  peak reaches full brightness (#118).
+
 ### Fixed
 
 - LE Audio microphone streams no longer start with a pop, and no longer carry
   the mic's DC bias. The DC blocker 0.8.29 added for Lua capture (fast
   start-up corner, then below 20 Hz) now also runs on the LE Audio source
-  path before LC3 encoding.
+  path before LC3 encoding (#117).
+- The charging LED lights when the device boots with the charger already
+  connected, including a wake from ship mode on the charger. Full brightness
+  mapped to a PWM pulse of zero, which the PWM driver treats as "output
+  off", so the first LED request after boot left the pin undriven; the duty
+  is now capped one step short of 100%, which is not visible (#119).
 - The camera's reset line now reaches the sensor. P1_4, the camera reset
   pin, was also listed as I2S0 SDI (unused on Halo) in the I2S0 pin group,
   which took the pad over after GPIO1 had set it up, so the sensor only ever
   saw its own power-on reset. Every camera wake now resets the sensor as the
   driver intends; a sensor that did not answer after a cold boot or a
-  hardware reset until the device was rebooted comes up on the first wake.
+  hardware reset until the device was rebooted comes up on the first wake
+  (#120).
 
 ## [0.8.29] - 2026-11-11
 
