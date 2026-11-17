@@ -11,6 +11,17 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- A display wake that fails while a bias rail is coming up no longer leaves
+  the panel unusable for the rest of the session. The panel driver did not
+  check whether the VDD, VPOS and VENG regulators had actually switched on
+  and released all three on failure, which drove the regulator core's
+  reference count below zero for the ones that had not; every later enable
+  then returned success without touching the hardware. The driver now stops
+  at the first regulator that fails and releases only the ones that came up,
+  so the next wake retries the full power-up sequence (#122).
+
 ## [0.8.30] - 2026-11-17
 
 ### Changed
