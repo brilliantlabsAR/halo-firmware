@@ -583,7 +583,15 @@ static int pag7982_init(const struct device *dev)
 			return ret;
 		}
 
-		gpio_pin_set_dt(&config->reset, 1U);
+		/* Pulse the reset rather than only asserting it. The sensor's
+		 * supply stays on while the core is powered off, and after the
+		 * wake it can hold the shared I2C bus until its reset is
+		 * released; a reset that is merely held does not free the bus.
+		 * Releasing it here, before any other user of the bus runs, puts
+		 * the sensor in a known idle state. The resume sequence applies
+		 * its own full reset before the first command. */
+		k_busy_wait(2 * USEC_PER_MSEC);
+		gpio_pin_set_dt(&config->reset, 0U);
 	}
 	
 	/* Always mark device as suspended - hardware will be initialized on resume */
