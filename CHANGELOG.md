@@ -13,6 +13,13 @@ release pages and tags are not publicly reachable.
 
 ### Fixed
 
+- The display and the camera come up after a wake from deep sleep. The
+  camera sensor stays powered while the core is off and could hold the
+  shared I2C bus after the wake until its reset line was released, which
+  did not happen until the app first used the camera; the display, whose
+  power-up runs first, then failed to initialise. The camera driver now
+  pulses the sensor's reset at init, before any other user of the bus, so
+  the bus is free from the first transfer (#123).
 - A display wake that fails while a bias rail is coming up no longer leaves
   the panel unusable for the rest of the session. The panel driver did not
   check whether the VDD, VPOS and VENG regulators had actually switched on
