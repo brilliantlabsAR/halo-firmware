@@ -11,6 +11,8 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.31] - 2026-11-17
+
 ### Fixed
 
 - The display and the camera come up after a wake from deep sleep. The
