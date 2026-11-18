@@ -1168,20 +1168,42 @@ static void cue_gate_set_dirty(bool dirty)
 
 /* Fresh under-load battery reading, logged at cue time. Returns false when
  * the cue must be skipped. */
+/* The battery reading can come back as 0 mV for the first few hundred
+ * milliseconds after a wake from the powered-off core state, before the
+ * gauge's ADC has settled; that is "no reading yet", not an empty battery.
+ * Retry briefly, and let the cue play when no reading arrives. */
+#define CUE_GATE_BATTERY_READ_TRIES    5
+#define CUE_GATE_BATTERY_READ_RETRY_MS 100
+#define CUE_GATE_BATTERY_MIN_VALID_MV  1000
+
 static bool cue_gate_battery_ok(const char *cue)
 {
 #if defined(CONFIG_HALO_BATTERY_MANAGER)
-	(void)halo_battery_update_now();
+	int mv = 0;
+	int tries;
 
-	int mv = halo_battery_get_voltage();
+	for (tries = 0; tries < CUE_GATE_BATTERY_READ_TRIES; tries++) {
+		(void)halo_battery_update_now();
+		mv = halo_battery_get_voltage();
+		if (mv >= CUE_GATE_BATTERY_MIN_VALID_MV) {
+			break;
+		}
+		k_sleep(K_MSEC(CUE_GATE_BATTERY_READ_RETRY_MS));
+	}
+
 	int level = halo_battery_get_level();
 	bool charging = halo_battery_is_charging();
 
-	LOG_INF("%s cue battery: %d mV, %d%%, %scharging", cue, mv, level,
-		charging ? "" : "not ");
+	LOG_INF("%s cue battery: %d mV, %d%%, %scharging%s", cue, mv, level,
+		charging ? "" : "not ", tries ? " (after retries)" : "");
+
+	if (mv < CUE_GATE_BATTERY_MIN_VALID_MV) {
+		LOG_WRN("%s cue: no battery reading yet (%d mV), not gating", cue, mv);
+		return true;
+	}
 
 #if defined(CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV)
-	if (CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV > 0 && mv >= 0 &&
+	if (CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV > 0 &&
 	    mv < CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV) {
 		LOG_WRN("%s cue skipped: %d mV under the %d mV floor", cue, mv,
 			CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV);
