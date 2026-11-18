@@ -1152,6 +1152,8 @@ static bool cue_gate_boot_was_dirty(void)
 	(void)halo_settings_get(CUE_GATE_DIRTY_KEY, &dirty, sizeof(dirty));
 	return dirty != 0;
 }
+
+static bool cue_gate_sleep_was_dirty(void);
 #endif
 
 static void cue_gate_set_dirty(bool dirty)
@@ -1163,6 +1165,36 @@ static void cue_gate_set_dirty(bool dirty)
 		LOG_WRN("Cue dirty flag write failed: %d", ret);
 	}
 }
+
+/* The shutdown cue plays on the way into the powered-off core state. Its
+ * dirty flag lives in retained RAM, not in the file system: a flash write
+ * on that path is the one thing there that can stall the core with
+ * interrupts off, and the memory survives the powered-off state. A real
+ * power loss scrambles it, and a boot after a power loss gates its cues
+ * on the battery reading instead. */
+#define CUE_GATE_SLEEP_DIRTY_MAGIC 0x43554544 /* "CUED" */
+
+static struct {
+	uint32_t magic;
+	uint32_t dirty;
+} cue_gate_sleep_dirty __noinit;
+
+static void cue_gate_set_sleep_dirty(bool dirty)
+{
+	cue_gate_sleep_dirty.magic = CUE_GATE_SLEEP_DIRTY_MAGIC;
+	cue_gate_sleep_dirty.dirty = dirty ? 1U : 0U;
+}
+
+#if defined(CONFIG_HALO_STARTUP_SOUND)
+static bool cue_gate_sleep_was_dirty(void)
+{
+	bool dirty = (cue_gate_sleep_dirty.magic == CUE_GATE_SLEEP_DIRTY_MAGIC) &&
+		     (cue_gate_sleep_dirty.dirty == 1U);
+
+	cue_gate_sleep_dirty.magic = 0;
+	return dirty;
+}
+#endif
 
 #endif /* CONFIG_HALO_CUE_GATE_DIRTY_BOOT */
 
@@ -1257,7 +1289,7 @@ static void startup_sound_thread_fn(void *arg1, void *arg2, void *arg3)
 	int waited = 0;
 
 #if defined(CONFIG_HALO_CUE_GATE_DIRTY_BOOT)
-	if (cue_gate_boot_was_dirty()) {
+	if (cue_gate_boot_was_dirty() || cue_gate_sleep_was_dirty()) {
 		LOG_WRN("Boot cue skipped: previous boot did not settle");
 		k_sem_give(&startup_sound_done);
 		return;
@@ -1383,10 +1415,10 @@ int halo_shutdown_sound_play(void)
 #if defined(CONFIG_HALO_CUE_GATE_DIRTY_BOOT)
 	/* A power-off that interrupts the shutdown cue must suppress the next
 	 * boot's cue too: dirty across the playback, clean once drained. */
-	cue_gate_set_dirty(true);
+	cue_gate_set_sleep_dirty(true);
 	int ret = shutdown_sound_try_play(&opts);
 
-	cue_gate_set_dirty(false);
+	cue_gate_set_sleep_dirty(false);
 	return ret;
 #else
 	return shutdown_sound_try_play(&opts);
