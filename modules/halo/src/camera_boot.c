@@ -20,6 +20,8 @@
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 
+#include <soc.h>
+
 #include <halo/camera_boot.h>
 
 LOG_MODULE_REGISTER(camera_boot, CONFIG_HALO_LOG_LEVEL);
@@ -67,6 +69,23 @@ SYS_INIT(camera_reset_hold_init, POST_KERNEL, CAMERA_RESET_HOLD_INIT_PRIORITY);
 #define CAMERA_RESET_RELEASE_INIT_PRIORITY 60
 #define CAMERA_BUS_IDLE_TIMEOUT_US         (50 * USEC_PER_MSEC)
 
+/* The sensor's system clock (its CLKIN pin) comes from the SoC's camera
+ * pixel clock output, which nothing switched on before: the sensor ran on
+ * an internal fallback, and on some dies that fallback is slow enough
+ * after a cold start that frames come out short and the controller never
+ * completes one. Divider 0x14 of the camera pixel clock, enable bit set;
+ * switched on before the reset release and left running while the sensor
+ * is powered. The controller's pin control must have muxed the clock pad
+ * by now (CONFIG_VIDEO_ALIF_CAM_INIT_PRIORITY, one priority earlier). */
+#define CAMERA_XVCLK_DIVIDER 0x14U
+#define CAMERA_XVCLK_ENABLE  BIT(0)
+#define CAMERA_XVCLK_VALUE   ((CAMERA_XVCLK_DIVIDER << 16) | CAMERA_XVCLK_ENABLE)
+
+#ifdef CONFIG_VIDEO_ALIF_CAM_INIT_PRIORITY
+BUILD_ASSERT(CONFIG_VIDEO_ALIF_CAM_INIT_PRIORITY < CAMERA_RESET_RELEASE_INIT_PRIORITY,
+	     "the camera controller must mux the clock pad before the reset release");
+#endif
+
 BUILD_ASSERT(CONFIG_VIDEO_INIT_PRIORITY < CAMERA_RESET_RELEASE_INIT_PRIORITY,
 	     "the reset release must run after the camera driver's init");
 #ifdef CONFIG_REGULATOR_TPS65132_COMMON_INIT_PRIORITY
@@ -97,6 +116,10 @@ static int camera_reset_release(void)
 	if (!device_is_ready(cam_rst.port) || !device_is_ready(i2c1_lines_port)) {
 		return 0;
 	}
+#ifdef HE_CAMERA_PIXCLK
+	sys_write32(CAMERA_XVCLK_VALUE, HE_CAMERA_PIXCLK);
+	k_busy_wait(200); /* a few hundred clock cycles before the release */
+#endif
 	held = !i2c1_lines_idle();
 	if (held) {
 		int64_t remaining = CONFIG_HALO_CAMERA_RESET_HOLD_MS - k_uptime_get();
