@@ -1289,7 +1289,11 @@ static void startup_sound_thread_fn(void *arg1, void *arg2, void *arg3)
 	int waited = 0;
 
 #if defined(CONFIG_HALO_CUE_GATE_DIRTY_BOOT)
-	if (cue_gate_boot_was_dirty() || cue_gate_sleep_was_dirty()) {
+	/* Read both flags: the sleep flag clears itself when read. */
+	bool flash_dirty = cue_gate_boot_was_dirty();
+	bool sleep_dirty = cue_gate_sleep_was_dirty();
+
+	if (flash_dirty || sleep_dirty) {
 		LOG_WRN("Boot cue skipped: previous boot did not settle");
 		k_sem_give(&startup_sound_done);
 		return;
