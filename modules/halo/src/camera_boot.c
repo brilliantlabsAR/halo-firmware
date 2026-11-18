@@ -52,4 +52,81 @@ static int camera_reset_hold_init(void)
 
 SYS_INIT(camera_reset_hold_init, POST_KERNEL, CAMERA_RESET_HOLD_INIT_PRIORITY);
 
+/*
+ * Reset release. The camera driver's init leaves the reset asserted. A
+ * sensor powered up from cold holds the shared I2C bus while in reset
+ * and, if released too early, keeps holding it for seconds afterwards; a
+ * release made after it has had CONFIG_HALO_CAMERA_RESET_HOLD_MS of power
+ * frees the bus within milliseconds. A sensor that is not holding the bus
+ * (the usual case) is released at once. Either way this runs between the
+ * camera driver (CONFIG_VIDEO_INIT_PRIORITY) and the first other user of
+ * the bus, the display regulator.
+ */
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio2), okay)
+
+#define CAMERA_RESET_RELEASE_INIT_PRIORITY 60
+#define CAMERA_BUS_IDLE_TIMEOUT_US         (50 * USEC_PER_MSEC)
+
+BUILD_ASSERT(CONFIG_VIDEO_INIT_PRIORITY < CAMERA_RESET_RELEASE_INIT_PRIORITY,
+	     "the reset release must run after the camera driver's init");
+#ifdef CONFIG_REGULATOR_TPS65132_COMMON_INIT_PRIORITY
+BUILD_ASSERT(CAMERA_RESET_RELEASE_INIT_PRIORITY < CONFIG_REGULATOR_TPS65132_COMMON_INIT_PRIORITY,
+	     "the reset release must run before the display regulator's init");
+#endif
+
+/* I2C1 SDA and SCL are P2_6 and P2_7 (board pin control); with the pad
+ * read enable set, the GPIO port reads the line level whatever the mux. */
+#define I2C1_LINES_MASK (BIT(6) | BIT(7))
+
+static const struct device *const i2c1_lines_port = DEVICE_DT_GET(DT_NODELABEL(gpio2));
+
+static bool i2c1_lines_idle(void)
+{
+	gpio_port_value_t lines;
+
+	return gpio_port_get_raw(i2c1_lines_port, &lines) == 0 &&
+	       (lines & I2C1_LINES_MASK) == I2C1_LINES_MASK;
+}
+
+static int camera_reset_release(void)
+{
+	bool held;
+	uint32_t start;
+	uint32_t waited_us;
+
+	if (!device_is_ready(cam_rst.port) || !device_is_ready(i2c1_lines_port)) {
+		return 0;
+	}
+	held = !i2c1_lines_idle();
+	if (held) {
+		int64_t remaining = CONFIG_HALO_CAMERA_RESET_HOLD_MS - k_uptime_get();
+
+		if (remaining > 0) {
+			k_sleep(K_MSEC(remaining));
+		}
+	}
+	gpio_pin_set_dt(&cam_rst, 0); /* release */
+	if (!held) {
+		return 0;
+	}
+	start = k_cycle_get_32();
+	while (!i2c1_lines_idle()) {
+		waited_us = k_cyc_to_us_floor32(k_cycle_get_32() - start);
+		if (waited_us >= CAMERA_BUS_IDLE_TIMEOUT_US) {
+			LOG_WRN("I2C bus still held %u ms after the camera reset release at %lld ms",
+				waited_us / USEC_PER_MSEC, k_uptime_get());
+			return 0;
+		}
+		k_busy_wait(100);
+	}
+	waited_us = k_cyc_to_us_floor32(k_cycle_get_32() - start);
+	LOG_INF("I2C bus was held in reset; idle %u ms after the release at %lld ms",
+		waited_us / USEC_PER_MSEC, k_uptime_get());
+	return 0;
+}
+
+SYS_INIT(camera_reset_release, POST_KERNEL, CAMERA_RESET_RELEASE_INIT_PRIORITY);
+
+#endif /* gpio2 */
+
 #endif
