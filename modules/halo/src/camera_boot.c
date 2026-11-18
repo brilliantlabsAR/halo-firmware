@@ -129,4 +129,39 @@ SYS_INIT(camera_reset_release, POST_KERNEL, CAMERA_RESET_RELEASE_INIT_PRIORITY);
 
 #endif /* gpio2 */
 
+#if DT_NODE_HAS_PROP(DT_NODELABEL(cam_1v8), enable_gpios)
+static const struct gpio_dt_spec cam_en = GPIO_DT_SPEC_GET(DT_NODELABEL(cam_1v8), enable_gpios);
+
+/* The enable pin's RC on the board is about 5 ms; ten times that. */
+#define CAMERA_SLEEP_ENABLE_DRAIN_MS 50
+
+void halo_camera_sleep_power_down(void)
+{
+	int ret;
+
+	/* Reset first, so the sensor never sees its supplies fall with reset
+	 * released. */
+	(void)gpio_pin_configure_dt(&cam_rst, GPIO_OUTPUT_ACTIVE);
+	/* The regulator API cannot switch an always-on supply off; the core
+	 * is about to power down and take the pad with it anyway. */
+	ret = gpio_pin_configure_dt(&cam_en, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Camera rail disable failed: %d", ret);
+		return;
+	}
+	k_sleep(K_MSEC(CAMERA_SLEEP_ENABLE_DRAIN_MS));
+	LOG_DBG("Camera rails off for sleep");
+}
+#else
+void halo_camera_sleep_power_down(void)
+{
+}
+#endif
+
+#else
+
+void halo_camera_sleep_power_down(void)
+{
+}
+
 #endif

@@ -12,4 +12,17 @@
  * check in camera_boot.c.
  */
 
+/**
+ * @brief Power the camera down cleanly for the powered-off core state.
+ *
+ * Asserts the sensor reset and drives the camera rail enable low, then waits
+ * for the enable's RC to drain, so both camera supplies are off before the
+ * core powers down. Without this the enable pad simply goes dead and the
+ * switch's enable floats on its capacitor: the analog supply drops at once
+ * while the I/O supply stays up for seconds to minutes, and the sensor
+ * wakes from an undefined power state. Call from the deep-sleep path after
+ * the suspend chain, right before the power-off.
+ */
+void halo_camera_sleep_power_down(void);
+
 #endif /* HALO_CAMERA_BOOT_H */
