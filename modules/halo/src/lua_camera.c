@@ -632,6 +632,7 @@ static int camera_thread_stop(void)
 		k_thread_abort(camera_state.capture_thread_tid);
 		k_thread_join(&camera_state.capture_thread, K_FOREVER);
 		camera_state.capture_thread_tid = NULL;
+		camera_state.thread_stage = CAM_STAGE_IDLE;
 		return 0;
 	}
 
@@ -653,6 +654,8 @@ static int camera_thread_stop(void)
 	k_thread_abort(camera_state.capture_thread_tid);
 	k_thread_join(&camera_state.capture_thread, K_FOREVER);
 	camera_state.capture_thread_tid = NULL;
+	/* The aborted worker never reached its own IDLE store. */
+	camera_state.thread_stage = CAM_STAGE_IDLE;
 	return -ETIMEDOUT;
 }
 
@@ -668,7 +671,10 @@ static void camera_cleanup_resources(void)
 	int ret;
 	bool thread_stopped_cleanly = true;
 
-	/* Stop capture thread */
+	/* Stop capture thread; remember where it was in case it has to be
+	 * aborted (the stop resets its stage). */
+	enum camera_thread_stage stage_before = camera_state.thread_stage;
+
 	ret = camera_thread_stop();
 	if (ret < 0) {
 		LOG_WRN("Capture thread stop during cleanup failed: %d", ret);
@@ -691,10 +697,22 @@ static void camera_cleanup_resources(void)
 		 * driver still holds. */
 		camera_state.ready = false;
 		camera_state.capture_errno = ret;
-		camera_state.capture_error_stage = camera_state.thread_stage;
+		camera_state.capture_error_stage = stage_before;
 		camera_state.capture_error = true;
-		if (camera_state.video != NULL) {
-			camera_stream_reset();
+		switch (camera_state.capture_error_stage) {
+		case CAM_STAGE_WARMUP:
+		case CAM_STAGE_DEQUEUE:
+		case CAM_STAGE_PROCESS:
+		case CAM_STAGE_STOPPING:
+			/* Only a worker inside a capture has the stream running
+			 * and the buffer queued; one aborted while waking leaves
+			 * a half-resumed device better untouched. */
+			if (camera_state.video != NULL) {
+				camera_stream_reset();
+			}
+			break;
+		default:
+			break;
 		}
 	}
 
