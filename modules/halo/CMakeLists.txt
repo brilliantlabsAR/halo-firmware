@@ -93,6 +93,10 @@ if(CONFIG_HALO_BLE_MANAGER)
 
 endif()
 
+# Camera sensor reset and clock sequencing at boot and at deep-sleep entry;
+# the sensor driver relies on it, so it does not depend on the Lua runtime
+zephyr_library_sources_ifdef(CONFIG_VIDEO src/camera_boot.c)
+
 # Lua Runtime Component (depends on BLE Lua Service)
 if(CONFIG_HALO_LUA_RUNTIME)
     zephyr_library_sources(

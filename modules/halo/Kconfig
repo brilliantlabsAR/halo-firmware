@@ -19,6 +19,17 @@ module-str = Halo Framework
 source "subsys/logging/Kconfig.template.log_config"
 
 # Memory Manager Component (always enabled with HALO)
+config HALO_CAMERA_RESET_HOLD_MS
+	int "Camera reset hold at boot when the sensor holds the I2C bus (ms)"
+	default 3000
+	help
+	  A camera sensor powered up from cold can hold the I2C bus it shares
+	  with the display while in reset, and releasing it too early leaves
+	  the bus held for seconds. When the bus reads held at the camera
+	  driver's init, the reset stays asserted until this many milliseconds
+	  of uptime have passed, then is released. A bus that is free releases
+	  the sensor at once.
+
 config HALO_MEM_MANAGER
 	bool
 	help

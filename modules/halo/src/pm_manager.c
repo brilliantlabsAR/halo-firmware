@@ -28,6 +28,9 @@
 #endif
 
 #include <power_mgr.h>
+#ifdef CONFIG_VIDEO
+#include "halo/camera_boot.h"
+#endif
 
 LOG_MODULE_REGISTER(halo_pm, CONFIG_HALO_LOG_LEVEL);
 
@@ -585,6 +588,11 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 	}
 
 	LOG_INF("Deep sleep suspend sequence complete, entering sleep state");
+
+#ifdef CONFIG_VIDEO
+	/* Both camera supplies off before the core goes down (see camera_boot.h). */
+	halo_camera_sleep_power_down();
+#endif
 
 	/* From here to power-off, flush logs synchronously: the deferred log
 	 * thread gets no chance to drain before the SoC goes down, which
