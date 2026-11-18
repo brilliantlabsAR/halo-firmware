@@ -123,6 +123,7 @@ if(CONFIG_HALO_LUA_RUNTIME)
 
     # Camera support (optional, requires CONFIG_VIDEO and libmpix)
     zephyr_library_sources_ifdef(CONFIG_VIDEO src/lua_camera.c)
+    zephyr_library_sources_ifdef(CONFIG_VIDEO src/camera_boot.c)
     zephyr_library_sources_ifdef(CONFIG_MPIX ${ZEPHYR_MPIX_MODULE_DIR}/bindings/lua/lua_mpix.c)
     
     # Audio stream abstraction (requires CONFIG_AUDIO)
