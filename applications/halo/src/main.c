@@ -210,9 +210,11 @@ int main(void)
 	if (remaining_ms > 0) {
 		k_sleep(K_MSEC(remaining_ms));
 	}
+#ifdef CONFIG_HALO_BOOT_LOGO
 	if (splash_shown) {
 		halo_display_boot_logo_hide();
 	}
+#endif
 #endif
 
 #ifdef CONFIG_HALO_LUA_RUNTIME
