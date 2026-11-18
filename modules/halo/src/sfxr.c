@@ -1152,6 +1152,8 @@ static bool cue_gate_boot_was_dirty(void)
 	(void)halo_settings_get(CUE_GATE_DIRTY_KEY, &dirty, sizeof(dirty));
 	return dirty != 0;
 }
+
+static bool cue_gate_sleep_was_dirty(void);
 #endif
 
 static void cue_gate_set_dirty(bool dirty)
@@ -1164,24 +1166,76 @@ static void cue_gate_set_dirty(bool dirty)
 	}
 }
 
+/* The shutdown cue plays on the way into the powered-off core state. Its
+ * dirty flag lives in retained RAM, not in the file system: a flash write
+ * on that path is the one thing there that can stall the core with
+ * interrupts off, and the memory survives the powered-off state. A real
+ * power loss scrambles it, and a boot after a power loss gates its cues
+ * on the battery reading instead. */
+#define CUE_GATE_SLEEP_DIRTY_MAGIC 0x43554544 /* "CUED" */
+
+static struct {
+	uint32_t magic;
+	uint32_t dirty;
+} cue_gate_sleep_dirty __noinit;
+
+static void cue_gate_set_sleep_dirty(bool dirty)
+{
+	cue_gate_sleep_dirty.magic = CUE_GATE_SLEEP_DIRTY_MAGIC;
+	cue_gate_sleep_dirty.dirty = dirty ? 1U : 0U;
+}
+
+#if defined(CONFIG_HALO_STARTUP_SOUND)
+static bool cue_gate_sleep_was_dirty(void)
+{
+	bool dirty = (cue_gate_sleep_dirty.magic == CUE_GATE_SLEEP_DIRTY_MAGIC) &&
+		     (cue_gate_sleep_dirty.dirty == 1U);
+
+	cue_gate_sleep_dirty.magic = 0;
+	return dirty;
+}
+#endif
+
 #endif /* CONFIG_HALO_CUE_GATE_DIRTY_BOOT */
 
 /* Fresh under-load battery reading, logged at cue time. Returns false when
  * the cue must be skipped. */
+/* The battery reading can come back as 0 mV for the first few hundred
+ * milliseconds after a wake from the powered-off core state, before the
+ * gauge's ADC has settled; that is "no reading yet", not an empty battery.
+ * Retry briefly, and let the cue play when no reading arrives. */
+#define CUE_GATE_BATTERY_READ_TRIES    5
+#define CUE_GATE_BATTERY_READ_RETRY_MS 100
+#define CUE_GATE_BATTERY_MIN_VALID_MV  1000
+
 static bool cue_gate_battery_ok(const char *cue)
 {
 #if defined(CONFIG_HALO_BATTERY_MANAGER)
-	(void)halo_battery_update_now();
+	int mv = 0;
+	int tries;
 
-	int mv = halo_battery_get_voltage();
+	for (tries = 0; tries < CUE_GATE_BATTERY_READ_TRIES; tries++) {
+		(void)halo_battery_update_now();
+		mv = halo_battery_get_voltage();
+		if (mv >= CUE_GATE_BATTERY_MIN_VALID_MV) {
+			break;
+		}
+		k_sleep(K_MSEC(CUE_GATE_BATTERY_READ_RETRY_MS));
+	}
+
 	int level = halo_battery_get_level();
 	bool charging = halo_battery_is_charging();
 
-	LOG_INF("%s cue battery: %d mV, %d%%, %scharging", cue, mv, level,
-		charging ? "" : "not ");
+	LOG_INF("%s cue battery: %d mV, %d%%, %scharging%s", cue, mv, level,
+		charging ? "" : "not ", tries ? " (after retries)" : "");
+
+	if (mv < CUE_GATE_BATTERY_MIN_VALID_MV) {
+		LOG_WRN("%s cue: no battery reading yet (%d mV), not gating", cue, mv);
+		return true;
+	}
 
 #if defined(CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV)
-	if (CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV > 0 && mv >= 0 &&
+	if (CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV > 0 &&
 	    mv < CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV) {
 		LOG_WRN("%s cue skipped: %d mV under the %d mV floor", cue, mv,
 			CONFIG_HALO_CUE_GATE_MIN_VOLTAGE_MV);
@@ -1235,7 +1289,11 @@ static void startup_sound_thread_fn(void *arg1, void *arg2, void *arg3)
 	int waited = 0;
 
 #if defined(CONFIG_HALO_CUE_GATE_DIRTY_BOOT)
-	if (cue_gate_boot_was_dirty()) {
+	/* Read both flags: the sleep flag clears itself when read. */
+	bool flash_dirty = cue_gate_boot_was_dirty();
+	bool sleep_dirty = cue_gate_sleep_was_dirty();
+
+	if (flash_dirty || sleep_dirty) {
 		LOG_WRN("Boot cue skipped: previous boot did not settle");
 		k_sem_give(&startup_sound_done);
 		return;
@@ -1293,7 +1351,11 @@ void halo_startup_sound_schedule(void)
 
 int halo_startup_sound_wait(int timeout_ms)
 {
-	k_timeout_t t = (timeout_ms < 0) ? K_FOREVER : K_MSEC(timeout_ms);
+	/* The cue may spend the battery-read retries before it starts; the
+	 * caller's bound covers the cue itself. */
+	k_timeout_t t = (timeout_ms < 0)
+		? K_FOREVER
+		: K_MSEC(timeout_ms + CUE_GATE_BATTERY_READ_TRIES * CUE_GATE_BATTERY_READ_RETRY_MS);
 
 	return k_sem_take(&startup_sound_done, t) == 0 ? 0 : -EAGAIN;
 }
@@ -1357,10 +1419,10 @@ int halo_shutdown_sound_play(void)
 #if defined(CONFIG_HALO_CUE_GATE_DIRTY_BOOT)
 	/* A power-off that interrupts the shutdown cue must suppress the next
 	 * boot's cue too: dirty across the playback, clean once drained. */
-	cue_gate_set_dirty(true);
+	cue_gate_set_sleep_dirty(true);
 	int ret = shutdown_sound_try_play(&opts);
 
-	cue_gate_set_dirty(false);
+	cue_gate_set_sleep_dirty(false);
 	return ret;
 #else
 	return shutdown_sound_try_play(&opts);

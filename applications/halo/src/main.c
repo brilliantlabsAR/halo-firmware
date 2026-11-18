@@ -173,10 +173,20 @@ int main(void)
 	 * the app: we wait for the sound to finish (when enabled), then top up
 	 * to a minimum hold time. An unpaired device holds longer and shows its
 	 * BLE name under the logo so the user can identify it while pairing.
+	 *
+	 * The sound wait and the minimum hold do not depend on the logo: when
+	 * the display cannot show the splash, boot still sounds and still takes
+	 * the same time, so the app starts at the same moment on every boot and
+	 * cannot claim the speaker out from under the startup cue. Only the
+	 * longer unpaired hold needs the logo up, since its purpose is the name.
 	 */
 #ifdef CONFIG_HALO_STARTUP_SOUND
 	halo_startup_sound_schedule();
 #endif
+	int64_t splash_start = k_uptime_get();
+	int64_t hold_ms = 0;
+	bool splash_shown = false;
+
 #ifdef CONFIG_HALO_BOOT_LOGO
 	bool splash_unpaired = false;
 	const char *splash_label = NULL;
@@ -186,21 +196,22 @@ int main(void)
 		splash_label = halo_ble_conn_get_device_name();
 	}
 #endif
-	int64_t splash_start = k_uptime_get();
-
-	if (halo_display_boot_logo_show(splash_label) == 0) {
-#ifdef CONFIG_HALO_STARTUP_SOUND
-		/* Bounded so a missing/stuck speaker can't stall boot. */
-		halo_startup_sound_wait(CONFIG_HALO_STARTUP_SOUND_TIMEOUT_MS +
-					CONFIG_HALO_STARTUP_SOUND_DURATION_MS + 250);
+	splash_shown = (halo_display_boot_logo_show(splash_label) == 0);
+	hold_ms = (splash_shown && splash_unpaired) ? CONFIG_HALO_BOOT_LOGO_UNPAIRED_HOLD_MS
+						   : CONFIG_HALO_BOOT_LOGO_MIN_HOLD_MS;
 #endif
-		int64_t hold_ms = splash_unpaired ? CONFIG_HALO_BOOT_LOGO_UNPAIRED_HOLD_MS
-						  : CONFIG_HALO_BOOT_LOGO_MIN_HOLD_MS;
-		int64_t remaining_ms = hold_ms - (k_uptime_get() - splash_start);
+#ifdef CONFIG_HALO_STARTUP_SOUND
+	/* Bounded so a missing/stuck speaker can't stall boot. */
+	halo_startup_sound_wait(CONFIG_HALO_STARTUP_SOUND_TIMEOUT_MS +
+				CONFIG_HALO_STARTUP_SOUND_DURATION_MS + 250);
+#endif
+	int64_t remaining_ms = hold_ms - (k_uptime_get() - splash_start);
 
-		if (remaining_ms > 0) {
-			k_sleep(K_MSEC(remaining_ms));
-		}
+	if (remaining_ms > 0) {
+		k_sleep(K_MSEC(remaining_ms));
+	}
+#ifdef CONFIG_HALO_BOOT_LOGO
+	if (splash_shown) {
 		halo_display_boot_logo_hide();
 	}
 #endif
