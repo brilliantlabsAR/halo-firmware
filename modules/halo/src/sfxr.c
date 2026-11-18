@@ -1315,7 +1315,11 @@ void halo_startup_sound_schedule(void)
 
 int halo_startup_sound_wait(int timeout_ms)
 {
-	k_timeout_t t = (timeout_ms < 0) ? K_FOREVER : K_MSEC(timeout_ms);
+	/* The cue may spend the battery-read retries before it starts; the
+	 * caller's bound covers the cue itself. */
+	k_timeout_t t = (timeout_ms < 0)
+		? K_FOREVER
+		: K_MSEC(timeout_ms + CUE_GATE_BATTERY_READ_TRIES * CUE_GATE_BATTERY_READ_RETRY_MS);
 
 	return k_sem_take(&startup_sound_done, t) == 0 ? 0 : -EAGAIN;
 }
