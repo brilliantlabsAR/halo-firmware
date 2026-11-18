@@ -632,6 +632,7 @@ static int camera_thread_stop(void)
 		k_thread_abort(camera_state.capture_thread_tid);
 		k_thread_join(&camera_state.capture_thread, K_FOREVER);
 		camera_state.capture_thread_tid = NULL;
+		camera_state.thread_stage = CAM_STAGE_IDLE;
 		return 0;
 	}
 
@@ -653,6 +654,8 @@ static int camera_thread_stop(void)
 	k_thread_abort(camera_state.capture_thread_tid);
 	k_thread_join(&camera_state.capture_thread, K_FOREVER);
 	camera_state.capture_thread_tid = NULL;
+	/* The aborted worker never reached its own IDLE store. */
+	camera_state.thread_stage = CAM_STAGE_IDLE;
 	return -ETIMEDOUT;
 }
 
@@ -668,7 +671,10 @@ static void camera_cleanup_resources(void)
 	int ret;
 	bool thread_stopped_cleanly = true;
 
-	/* Stop capture thread */
+	/* Stop capture thread; remember where it was in case it has to be
+	 * aborted (the stop resets its stage). */
+	enum camera_thread_stage stage_before = camera_state.thread_stage;
+
 	ret = camera_thread_stop();
 	if (ret < 0) {
 		LOG_WRN("Capture thread stop during cleanup failed: %d", ret);
@@ -683,12 +689,31 @@ static void camera_cleanup_resources(void)
 	}
 
 	if (!thread_stopped_cleanly) {
-		/* Keep buffers if the worker did not stop cleanly. */
+		/* The worker was aborted somewhere inside a capture, so the
+		 * driver may still own the buffer: queued for the controller,
+		 * or being written by it. Stop the stream and cancel the queue
+		 * first, so that nothing below frees memory the hardware is
+		 * still using and the next capture does not queue a buffer the
+		 * driver still holds. */
 		camera_state.ready = false;
 		camera_state.capture_errno = ret;
-		camera_state.capture_error_stage = camera_state.thread_stage;
+		camera_state.capture_error_stage = stage_before;
 		camera_state.capture_error = true;
-		return;
+		switch (camera_state.capture_error_stage) {
+		case CAM_STAGE_WARMUP:
+		case CAM_STAGE_DEQUEUE:
+		case CAM_STAGE_PROCESS:
+		case CAM_STAGE_STOPPING:
+			/* Only a worker inside a capture has the stream running
+			 * and the buffer queued; one aborted while waking leaves
+			 * a half-resumed device better untouched. */
+			if (camera_state.video != NULL) {
+				camera_stream_reset();
+			}
+			break;
+		default:
+			break;
+		}
 	}
 
 	/* Drain driver FIFOs before releasing buffers. */
@@ -833,6 +858,19 @@ static int lua_camera_capture(lua_State *L)
 
 	/* Set video format if resolution changed */
 	if (camera_state.fmt_raw.width != resolution) {
+		/* A format change replaces the raw buffer. While the worker is
+		 * inside a capture that buffer is queued with the driver, and
+		 * freeing it under the hardware corrupts the heap; refuse
+		 * rather than race. */
+		switch (camera_state.thread_stage) {
+		case CAM_STAGE_WARMUP:
+		case CAM_STAGE_DEQUEUE:
+		case CAM_STAGE_PROCESS:
+		case CAM_STAGE_STOPPING:
+			return luaL_error(L, "capture in progress, cannot change resolution");
+		default:
+			break;
+		}
 
 		/* Get capabilities */
 		ret = video_get_caps(camera_state.video, VIDEO_EP_OUT, &camera_state.caps);
