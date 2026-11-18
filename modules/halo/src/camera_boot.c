@@ -102,9 +102,15 @@ static const struct device *const i2c1_lines_port = DEVICE_DT_GET(DT_NODELABEL(g
 static bool i2c1_lines_idle(void)
 {
 	gpio_port_value_t lines;
+	int ret = gpio_port_get_raw(i2c1_lines_port, &lines);
 
-	return gpio_port_get_raw(i2c1_lines_port, &lines) == 0 &&
-	       (lines & I2C1_LINES_MASK) == I2C1_LINES_MASK;
+	if (ret != 0) {
+		/* A port that cannot be read says nothing about the bus; do
+		 * not turn a read error into a boot-long hold. */
+		LOG_WRN("I2C bus lines unreadable (%d), assuming free", ret);
+		return true;
+	}
+	return (lines & I2C1_LINES_MASK) == I2C1_LINES_MASK;
 }
 
 static int camera_reset_release(void)
