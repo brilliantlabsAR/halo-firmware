@@ -226,6 +226,12 @@ struct ble_audio_ctx {
 	uint8_t pacs_record_count; /**< Number of registered PACS records */
 } audio_ctx __attribute__((noinit));
 
+/* Lives in .bss (zeroed every boot), unlike audio_ctx above. Distinguishes
+ * "initialized earlier THIS boot" from stale noinit magic left by a reset
+ * that keeps RAM; a stale magic would otherwise skip the work queue start
+ * and keep PACS capability pointers into a heap that no longer exists. */
+static bool audio_ctx_valid_this_boot;
+
 /* ======================================================================================== */
 /* Utility Functions                                                                         */
 /* ======================================================================================== */
@@ -3063,8 +3069,21 @@ int halo_ble_audio_init(bool reset)
 {
 
 	if (audio_ctx.initialized == BLE_AUDIO_INIT_MAGIC) {
-		LOG_WRN("BLE Audio Service already initialized");
-		return 0;
+		if (audio_ctx_valid_this_boot) {
+			LOG_WRN("BLE Audio Service already initialized");
+			return 0;
+		}
+		/* Stale noinit state from a previous boot. The stack itself may
+		 * have kept its configuration (reset says), so only the state
+		 * that belongs to this core is rebuilt: the capability pointers
+		 * belong to a heap that no longer exists and are dropped, not
+		 * freed; the work queue below is started afresh. */
+		LOG_WRN("Discarding stale BLE Audio service state from a previous boot");
+		audio_ctx.initialized = 0;
+		for (size_t i = 0; i < ARRAY_SIZE(audio_ctx.pacs_records); i++) {
+			audio_ctx.pacs_records[i].p_capa = NULL;
+		}
+		audio_ctx.pacs_record_count = 0;
 	}
 
 	if (reset) {
@@ -3099,6 +3118,7 @@ int halo_ble_audio_init(bool reset)
 		}
 		audio_ctx.pacs_record_count = 0;
 		audio_ctx.initialized = BLE_AUDIO_INIT_MAGIC;
+		audio_ctx_valid_this_boot = true;
 		return 0;
 	}
 
@@ -3110,6 +3130,7 @@ int halo_ble_audio_init(bool reset)
 	}
 
 	audio_ctx.initialized = BLE_AUDIO_INIT_MAGIC;
+	audio_ctx_valid_this_boot = true;
 
 	return 0;
 }
@@ -3223,6 +3244,7 @@ int halo_ble_audio_deinit(void)
 	audio_ctx.pacs_record_count = 0;
 
 	audio_ctx.initialized = 0;
+	audio_ctx_valid_this_boot = false;
 
 	LOG_DBG("BLE Audio Service deinitialized");
 
