@@ -11,6 +11,35 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.32] - 2026-11-19
+
+### Fixed
+
+- The camera's captures and the display's first power-up are reliable after
+  a wake from the powered-off core state. The camera sensor's reset is now
+  held low from before its supplies come up and released only once the
+  sensor has let go of the shared I2C bus, both camera supplies are switched
+  off at entry to the powered-off core state so every wake starts the
+  sensor from a defined power state, and the sensor's system clock is
+  supplied from the SoC's camera pixel clock output; it was never enabled
+  before, so the sensor ran on an internal fallback and could stream frames
+  the capture controller never completed (#125).
+- A capture that is aborted or interrupted no longer frees or re-queues a
+  raw video buffer the video driver still owns, and a resolution change is
+  refused while a capture is in flight instead of replacing the queued
+  buffer under the hardware (#126).
+- The startup sound and the splash hold no longer depend on the splash
+  drawing; the startup sound is no longer skipped on a wake while the
+  battery gauge has not produced its first reading; and entering deep sleep
+  no longer writes to flash for the shutdown sound's settle flag, which is
+  kept in retained RAM instead (#127).
+- The Lua and LE Audio BLE services no longer trust service state kept in
+  RAM across a reset. After a watchdog or fault reset the Lua service kept
+  its receive buffers pointing into the previous boot's heap, so REPL
+  traffic overwrote memory the new Lua VM owned and the device stayed in a
+  crash loop until a cold reset; stale state is now discarded and rebuilt
+  on the next boot (#128).
+
 ## [0.8.31] - 2026-11-17
 
 ### Fixed
