@@ -5,6 +5,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/drivers/sensor.h>
@@ -82,11 +83,18 @@ int main(void)
 #ifdef CONFIG_HALO_WATCHDOG_MANAGER
 	if (halo_watchdog_has_fired()) {
 		// Reboot on watchdog timeout, make sure everything is fresh
+#ifdef CONFIG_HALO_PM_MANAGER
+		halo_pm_report_interrupted_entry(true);
+		log_panic();
+#endif
 #ifdef CONFIG_HALO_BLE_MANAGER
 		halo_ble_conn_prepare_reboot();
 #endif
 		sys_reboot(SYS_REBOOT_COLD);
 	}
+#endif
+#ifdef CONFIG_HALO_PM_MANAGER
+	halo_pm_report_interrupted_entry(false);
 #endif
 #ifdef CONFIG_HALO_LOG_LEVEL_DBG
 	printk("\n%s", halo_banner);

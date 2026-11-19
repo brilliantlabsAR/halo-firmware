@@ -29,6 +29,12 @@ static struct {
 #ifdef CONFIG_HALO_WATCHDOG_AUTO_FEED
 	struct k_thread feed_thread;
 	K_THREAD_STACK_MEMBER(feed_stack, CONFIG_HALO_WATCHDOG_AUTO_FEED_STACK_SIZE);
+	/* Feed deadline (see halo_watchdog_feed_until): armed flag is the
+	 * publication point, the deadline and reason are written before it. */
+	atomic_t feed_deadline_armed;
+	uint32_t feed_deadline_ms;
+	const char *feed_deadline_reason;
+	bool feed_stopped;
 #endif
 #ifdef CONFIG_HALO_PM_MANAGER
 	struct halo_pm_callback pm_cb;
@@ -65,9 +71,53 @@ static void watchdog_feed_thread(void *arg1, void *arg2, void *arg3)
 	ARG_UNUSED(arg3);
 
 	while (1) {
-		halo_watchdog_feed();
+		if (atomic_get(&wdt_ctx.feed_deadline_armed) &&
+		    (int32_t)(k_uptime_get_32() - wdt_ctx.feed_deadline_ms) >= 0) {
+			/* The line is processed on this thread when logging is in
+			 * panic mode (deep-sleep entry flushes synchronously from
+			 * its log-flush stage on), which is why the feed stack is
+			 * sized like the log thread's. */
+			if (!wdt_ctx.feed_stopped) {
+				wdt_ctx.feed_stopped = true;
+				LOG_ERR("Watchdog feeding stopped: %s; hardware reset follows",
+					wdt_ctx.feed_deadline_reason);
+			}
+		} else {
+			wdt_ctx.feed_stopped = false;
+			halo_watchdog_feed();
+		}
 		k_msleep(CONFIG_HALO_WATCHDOG_FEED_INTERVAL_MS);
 	}
+}
+
+int halo_watchdog_feed_until(uint32_t deadline_ms, const char *reason)
+{
+	if (!wdt_ctx.initialized) {
+		return -ENOTCONN;
+	}
+
+	atomic_clear(&wdt_ctx.feed_deadline_armed);
+	wdt_ctx.feed_deadline_ms = deadline_ms;
+	wdt_ctx.feed_deadline_reason = reason ? reason : "feed deadline passed";
+	atomic_set(&wdt_ctx.feed_deadline_armed, 1);
+
+	return 0;
+}
+
+void halo_watchdog_feed_unbounded(void)
+{
+	atomic_clear(&wdt_ctx.feed_deadline_armed);
+}
+#else /* CONFIG_HALO_WATCHDOG_AUTO_FEED */
+int halo_watchdog_feed_until(uint32_t deadline_ms, const char *reason)
+{
+	ARG_UNUSED(deadline_ms);
+	ARG_UNUSED(reason);
+	return -ENOTSUP;
+}
+
+void halo_watchdog_feed_unbounded(void)
+{
 }
 #endif /* CONFIG_HALO_WATCHDOG_AUTO_FEED */
 
@@ -78,11 +128,15 @@ static int watchdog_pm_callback(halo_pm_event_t event, halo_pm_sleep_mode_t mode
 
 	switch (event) {
 	case HALO_PM_EVENT_SUSPEND:
-		if (mode == HALO_PM_SLEEP_DEEP || mode == HALO_PM_SLEEP_LIGHT) {
+		/* Deep sleep is a power-off: the watchdog stays armed so a
+		 * suspend step that never finishes ends in a hardware reset
+		 * (see halo_pm_sleep_deep); the SoC going down takes the
+		 * watchdog with it. */
+		if (mode == HALO_PM_SLEEP_LIGHT) {
 			halo_watchdog_suspend();
 			return 0; /* Suspended - needs resume */
 		}
-		return 1; /* Skip for standby mode */
+		return 1; /* Skip for standby and deep sleep */
 	case HALO_PM_EVENT_RESUME:
 		/* Note: PM manager will only call this if we returned 0 from suspend */
 		halo_watchdog_resume();
