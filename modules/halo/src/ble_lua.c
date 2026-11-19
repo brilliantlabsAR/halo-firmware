@@ -104,6 +104,13 @@ struct ble_lua_ctx {
 	halo_ble_lua_ctrl_handler_t ctrl_handler;
 } lua_ctx __attribute__((noinit));
 
+/* Lives in .bss (zeroed every boot), unlike lua_ctx above. Distinguishes
+ * "initialized earlier THIS boot" from stale noinit magic left by a previous
+ * boot, which a reset that keeps RAM (watchdog, core reset) leaves in place.
+ * Without it the init below returns early and the ring buffers keep pointing
+ * into the previous boot's heap, which the fresh heap hands out again. */
+static bool lua_ctx_valid_this_boot;
+
 /* Audio RX accounting for frame.speaker.stats(). Outside lua_ctx so it
  * survives service re-init; written only from the GATT write handler. */
 static struct halo_ble_lua_audio_rx_stats audio_rx_stats;
@@ -602,7 +609,17 @@ int halo_ble_lua_init(bool reset)
 	int ret;
 
 	if (lua_ctx.initialized == BLE_LUA_INIT_MAGIC) {
-		return 0;
+		if (lua_ctx_valid_this_boot) {
+			return 0;
+		}
+		/* Stale noinit state from a previous boot: reinitialize fully.
+		 * The buffer pointers belong to a heap that no longer exists, so
+		 * they are dropped, not freed. */
+		LOG_WRN("Discarding stale BLE Lua service state from a previous boot");
+		lua_ctx.initialized = 0;
+		lua_ctx.repl_rx_buf = NULL;
+		lua_ctx.data_rx_buf = NULL;
+		lua_ctx.audio_rx_buf = NULL;
 	}
 
 	LOG_DBG("Initializing BLE Lua Service");
@@ -684,6 +701,7 @@ int halo_ble_lua_init(bool reset)
 	}
 
 	lua_ctx.initialized = BLE_LUA_INIT_MAGIC;
+	lua_ctx_valid_this_boot = true;
 
 	return 0;
 
@@ -704,6 +722,7 @@ int halo_ble_lua_deinit(void)
 
 	/* Block new readers/writers immediately */
 	lua_ctx.initialized = 0;
+	lua_ctx_valid_this_boot = false;
 
 	/* Mark transport unavailable and release potential waiters */
 	lua_ctx.conidx = GAP_INVALID_CONIDX;
