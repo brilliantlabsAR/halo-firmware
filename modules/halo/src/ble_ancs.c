@@ -106,7 +106,6 @@ enum ancs_cmd_state {
 struct ancs_ctx {
 	bool initialized;
 	uint8_t user_lid;
-	bool user_registered;
 
 	struct halo_ancs_callbacks cbs;
 
@@ -154,6 +153,20 @@ static struct ancs_ctx ctx = {
 	.conidx = GAP_INVALID_CONIDX,
 	.user_lid = GATT_INVALID_USER_LID,
 };
+
+/* The GATT client user registered with the BLE host. The host runs on its
+ * own core and keeps its user table across a reset that restarts only this
+ * core (halo_ble_ancs_init() is then called with reset == false), so the
+ * registration from the previous boot is still allocated and must be reused:
+ * registering again on every such boot fills the table, after which the
+ * client cannot be registered at all (GAP_ERR_INSUFF_RESOURCES). Kept in RAM
+ * that survives the reset, like the server-side services keep theirs. */
+static struct {
+	uint32_t magic;
+	uint8_t user_lid;
+} ancs_user __attribute__((noinit));
+
+#define ANCS_USER_MAGIC 0x414E4355 /* 'ANCU' */
 
 /* Statically initialized so halo_ble_ancs_set_callbacks() is safe to call
  * before halo_ble_ancs_init(). Zephyr mutexes are recursive, so callbacks
@@ -1221,7 +1234,12 @@ int halo_ble_ancs_init(bool reset)
 	ctx.cmd_state = ANCS_CMD_IDLE;
 	reset_handles();
 
-	if (reset || !ctx.user_registered) {
+	if (!reset && ancs_user.magic == ANCS_USER_MAGIC &&
+	    ancs_user.user_lid != GATT_INVALID_USER_LID) {
+		/* Host state kept across the reset: the user is still registered */
+		ctx.user_lid = ancs_user.user_lid;
+		LOG_DBG("Reusing GATT client user %u kept by the BLE host", ctx.user_lid);
+	} else {
 		ctx.user_lid = GATT_INVALID_USER_LID;
 		alif_ble_mutex_lock(K_FOREVER);
 		ret = gatt_user_cli_register(CFG_MAX_LE_MTU, 0, &gatt_cli_cbs, &ctx.user_lid);
@@ -1230,7 +1248,8 @@ int halo_ble_ancs_init(bool reset)
 			LOG_ERR("Failed to register GATT client user: 0x%04x", ret);
 			return -EIO;
 		}
-		ctx.user_registered = true;
+		ancs_user.user_lid = ctx.user_lid;
+		ancs_user.magic = ANCS_USER_MAGIC;
 	}
 
 	ret = halo_ble_service_register(&ancs_service);
