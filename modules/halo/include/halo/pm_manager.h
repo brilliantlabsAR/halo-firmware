@@ -214,6 +214,18 @@ int halo_pm_prevent_sleep(void);
  */
 int halo_pm_allow_sleep(void);
 
+/**
+ * @brief Report a deep-sleep entry that a reset interrupted
+ *
+ * The deep-sleep suspend chain records how far it got in RAM that survives
+ * a reset. Call once at boot: if the previous boot was reset in the middle
+ * of entering deep sleep, the stage it reached is logged. The record is
+ * cleared.
+ *
+ * @param watchdog_reset true when the boot follows a watchdog reset
+ */
+void halo_pm_report_interrupted_entry(bool watchdog_reset);
+
 
 /**
  * @brief Get the last sleep mode used

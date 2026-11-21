@@ -89,20 +89,108 @@ static void pm_sleep_work_handler(struct k_work *work)
 /* Failsafe for a wedged shutdown: if the deep-sleep suspend chain blocks
  * indefinitely (e.g. a peripheral deinit waiting on an event that never
  * comes), nothing else can recover the device — the button thread is the one
- * running the chain. Reboot into a clean state instead of hanging dark. */
+ * running the chain. The watchdog stops being fed this long after entry
+ * starts, and its hardware reset (about two watchdog periods later, see
+ * halo_watchdog_feed_until) brings the device back. A software failsafe
+ * cannot do this job: a work item shares the system workqueue with handlers
+ * that block on mutexes, and a reboot through the Secure Enclave needs a
+ * mutex and a reply that the wedged step may be holding or waiting for. The
+ * hardware reset needs nothing. */
 #define PM_SHUTDOWN_FAILSAFE_MS 15000
 
-static void pm_shutdown_failsafe_handler(struct k_work *work)
-{
-	ARG_UNUSED(work);
+/* How far the deep-sleep entry got, kept across the reset that ends a wedged
+ * entry (a watchdog reset keeps RAM) and reported at the next boot. */
+enum pm_entry_stage {
+	PM_ENTRY_NONE = 0,
+	PM_ENTRY_LOG_BACKEND_OFF,
+	PM_ENTRY_SPEAKER_INTERRUPT,
+	PM_ENTRY_AUDIO_QUIESCE,
+	PM_ENTRY_SHUTDOWN_CUE,
+	PM_ENTRY_SUSPEND_CALLBACKS,
+	PM_ENTRY_CAMERA_POWER_DOWN,
+	PM_ENTRY_LOG_FLUSH,
+	PM_ENTRY_WAKEUP_SOURCES,
+	PM_ENTRY_SOFT_OFF,
+};
 
-	LOG_ERR("Deep sleep shutdown wedged for %d ms, rebooting", PM_SHUTDOWN_FAILSAFE_MS);
-	log_panic();
-	k_sleep(K_MSEC(50));
-	sys_reboot(SYS_REBOOT_COLD);
+static const char *const pm_entry_stage_names[] = {
+	[PM_ENTRY_NONE] = "none",
+	[PM_ENTRY_LOG_BACKEND_OFF] = "log backend off",
+	[PM_ENTRY_SPEAKER_INTERRUPT] = "speaker interrupt",
+	[PM_ENTRY_AUDIO_QUIESCE] = "audio quiesce",
+	[PM_ENTRY_SHUTDOWN_CUE] = "shutdown cue",
+	[PM_ENTRY_SUSPEND_CALLBACKS] = "suspend callback",
+	[PM_ENTRY_CAMERA_POWER_DOWN] = "camera power down",
+	[PM_ENTRY_LOG_FLUSH] = "log flush",
+	[PM_ENTRY_WAKEUP_SOURCES] = "wakeup sources",
+	[PM_ENTRY_SOFT_OFF] = "SOFT_OFF entry",
+};
+
+#define PM_ENTRY_TRACE_MAGIC 0x504D4554 /* 'PMET' */
+
+static struct {
+	uint32_t magic;
+	uint32_t stage;
+	char detail[16]; /* suspend callback name */
+	uint32_t started_ms;
+	uint32_t stage_ms;
+} pm_entry_trace __attribute__((noinit));
+
+static void pm_entry_trace_begin(void)
+{
+	pm_entry_trace.started_ms = k_uptime_get_32();
+	pm_entry_trace.stage_ms = pm_entry_trace.started_ms;
+	pm_entry_trace.stage = PM_ENTRY_NONE;
+	pm_entry_trace.detail[0] = '\0';
+	pm_entry_trace.magic = PM_ENTRY_TRACE_MAGIC;
 }
 
-static K_WORK_DELAYABLE_DEFINE(pm_shutdown_failsafe, pm_shutdown_failsafe_handler);
+static void pm_entry_trace_end(void)
+{
+	pm_entry_trace.magic = 0;
+}
+
+static void pm_entry_trace_stage(enum pm_entry_stage stage, const char *detail)
+{
+	if (pm_entry_trace.magic != PM_ENTRY_TRACE_MAGIC) {
+		return;
+	}
+	pm_entry_trace.stage = stage;
+	pm_entry_trace.stage_ms = k_uptime_get_32();
+	if (detail) {
+		strncpy(pm_entry_trace.detail, detail, sizeof(pm_entry_trace.detail) - 1);
+		pm_entry_trace.detail[sizeof(pm_entry_trace.detail) - 1] = '\0';
+	} else {
+		pm_entry_trace.detail[0] = '\0';
+	}
+}
+
+void halo_pm_report_interrupted_entry(bool watchdog_reset)
+{
+	if (pm_entry_trace.magic != PM_ENTRY_TRACE_MAGIC) {
+		return;
+	}
+
+	uint32_t stage = pm_entry_trace.stage;
+
+	/* RAM survives a wake from SOFT_OFF too (the boot is not cold then),
+	 * and the entry that led to it completed: it reached the SOFT_OFF
+	 * stage, and nothing but a wake brings a powered-off SoC back. */
+	if (!watchdog_reset && !power_mgr_cold_boot() && stage == PM_ENTRY_SOFT_OFF) {
+		pm_entry_trace_end();
+		return;
+	}
+
+	const char *name = stage < ARRAY_SIZE(pm_entry_stage_names) ? pm_entry_stage_names[stage]
+								     : "?";
+
+	LOG_ERR("Previous deep sleep entry was cut short by a %s: last stage %u (%s%s%s), "
+		"entered %u ms after entry started",
+		watchdog_reset ? "watchdog reset" : "reset", stage, name,
+		pm_entry_trace.detail[0] ? " " : "", pm_entry_trace.detail,
+		pm_entry_trace.stage_ms - pm_entry_trace.started_ms);
+	pm_entry_trace_end();
+}
 
 /* Failure forensics: which threads are alive when SOFT_OFF cannot be entered */
 static void pm_dump_thread_cb(const struct k_thread *thread, void *user_data)
@@ -269,6 +357,8 @@ static int pm_notify_suspend(halo_pm_sleep_mode_t mode)
 			continue;
 		}
 
+		/* Records only while a deep-sleep entry trace is armed */
+		pm_entry_trace_stage(PM_ENTRY_SUSPEND_CALLBACKS, cb->name);
 		ret = cb->callback(HALO_PM_EVENT_SUSPEND, mode, cb->user_data);
 		if (ret < 0) {
 			LOG_ERR("Suspend callback failed: %s (ret=%d)", cb->name, ret);
@@ -541,9 +631,18 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 
 	/* If anything below wedges (a deinit waiting on an event that never
 	 * comes), nothing else can recover the device — this thread is the
-	 * button thread. The failsafe reboots into a clean state instead. */
-	k_work_schedule(&pm_shutdown_failsafe, K_MSEC(PM_SHUTDOWN_FAILSAFE_MS));
+	 * button thread. The watchdog resets into a clean state instead, and
+	 * the stage reached is reported at the next boot. */
+	pm_entry_trace_begin();
+#ifdef CONFIG_HALO_WATCHDOG_MANAGER
+	ret = halo_watchdog_feed_until(k_uptime_get_32() + PM_SHUTDOWN_FAILSAFE_MS,
+				       "deep sleep entry did not complete");
+	if (ret != 0) {
+		LOG_WRN("No watchdog deadline for the deep sleep entry (ret=%d)", ret);
+	}
+#endif
 
+	pm_entry_trace_stage(PM_ENTRY_LOG_BACKEND_OFF, NULL);
 	/* Stop filesystem logging for the shutdown: flash writes are slow, and
 	 * on a full/inconsistent littlefs the backend enters an unlink-retry
 	 * storm whose own error logging feeds it — a permanently runnable
@@ -566,10 +665,13 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 	 * as a settle window between the button release and power-off, so
 	 * switch bounce cannot latch a spurious wake event. */
 #ifdef CONFIG_HALO_LUA_SPEAKER
+	pm_entry_trace_stage(PM_ENTRY_SPEAKER_INTERRUPT, NULL);
 	halo_lua_speaker_interrupt();
 #endif
 #ifdef CONFIG_HALO_SFXR
+	pm_entry_trace_stage(PM_ENTRY_AUDIO_QUIESCE, NULL);
 	(void)halo_sfxr_quiesce(PM_DEEP_AUDIO_QUIESCE_MS);
+	pm_entry_trace_stage(PM_ENTRY_SHUTDOWN_CUE, NULL);
 	(void)halo_shutdown_sound_play();
 #endif
 
@@ -580,7 +682,10 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 		pm_notify_resume(HALO_PM_SLEEP_DEEP);
 		pm_ctx.last_mode = HALO_PM_SLEEP_NONE;
 		atomic_set(&pm_ctx.is_sleeping, 0);
-		k_work_cancel_delayable(&pm_shutdown_failsafe);
+#ifdef CONFIG_HALO_WATCHDOG_MANAGER
+		halo_watchdog_feed_unbounded();
+#endif
+		pm_entry_trace_end();
 #ifdef CONFIG_HALO_SFXR
 		halo_sfxr_quiesce_cancel();
 #endif
@@ -591,12 +696,14 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 
 #ifdef CONFIG_VIDEO
 	/* Both camera supplies off before the core goes down (see camera_boot.h). */
+	pm_entry_trace_stage(PM_ENTRY_CAMERA_POWER_DOWN, NULL);
 	halo_camera_sleep_power_down();
 #endif
 
 	/* From here to power-off, flush logs synchronously: the deferred log
 	 * thread gets no chance to drain before the SoC goes down, which
 	 * silently discards exactly the lines that explain a failed entry. */
+	pm_entry_trace_stage(PM_ENTRY_LOG_FLUSH, NULL);
 	log_panic();
 
 	/* Update statistics */
@@ -606,12 +713,20 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 	 * wake was requested). In particular the mic AAD line (LPGPIO0) must
 	 * not stay armed — any nearby sound (including our own shutdown sound)
 	 * trips acoustic detection and immediately re-wakes the SoC. */
+	pm_entry_trace_stage(PM_ENTRY_WAKEUP_SOURCES, NULL);
 	ret = power_mgr_set_wakeup_sources(true, false, timeout_ms != 0);
 	LOG_INF("Deep sleep wakeup sources set (ret=%d)", ret);
 
-	/* Suspend chain completed — from here the bounded park below is the
-	 * recovery mechanism, so the wedge failsafe is no longer needed. */
-	k_work_cancel_delayable(&pm_shutdown_failsafe);
+	/* Suspend chain completed. The bounded park below detects a refused
+	 * SOFT_OFF and dumps forensics first; the watchdog deadline moves out
+	 * past it so the reset stays the backstop for a reboot that blocks. */
+	const uint32_t park_ms = (timeout_ms > 0) ? timeout_ms : PM_DEEP_ENTRY_GRACE_MS;
+
+#ifdef CONFIG_HALO_WATCHDOG_MANAGER
+	(void)halo_watchdog_feed_until(k_uptime_get_32() + park_ms + PM_SHUTDOWN_FAILSAFE_MS,
+				       "deep sleep power-off did not complete");
+#endif
+	pm_entry_trace_stage(PM_ENTRY_SOFT_OFF, NULL);
 
 	pm_policy_state_lock_put(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
 
@@ -631,11 +746,7 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 	/* On success the SoC powers off at the next idle and reboots on wake,
 	 * so this sleep never returns. Bounded so a blocked entry is detected
 	 * instead of leaving the device dark but awake with no way back. */
-	if (timeout_ms > 0) {
-		k_sleep(K_MSEC(timeout_ms));
-	} else {
-		k_sleep(K_MSEC(PM_DEEP_ENTRY_GRACE_MS));
-	}
+	k_sleep(K_MSEC(park_ms));
 
 	/* Still executing: even forced entry did not power off, which points
 	 * at SoC/SE-level refusal (a device rejecting suspend, or the SE not
@@ -653,6 +764,7 @@ int halo_pm_sleep_deep(uint32_t timeout_ms)
 	pm_policy_state_lock_get(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
 	LOG_ERR("Rebooting");
 	k_sleep(K_MSEC(100)); /* Let the log drain */
+	pm_entry_trace_end(); /* reported above; the reboot is deliberate */
 	sys_reboot(SYS_REBOOT_COLD);
 
 	CODE_UNREACHABLE;

@@ -94,6 +94,29 @@ int halo_watchdog_resume(void);
 
 
 /**
+ * @brief Stop the automatic feeding once a deadline passes
+ *
+ * Until @p deadline_ms (k_uptime_get_32() time base) the feed thread keeps
+ * feeding as usual; after it the thread stops, logs @p reason once and lets
+ * the hardware watchdog reset the SoC. With the pre-reset callback enabled
+ * the watchdog interrupts at its first timeout and resets at the second, so
+ * the reset lands about two timeout periods after feeding stops. The reset
+ * cannot be blocked by any thread, mutex, workqueue or interrupt lock, which
+ * makes this the failsafe for a sequence that must finish or the device is
+ * lost, such as the deep-sleep suspend chain.
+ *
+ * @param deadline_ms Uptime after which feeding stops
+ * @param reason Logged when feeding stops (must stay valid until then)
+ * @return 0 on success, negative errno on failure
+ */
+int halo_watchdog_feed_until(uint32_t deadline_ms, const char *reason);
+
+/**
+ * @brief Cancel a feed deadline set by halo_watchdog_feed_until()
+ */
+void halo_watchdog_feed_unbounded(void);
+
+/**
  * @brief Check if the watchdog has fired
  *
  * @return true if the watchdog has fired since last check, false otherwise
