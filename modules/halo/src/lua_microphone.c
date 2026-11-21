@@ -17,6 +17,7 @@
 #include "lauxlib.h"
 
 #include <halo/audio_stream.h>
+#include <halo/ble_audio.h>
 #include <halo/audio_dc_block.h>
 #if defined(CONFIG_HALO_AUDIO_AEC)
 #include <halo/audio_aec.h>
@@ -1021,6 +1022,43 @@ static int lua_microphone_gain(lua_State *L)
 	}
 }
 
+#ifdef CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE
+/**
+ * @brief frame.microphone.le_audio([config])
+ *
+ * Get or set the digital pre-gain applied to the microphone when a host
+ * captures it over LE Audio (a phone call, or a recording app on the phone),
+ * which cannot pass gain through frame.microphone.start. Persisted; takes
+ * effect at the next LE Audio microphone stream start.
+ *
+ * @param config Optional table: gain (0-30 dB). An omitted field restores the
+ *   build default.
+ * @return table {gain} of the effective value
+ */
+static int lua_microphone_le_audio(lua_State *L)
+{
+	if (lua_gettop(L) > 0) {
+		luaL_checktype(L, 1, LUA_TTABLE);
+
+		lua_getfield(L, 1, "gain");
+		int gain_db = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) : -1;
+		lua_pop(L, 1);
+
+		if (halo_ble_audio_source_level_set(gain_db) != 0) {
+			return luaL_error(L, "gain must be 0-30 dB");
+		}
+	}
+
+	int gain_db;
+
+	halo_ble_audio_source_level_get(&gain_db);
+	lua_newtable(L);
+	lua_pushinteger(L, gain_db);
+	lua_setfield(L, -2, "gain");
+	return 1;
+}
+#endif
+
 /**
  * @brief frame.microphone.read(bytes)
  *
@@ -1760,6 +1798,9 @@ int lua_open_microphone_library(lua_State *L)
 					     {"read", lua_microphone_read},
 					     {"status", lua_microphone_status},
 					     {"aad_callback", lua_microphone_aad_callback},
+#if defined(CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE)
+					     {"le_audio", lua_microphone_le_audio},
+#endif
 #if defined(CONFIG_HALO_AUDIO_AEC)
 					     {"aec", lua_microphone_aec},
 					     {"aec_tune", lua_microphone_aec_tune},

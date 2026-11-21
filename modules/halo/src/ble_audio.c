@@ -475,8 +475,10 @@ static struct {
 	/* State */
 	bool initialized;
 	bool streaming;
+	int32_t gain_q8;         /**< Digital pre-gain before LC3, Q8 (256 = unity) */
 } source_datapath = {
 	.microphone = NULL,
+	.gain_q8 = 256,
 	.channel_count = 0,
 	.initialized = false,
 	.streaming = false,
@@ -864,6 +866,17 @@ static void source_encoder_thread_func(void *p1, void *p2, void *p3)
 		if (audio_ctx.mic_mute == ARC_MIC_MUTE_MUTED ||
 		    audio_ctx.mic_aics_mute != ARC_AIC_MUTE_NOT_MUTED) {
 			memset(mic_buffer, 0, mic_buffer_len);
+		} else if (source_datapath.gain_q8 != 256) {
+			/* Digital pre-gain before LC3 (see audio_datapath_source_apply_level),
+			 * saturated at full scale */
+			int16_t *s = (int16_t *)mic_buffer;
+			size_t n = mic_buffer_len / sizeof(int16_t);
+
+			for (size_t i = 0; i < n; i++) {
+				int32_t v = ((int32_t)s[i] * source_datapath.gain_q8) >> 8;
+
+				s[i] = (int16_t)CLAMP(v, INT16_MIN, INT16_MAX);
+			}
 		}
 
 		int16_t *pcm = (int16_t *)mic_buffer;
@@ -1008,6 +1021,63 @@ static void audio_datapath_sink_apply_levels(audio_speaker_t *spk)
 		audio_speaker_set_stream_gain(spk, gain_db * 10);
 	}
 	LOG_INF("LE Audio sink levels: budget=%d gain=%d dB", budget, gain_db);
+}
+#endif
+
+#ifdef CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE
+/* Persisted override of the LE Audio source (microphone) pre-gain; absent
+ * or -1 means the Kconfig default.
+ */
+#define SOURCE_GAIN_KEY	   "audio/le_mic_gain"
+#define SOURCE_GAIN_DB_MAX 30
+
+/* 256 * 10^(dB / 20) for 0..30 dB */
+static const uint16_t source_gain_q8_table[SOURCE_GAIN_DB_MAX + 1] = {
+	256,  287,  322,  362,  406,  455,  511,  573,  643,  722,  810,
+	908,  1019, 1144, 1283, 1440, 1615, 1812, 2033, 2282, 2560, 2872,
+	3223, 3616, 4057, 4552, 5108, 5731, 6430, 7215, 8095,
+};
+
+void halo_ble_audio_source_level_get(int *gain_db)
+{
+	int g = -1;
+
+	halo_settings_get(SOURCE_GAIN_KEY, &g, sizeof(g));
+
+	if (gain_db) {
+		*gain_db = (g < 0 || g > SOURCE_GAIN_DB_MAX) ? CONFIG_HALO_BLE_AUDIO_SOURCE_GAIN_DB
+							      : g;
+	}
+}
+
+int halo_ble_audio_source_level_set(int gain_db)
+{
+	if (gain_db < -1 || gain_db > SOURCE_GAIN_DB_MAX) {
+		return -EINVAL;
+	}
+
+	halo_settings_set(SOURCE_GAIN_KEY, &gain_db, sizeof(gain_db));
+	return 0;
+}
+
+/**
+ * @brief Apply the LE Audio source pre-gain to a freshly created source datapath
+ *
+ * The microphone's own gain step (the saved frame.microphone.gain(), or the
+ * host's AICS gain) is applied in the PDM hardware. This digital pre-gain is
+ * applied on top of it in the encoder thread, after the DC blocker and before
+ * LC3 encoding. The PDM front-end delivers speech at the glasses well below
+ * the level a phone expects from a headset microphone, and a call uplink
+ * treats that as silence, so the source runs with
+ * CONFIG_HALO_BLE_AUDIO_SOURCE_GAIN_DB unless overridden.
+ */
+static void audio_datapath_source_apply_level(void)
+{
+	int gain_db;
+
+	halo_ble_audio_source_level_get(&gain_db);
+	source_datapath.gain_q8 = source_gain_q8_table[gain_db];
+	LOG_INF("LE Audio source level: gain=%d dB", gain_db);
 }
 #endif
 
@@ -1483,6 +1553,10 @@ static int audio_datapath_create_source(struct audio_datapath_config const *cons
 		source_datapath.channel_buffer = NULL;
 		return -EIO;
 	}
+
+#ifdef CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE
+	audio_datapath_source_apply_level();
+#endif
 
 	/* Create encoder thread */
 	source_datapath.thread_abort = false;

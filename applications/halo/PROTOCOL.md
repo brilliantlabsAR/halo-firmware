@@ -1450,6 +1450,7 @@ Microphone recording module.
 | `microphone.start(cfg)` | `<cfg: table>` | `nil` | Initialize mic |
 | `microphone.read(bytes)` | `<bytes: number>` | `string/nil` | Read audio data |
 | `microphone.gain([val])` | `[val: number]` | `number/nil` | Get or set gain (-10 to 10) |
+| `microphone.le_audio([cfg])` | `[cfg: table]` | `table` | Get or set the pre-gain for LE Audio microphone streams (phone calls) |
 | `microphone.stop()` | None | `nil` | Stop recording |
 | `microphone.status()` | None | `string` | Get microphone state (`"stopped"`, `"streaming"`, `"le_audio"`) |
 | `microphone.aad_callback(func, [threshold], [silent_period])` | `<func: function/nil>, [threshold: number], [silent_period: number]` | `nil` | Set AAD callback |
@@ -1604,6 +1605,38 @@ the LE Audio AICS gain control), and `diag('stats').mic_gain_scale` reports it.
   -- Get gain after setting
   local new_gain = frame.microphone.gain()
   print("New gain:", new_gain)
+  ```
+
+#### `frame.microphone.le_audio([cfg])`
+
+Gets or sets the digital pre-gain applied to the microphone when a host captures it
+over LE Audio (a phone call, or a recording app on the phone), which cannot pass
+`gain` through `frame.microphone.start()`. It applies on top of the microphone's
+gain step (the saved `frame.microphone.gain()`, or the host's AICS gain) and is
+saved on the device, taking effect at the next LE Audio microphone stream start.
+
+The microphone reaches a phone about 20 dB quieter than a headset microphone is
+expected to (speech at the glasses measures around −40 dBFS RMS at gain step 1),
+and a phone's call uplink treats that as silence; the default pre-gain lifts it
+into the expected range. The signal is clipped at full scale, so very loud input
+distorts rather than getting louder.
+
+- **Parameters:**
+  - `[cfg: table]` - If provided, the new level:
+
+  | Field | Type | Default | Description |
+  |-------|------|---------|-------------|
+  | `gain` | number | 18 | Digital pre-gain before LC3 encoding (0–30 dB). |
+
+  A field left out of `cfg` returns to its default, so `le_audio({})` restores it.
+- **Returns:** `table` - The level in effect, `{gain = number}`
+- **Errors:**
+  - Throws an error if `gain` is not 0–30
+- **Example:**
+  ```lua
+  print(frame.microphone.le_audio().gain)
+
+  frame.microphone.le_audio({gain = 12})
   ```
 
 #### `frame.microphone.stop()`

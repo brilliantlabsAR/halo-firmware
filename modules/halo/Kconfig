@@ -626,6 +626,23 @@ config HALO_BLE_AUDIO_SOURCE_HQ
 
 	  Default: enabled
 
+config HALO_BLE_AUDIO_SOURCE_GAIN_DB
+	int "LE Audio source digital pre-gain (dB)"
+	depends on HALO_BLE_AUDIO_SOURCE_ENABLE
+	default 18
+	range 0 30
+	help
+	  Digital pre-gain applied to the microphone signal before LC3
+	  encoding on LE Audio source streams (phone calls, recording apps),
+	  on top of the microphone's own gain step (frame.microphone.gain()
+	  or the host's AICS gain). The PDM front-end delivers speech at the
+	  glasses around -40 dBFS RMS at the default gain step, well below
+	  the roughly -20 dBFS a phone expects from a headset microphone; a
+	  call uplink's noise suppression treats that as silence and the far
+	  end hears nothing. 18 dB brings speech into the expected range
+	  with headroom; the result is clipped at full scale.
+	  frame.microphone.le_audio{} overrides this at runtime.
+
 config HALO_BLE_AUDIO_OUTPUT_STEREO
 	bool "Stereo audio output (Sink/Speaker)"
 	default n
