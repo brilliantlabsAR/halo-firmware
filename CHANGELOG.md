@@ -11,20 +11,32 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+## [0.8.33] - 2026-11-22
+
 ### Fixed
 
+- A deep-sleep entry that never completes now ends in a hardware watchdog
+  reset instead of leaving the device dark but awake until the battery runs
+  down. The previous failsafe ran on the shared system workqueue and
+  rebooted through the Secure Enclave, so a stall that also blocked the
+  workqueue or held the Secure Enclave kept it from ever running. The
+  watchdog now stays armed through the whole entry and stops being fed
+  15 s after entry starts; the entry records the stage it reached (and the
+  suspend callback it was in) in RAM that survives the reset, and the next
+  boot logs it (#130).
+- ANCS notifications keep working after a reset that restarts only the
+  application core. The BLE host keeps its GATT user table across such a
+  reset, and the ANCS client registered a new user on every one of those
+  boots until the table was full; it now reuses the user the host kept
+  (#131).
 - On a phone call over LE Audio the far end can hear the wearer. The
   microphone reached the phone about 20 dB quieter than a headset
   microphone is expected to (speech at the glasses measures around
-  −40 dBFS RMS at the default gain step), and a Pixel 7 Pro's call
-  uplink treated that as silence: its audio processor flagged the stream
-  as silent and the other party heard nothing, although the speakers
-  worked and a recording app on the phone could still transcribe loud
-  sounds near the glasses. LE Audio microphone streams now get an 18 dB
-  digital pre-gain before LC3 encoding, on top of the saved
+  −40 dBFS RMS at the default gain step), and a phone's call uplink can
+  treat a stream that quiet as silence. LE Audio microphone streams now
+  get an 18 dB digital pre-gain before LC3 encoding, on top of the saved
   `frame.microphone.gain()` step. `frame.microphone.le_audio({gain=})`
-  changes it (0–30 dB) and saves it on the device.
-
+  changes it (0–30 dB) and saves it on the device (#132).
 - On a phone call over LE Audio the far end no longer hears their own
   voice back as a scratchy echo. The bone-conduction speakers leak the
   far end's audio into the microphone, and a phone does not cancel echo
@@ -35,7 +47,7 @@ release pages and tags are not publicly reachable.
   echo above 3.8 kHz otherwise arrives as a thin, high-pitched echo), on
   by default (`CONFIG_HALO_BLE_AUDIO_SOURCE_AEC`).
   `frame.microphone.le_audio({aec=})` turns it off or on and saves the
-  choice.
+  choice (#133).
 
 ## [0.8.32] - 2026-11-19
 
