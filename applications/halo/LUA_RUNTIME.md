@@ -310,7 +310,7 @@ frame.microphone.start({encoder = "pcm", sample_rate = 8000, channels = 2, gain 
 frame.microphone.stop()
 frame.microphone.read(size)   -- non-blocking; partial OK (see below)
 frame.microphone.gain([value])
-frame.microphone.le_audio([{gain = dB}])  -- pre-gain for LE Audio mic streams (phone calls), saved
+frame.microphone.le_audio([{gain = dB, aec = bool}])  -- pre-gain and echo cancellation for LE Audio mic streams (phone calls), saved
 frame.microphone.aad_callback(func, [threshold], [silent_period])
 
 -- Halo only (no-op on hardware without the AEC); getters with no arg, setters with a bool:
@@ -323,6 +323,8 @@ frame.microphone.aec_tune([t])    -- AEC barge-in tunables: get table, set {k=v}
 **Gain:** `start{gain=}` (-10 to 10) applies to that stream only and is not saved. Without it, the stream uses the gain saved by `gain(value)` (or by a phone over AICS), else 1. While a stream runs, `gain()` returns its gain; otherwise it returns the gain a `start{}` without `gain=` would use.
 
 **LE Audio pre-gain:** when a phone captures the microphone over LE Audio (a call), the stream gets a digital pre-gain (default 18 dB, `le_audio({gain=})`, saved) on top of the gain step, because the PDM front-end delivers speech about 20 dB below what a phone expects from a headset microphone and a call uplink treats that as silence.
+
+**LE Audio echo cancellation:** the same stream runs the echo canceller (`aec()` below) by default (`le_audio({aec=})`, saved), because the bone-conduction speakers leak the far end's voice into the microphone and a phone does not cancel echo on a Bluetooth headset's microphone; without it the other party hears themselves back. The canceller runs ahead of the pre-gain, on the mono 16 kHz streams a call uses, and the stream is band-passed to its working band (300–3400 Hz, like `voice()`) so the uncancelled echo above 3.8 kHz does not reach the far end.
 
 **8 kHz capture:** an 8 kHz stream runs the PDM at 16 kHz and is low-passed and decimated in firmware, because the PDM decimator has no anti-alias filter of its own (4–8 kHz content would fold into the voice band).
 

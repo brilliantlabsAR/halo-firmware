@@ -635,6 +635,19 @@ pre-gain before LC3 encoding (CONFIG_HALO_BLE_AUDIO_SOURCE_GAIN_DB, default
 the PDM front-end delivers speech about 20 dB below what a phone expects from
 a headset microphone and a call uplink treats that as silence.
 
+Echo cancellation: LE Audio source streams also run the acoustic echo
+canceller (CONFIG_HALO_BLE_AUDIO_SOURCE_AEC, default on where the canceller
+is built; `frame.microphone.le_audio({aec=})` overrides and saves it), ahead
+of the pre-gain. The bone-conduction speakers leak the far end's voice into
+the microphone and a phone does not cancel echo on a Bluetooth headset's
+microphone, so without it the other party hears themselves back. The
+canceller's far-end reference is tapped in the speaker driver, so LE Audio
+playback feeds it like Lua playback does. The stream is then band-passed to
+the canceller's working band (300-3400 Hz), because the echo outside it,
+mostly above 3.8 kHz, is not cancelled and would reach the far end as a
+thin, high-pitched echo. Mono 16 kHz streams only (the call configuration);
+other formats pass through untouched.
+
 Mute semantics:
     • While muted (MICS mute or AICS input mute), the LE Audio source
       stream keeps its ISO cadence but transmits LC3-encoded silence.

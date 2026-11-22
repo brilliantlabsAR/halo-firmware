@@ -60,6 +60,11 @@
 #include "halo/mem_manager.h"
 #include "halo/audio_stream.h"
 #include "halo/audio_dc_block.h"
+#if defined(CONFIG_HALO_BLE_AUDIO_SOURCE_ENABLE) && defined(CONFIG_HALO_AUDIO_AEC)
+#define SOURCE_AEC_AVAILABLE 1
+#include "halo/audio_aec.h"
+#include "halo/audio_voice_band.h"
+#endif
 
 /* Alif LE Audio datapath components (local copies) */
 #include "iso_datapath_ctoh.h"
@@ -476,6 +481,7 @@ static struct {
 	bool initialized;
 	bool streaming;
 	int32_t gain_q8;         /**< Digital pre-gain before LC3, Q8 (256 = unity) */
+	bool aec;                /**< Run the echo canceller on this stream */
 } source_datapath = {
 	.microphone = NULL,
 	.gain_q8 = 256,
@@ -815,6 +821,61 @@ static void sink_decoder_thread_func(void *p1, void *p2, void *p3)
  * the thread is not processing (`streaming` is still false). */
 static struct audio_dc_block source_dcb;
 
+#ifdef SOURCE_AEC_AVAILABLE
+/* PDM capture-loss accounting for the echo canceller, as on the Lua capture
+ * path (lua_microphone.c): the canceller anchors its reference window on the
+ * cumulative microphone sample count, so driver drops (queue full, allocation
+ * failure) must be reported or the window slides off the reference at the
+ * loss rate. The counters are ISR-written; snapshot them torn-free.
+ */
+extern uint64_t t5838_diag_dropped;
+extern uint64_t t5838_diag_lost_est;
+static uint64_t source_aec_drop_seen;
+static uint64_t source_aec_lost_seen;
+/* Voice band-pass on the canceller's output (see audio_voice_band.h): the
+ * echo outside the canceller's ~312-3800 Hz working band is otherwise sent
+ * uncancelled, heard by the far end as a thin, high-pitched echo */
+static struct audio_voice_band source_voice;
+
+static void source_aec_snapshot_losses(uint64_t *dropped, uint64_t *lost_est)
+{
+	unsigned int key = irq_lock();
+
+	*dropped = t5838_diag_dropped;
+	*lost_est = t5838_diag_lost_est;
+	irq_unlock(key);
+}
+
+/* Re-baseline at stream start so losses from before the stream are not
+ * charged to it */
+static void source_aec_reset_losses(void)
+{
+	source_aec_snapshot_losses(&source_aec_drop_seen, &source_aec_lost_seen);
+}
+
+static void source_aec_note_losses(void)
+{
+	uint64_t dropped, lost_est;
+
+	source_aec_snapshot_losses(&dropped, &lost_est);
+	if (dropped < source_aec_drop_seen || lost_est < source_aec_lost_seen) {
+		/* counters were zeroed (frame.microphone.diag('zero')) */
+		source_aec_drop_seen = dropped;
+		source_aec_lost_seen = lost_est;
+	}
+
+	/* dropped counts all-channel samples; lost_est counts frames */
+	size_t loss = (size_t)(dropped - source_aec_drop_seen) / source_datapath.channel_count +
+		      (size_t)(lost_est - source_aec_lost_seen);
+
+	if (loss > 0) {
+		audio_aec_note_mic_loss(loss);
+	}
+	source_aec_drop_seen = dropped;
+	source_aec_lost_seen = lost_est;
+}
+#endif
+
 /**
  * @brief Encoder thread function
  *
@@ -856,10 +917,32 @@ static void source_encoder_thread_func(void *p1, void *p2, void *p3)
 			continue;
 		}
 
+#ifdef SOURCE_AEC_AVAILABLE
+		/* Cancel speaker echo in place first, as on the Lua capture path
+		 * (mic -> AEC -> DC blocker -> encode). Passes through untouched
+		 * when disabled for this stream, or for formats outside the
+		 * canceller's scope (mono 16 kHz). Capture losses are reported
+		 * first so the canceller's reference window stays anchored. */
+		source_aec_note_losses();
+		audio_aec_process((int16_t *)mic_buffer, mic_buffer_len / sizeof(int16_t),
+				  source_datapath.sampling_rate_hz,
+				  source_datapath.channel_count);
+#endif
+
 		audio_dc_block_process(&source_dcb, (int16_t *)mic_buffer,
 				       mic_buffer_len / sizeof(int16_t),
 				       source_datapath.channel_count,
 				       (int)source_datapath.sampling_rate_hz);
+
+#ifdef SOURCE_AEC_AVAILABLE
+		/* Confine the stream to the canceller's working band so the
+		 * uncancelled out-of-band echo does not reach the far end */
+		if (source_datapath.aec) {
+			audio_voice_band_process(&source_voice, (int16_t *)mic_buffer,
+						 mic_buffer_len / sizeof(int16_t),
+						 source_datapath.channel_count);
+		}
+#endif
 
 		/* MICS/AICS mute: keep the ISO stream cadence but transmit silence,
 		 * as required by the Microphone Control Profile */
@@ -1077,7 +1160,44 @@ static void audio_datapath_source_apply_level(void)
 
 	halo_ble_audio_source_level_get(&gain_db);
 	source_datapath.gain_q8 = source_gain_q8_table[gain_db];
-	LOG_INF("LE Audio source level: gain=%d dB", gain_db);
+	halo_ble_audio_source_aec_get(&source_datapath.aec);
+	LOG_INF("LE Audio source level: gain=%d dB, aec=%s", gain_db,
+		source_datapath.aec ? "on (voice band)" : "off");
+}
+
+/* Persisted override of whether LE Audio source streams run the echo
+ * canceller; absent or -1 means the Kconfig default.
+ */
+#define SOURCE_AEC_KEY "audio/le_mic_aec"
+
+void halo_ble_audio_source_aec_get(bool *on)
+{
+	if (!on) {
+		return;
+	}
+#ifdef SOURCE_AEC_AVAILABLE
+	int v = -1;
+
+	halo_settings_get(SOURCE_AEC_KEY, &v, sizeof(v));
+	*on = (v < 0) ? IS_ENABLED(CONFIG_HALO_BLE_AUDIO_SOURCE_AEC) : (v != 0);
+#else
+	*on = false;
+#endif
+}
+
+int halo_ble_audio_source_aec_set(int on)
+{
+#ifdef SOURCE_AEC_AVAILABLE
+	if (on < -1 || on > 1) {
+		return -EINVAL;
+	}
+
+	halo_settings_set(SOURCE_AEC_KEY, &on, sizeof(on));
+	return 0;
+#else
+	ARG_UNUSED(on);
+	return -ENOTSUP;
+#endif
 }
 #endif
 
@@ -1700,6 +1820,13 @@ static int audio_datapath_channel_start_source(uint8_t const stream_lid)
 	/* Start microphone if not already streaming */
 	if (!source_datapath.streaming && source_datapath.microphone) {
 		audio_dc_block_reset(&source_dcb);
+#ifdef SOURCE_AEC_AVAILABLE
+		/* Fresh canceller session per stream (the state wipe runs on the
+		 * encoder thread before its first block) */
+		source_aec_reset_losses();
+		audio_voice_band_init(&source_voice, (int)source_datapath.sampling_rate_hz);
+		audio_aec_enable(source_datapath.aec);
+#endif
 		ret = audio_microphone_start(source_datapath.microphone);
 		if (ret != 0) {
 			LOG_ERR("Failed to start microphone: %d", ret);
@@ -1757,6 +1884,11 @@ static int audio_datapath_channel_stop_source(uint8_t const stream_lid)
 	if (!any_enabled && source_datapath.streaming && source_datapath.microphone) {
 		audio_microphone_stop(source_datapath.microphone);
 		source_datapath.streaming = false;
+#ifdef SOURCE_AEC_AVAILABLE
+		if (source_datapath.aec) {
+			audio_aec_enable(false);
+		}
+#endif
 	}
 
 	return 0;
@@ -1779,6 +1911,11 @@ static int audio_datapath_cleanup_source(void)
 	if (source_datapath.streaming && source_datapath.microphone) {
 		audio_microphone_stop(source_datapath.microphone);
 		source_datapath.streaming = false;
+#ifdef SOURCE_AEC_AVAILABLE
+		if (source_datapath.aec) {
+			audio_aec_enable(false);
+		}
+#endif
 	}
 
 	/* Stop encoder thread */

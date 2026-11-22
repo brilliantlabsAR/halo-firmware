@@ -25,6 +25,18 @@ release pages and tags are not publicly reachable.
   `frame.microphone.gain()` step. `frame.microphone.le_audio({gain=})`
   changes it (0–30 dB) and saves it on the device.
 
+- On a phone call over LE Audio the far end no longer hears their own
+  voice back as a scratchy echo. The bone-conduction speakers leak the
+  far end's audio into the microphone, and a phone does not cancel echo
+  on a Bluetooth headset's microphone, so the microphone stream now
+  runs the acoustic echo canceller (the one `frame.microphone.aec()`
+  controls for Lua capture) ahead of the pre-gain and band-passes the
+  result to the canceller's 300–3400 Hz working band (the uncancelled
+  echo above 3.8 kHz otherwise arrives as a thin, high-pitched echo), on
+  by default (`CONFIG_HALO_BLE_AUDIO_SOURCE_AEC`).
+  `frame.microphone.le_audio({aec=})` turns it off or on and saves the
+  choice.
+
 ## [0.8.32] - 2026-11-19
 
 ### Fixed

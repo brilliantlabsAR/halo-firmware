@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +17,7 @@
 
 #include <halo/audio_stream.h>
 #include <halo/ble_audio.h>
+#include <halo/audio_voice_band.h>
 #include <halo/audio_dc_block.h>
 #if defined(CONFIG_HALO_AUDIO_AEC)
 #include <halo/audio_aec.h>
@@ -74,7 +74,7 @@ static struct {
 	bool use_lc3;
 	bool is_streaming;
 	bool voice_band;   /* voice mode: band-pass the AEC output to the AEC's
-			    * working band (see mic_voice_bandpass) */
+			    * working band (see audio_voice_band.c) */
 	int sample_rate;
 	int channel_count;
 	int bit_depth;     /* OUTPUT format only (PCM mode: 8 or 16). The capture
@@ -190,125 +190,9 @@ static void mic_log_first_ring_put(uint32_t bytes)
 static struct audio_dc_block mic_dcb;
 
 /* Voice mode: band-pass the AEC output to the band the AEC actually processes
- * (~312-3800Hz). The AEC only cancels (adaptation) and scrambles (the suppressor
- * cap) within that band; OUTSIDE it the mic carries UNCANCELLED echo - measured
- * on the Halo unit as ~71% of the echo-leak energy above 3.8kHz plus a sub-300Hz tail
- * - which sails through at unity gain and trips the server VAD (the assistant
- * self-interruption). Confining the mic to the AEC's working band removes that
- * echo while keeping speech intelligible for STT (telephone-band-plus). This
- * turns "AEC mode" into a "voice" mode; it is opt-in (mic start `voice=true`) so
- * a developer can still take the raw, full-band AEC'd feed.
- *
- * A cascaded 4th-order Butterworth high-pass (300Hz) then low-pass (3400Hz),
- * each realised as two 2nd-order RBJ biquad sections with the 4th-order
- * Butterworth Q pair, so the roll-off is steep enough to reject echo that hugs
- * the AEC's band edges (a 2nd-order band-pass left ~230-RMS edge echo that still
- * tripped the VAD). Coefficients computed at start; per-channel DF2T state.
- */
-#ifndef AEC_VOICE_HP_HZ
-#define AEC_VOICE_HP_HZ 300.0f
-#endif
-#ifndef AEC_VOICE_LP_HZ
-#define AEC_VOICE_LP_HZ 3400.0f
-#endif
-
-/* 4th-order Butterworth = two 2nd-order sections with these section Q's */
-#define MIC_VOICE_Q0   0.54119610f
-#define MIC_VOICE_Q1   1.30656296f
-#define MIC_VOICE_NSEC 2
-
-struct mic_biquad { float b0, b1, b2, a1, a2; }; /* a0-normalized */
-static struct mic_biquad voice_hp[MIC_VOICE_NSEC], voice_lp[MIC_VOICE_NSEC];
-static float vhp_z1[MIC_VOICE_NSEC][MAX_MIC_CHANNELS];
-static float vhp_z2[MIC_VOICE_NSEC][MAX_MIC_CHANNELS];
-static float vlp_z1[MIC_VOICE_NSEC][MAX_MIC_CHANNELS];
-static float vlp_z2[MIC_VOICE_NSEC][MAX_MIC_CHANNELS];
-
-static void mic_biquad_lowpass(struct mic_biquad *bq, float fc, float fs, float q)
-{
-	float w0 = 6.2831853072f * fc / fs;   /* 2*pi*fc/fs */
-	float c = cosf(w0), s = sinf(w0);
-	float alpha = s / (2.0f * q);
-	float a0 = 1.0f + alpha;
-
-	bq->b0 = ((1.0f - c) * 0.5f) / a0;
-	bq->b1 = (1.0f - c) / a0;
-	bq->b2 = bq->b0;
-	bq->a1 = (-2.0f * c) / a0;
-	bq->a2 = (1.0f - alpha) / a0;
-}
-
-static void mic_biquad_highpass(struct mic_biquad *bq, float fc, float fs, float q)
-{
-	float w0 = 6.2831853072f * fc / fs;   /* 2*pi*fc/fs */
-	float c = cosf(w0), s = sinf(w0);
-	float alpha = s / (2.0f * q);
-	float a0 = 1.0f + alpha;
-
-	bq->b0 = ((1.0f + c) * 0.5f) / a0;
-	bq->b1 = (-(1.0f + c)) / a0;
-	bq->b2 = bq->b0;
-	bq->a1 = (-2.0f * c) / a0;
-	bq->a2 = (1.0f - alpha) / a0;
-}
-
-static inline float mic_biquad_step(const struct mic_biquad *bq, float x,
-				    float *z1, float *z2)
-{
-	float y = bq->b0 * x + *z1;   /* Direct Form II transposed */
-
-	*z1 = bq->b1 * x - bq->a1 * y + *z2;
-	*z2 = bq->b2 * x - bq->a2 * y;
-	return y;
-}
-
-static void mic_voice_init(int sample_rate)
-{
-	float fs = (float)sample_rate;
-	static const float q[MIC_VOICE_NSEC] = { MIC_VOICE_Q0, MIC_VOICE_Q1 };
-
-	for (int k = 0; k < MIC_VOICE_NSEC; k++) {
-		mic_biquad_highpass(&voice_hp[k], AEC_VOICE_HP_HZ, fs, q[k]);
-		mic_biquad_lowpass(&voice_lp[k], AEC_VOICE_LP_HZ, fs, q[k]);
-		for (int ch = 0; ch < MAX_MIC_CHANNELS; ch++) {
-			vhp_z1[k][ch] = vhp_z2[k][ch] = 0.0f;
-			vlp_z1[k][ch] = vlp_z2[k][ch] = 0.0f;
-		}
-	}
-}
-
-static void mic_voice_bandpass(int16_t *buf, size_t num_samples, int channels)
-{
-	if (channels < 1 || channels > MAX_MIC_CHANNELS) {
-		return;
-	}
-	int ch = 0;
-
-	for (size_t i = 0; i < num_samples; i++) {
-		float x = (float)buf[i];
-
-		for (int k = 0; k < MIC_VOICE_NSEC; k++) {
-			x = mic_biquad_step(&voice_hp[k], x,
-					    &vhp_z1[k][ch], &vhp_z2[k][ch]);
-		}
-		for (int k = 0; k < MIC_VOICE_NSEC; k++) {
-			x = mic_biquad_step(&voice_lp[k], x,
-					    &vlp_z1[k][ch], &vlp_z2[k][ch]);
-		}
-
-		int32_t y = (int32_t)(x >= 0.0f ? x + 0.5f : x - 0.5f);
-
-		if (y > INT16_MAX) {
-			y = INT16_MAX;
-		} else if (y < INT16_MIN) {
-			y = INT16_MIN;
-		}
-		buf[i] = (int16_t)y;
-		if (++ch >= channels) {
-			ch = 0;
-		}
-	}
-}
+ * (~312-3800Hz), so out-of-band echo can't reach the server VAD. The filter
+ * (audio_voice_band.c) is shared with the LE Audio source path. */
+static struct audio_voice_band mic_voice;
 #endif
 
 /**
@@ -436,11 +320,11 @@ static void mic_thread_fn(void *arg1, void *arg2, void *arg3)
 				       mic_state.channel_count, mic_state.sample_rate);
 
 		/* Voice mode: band-pass to the AEC's working band so out-of-band
-		 * echo can't reach the server VAD (see mic_voice_bandpass). */
+		 * echo can't reach the server VAD (see audio_voice_band.c). */
 		if (mic_state.voice_band) {
-			mic_voice_bandpass((int16_t *)buffer,
-					   len / sizeof(int16_t),
-					   mic_state.channel_count);
+			audio_voice_band_process(&mic_voice, (int16_t *)buffer,
+						 len / sizeof(int16_t),
+						 mic_state.channel_count);
 		}
 #endif
 
@@ -808,7 +692,7 @@ static int lua_microphone_start(lua_State *L)
 
 	mic_state.voice_band = voice_on;
 	if (mic_state.voice_band) {
-		mic_voice_init(sample_rate);
+		audio_voice_band_init(&mic_voice, sample_rate);
 	}
 #else
 	mic_state.voice_band = voice_on;
@@ -1031,9 +915,9 @@ static int lua_microphone_gain(lua_State *L)
  * which cannot pass gain through frame.microphone.start. Persisted; takes
  * effect at the next LE Audio microphone stream start.
  *
- * @param config Optional table: gain (0-30 dB). An omitted field restores the
- *   build default.
- * @return table {gain} of the effective value
+ * @param config Optional table: gain (0-30 dB), aec (boolean: run the echo
+ *   canceller on the stream). An omitted field restores the build default.
+ * @return table {gain, aec} of the effective values
  */
 static int lua_microphone_le_audio(lua_State *L)
 {
@@ -1044,17 +928,28 @@ static int lua_microphone_le_audio(lua_State *L)
 		int gain_db = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) : -1;
 		lua_pop(L, 1);
 
+		lua_getfield(L, 1, "aec");
+		int aec = lua_isnil(L, -1) ? -1 : (lua_toboolean(L, -1) ? 1 : 0);
+		lua_pop(L, 1);
+
 		if (halo_ble_audio_source_level_set(gain_db) != 0) {
 			return luaL_error(L, "gain must be 0-30 dB");
+		}
+		if (halo_ble_audio_source_aec_set(aec) != 0 && aec == 1) {
+			return luaL_error(L, "echo cancellation is not available in this build");
 		}
 	}
 
 	int gain_db;
+	bool aec;
 
 	halo_ble_audio_source_level_get(&gain_db);
+	halo_ble_audio_source_aec_get(&aec);
 	lua_newtable(L);
 	lua_pushinteger(L, gain_db);
 	lua_setfield(L, -2, "gain");
+	lua_pushboolean(L, aec);
+	lua_setfield(L, -2, "aec");
 	return 1;
 }
 #endif
@@ -1333,7 +1228,7 @@ static int lua_microphone_aec_tune(lua_State *L)
  * Getter (no argument): returns whether voice-band mode is enabled.
  * Setter (boolean): band-pass the AEC output to the AEC's working band
  * (~300-3400Hz), live, so out-of-band echo can't reach a server VAD (see
- * mic_voice_bandpass). Enabling recomputes the biquad coefficients for the
+ * audio_voice_band.c). Enabling recomputes the biquad coefficients for the
  * current sample rate and resets the filter state. Mirrors aec(): configure
  * initially with start{voice=true} or toggle here while streaming.
  */
@@ -1348,10 +1243,10 @@ static int lua_microphone_voice(lua_State *L)
 
 	/* Recompute coefficients + reset state on the enabling edge, using the
 	 * live sample rate. Skip when no stream has set the rate yet (a later
-	 * start{} initialises it); guards mic_voice_init against fs == 0.
+	 * start{} initialises it); guards audio_voice_band_init against fs == 0.
 	 */
 	if (enable && !mic_state.voice_band && mic_state.sample_rate > 0) {
-		mic_voice_init(mic_state.sample_rate);
+		audio_voice_band_init(&mic_voice, mic_state.sample_rate);
 	}
 	mic_state.voice_band = enable;
 	return 0;

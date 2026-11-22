@@ -643,6 +643,23 @@ config HALO_BLE_AUDIO_SOURCE_GAIN_DB
 	  with headroom; the result is clipped at full scale.
 	  frame.microphone.le_audio{} overrides this at runtime.
 
+config HALO_BLE_AUDIO_SOURCE_AEC
+	bool "Echo cancellation on LE Audio source streams"
+	depends on HALO_BLE_AUDIO_SOURCE_ENABLE && HALO_AUDIO_AEC
+	default y
+	help
+	  Run the acoustic echo canceller on the microphone signal before LC3
+	  encoding on LE Audio source streams (phone calls), so the far end
+	  does not hear its own voice back through the bone-conduction
+	  speakers' leakage into the microphone. The canceller takes its
+	  far-end reference from the speaker driver, so it covers LE Audio
+	  playback as well as Lua playback. The stream is then band-passed to
+	  the canceller's working band (300-3400 Hz), because the echo outside
+	  it (mostly above 3.8 kHz) is not cancelled and would reach the far
+	  end as a thin, high-pitched echo. Mono 16 kHz streams only (the
+	  canceller's scope); other formats pass through untouched.
+	  frame.microphone.le_audio{aec=} overrides this at runtime.
+
 config HALO_BLE_AUDIO_OUTPUT_STEREO
 	bool "Stereo audio output (Sink/Speaker)"
 	default n
