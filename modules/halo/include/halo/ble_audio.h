@@ -163,6 +163,26 @@ void halo_ble_audio_source_level_get(int *gain_db);
  */
 int halo_ble_audio_source_level_set(int gain_db);
 
+/**
+ * @brief Whether LE Audio source streams run the acoustic echo canceller
+ *
+ * The persisted override (frame.microphone.le_audio({aec=})) or, absent one,
+ * CONFIG_HALO_BLE_AUDIO_SOURCE_AEC. Always false when the canceller is not
+ * built (CONFIG_HALO_AUDIO_AEC=n).
+ */
+void halo_ble_audio_source_aec_get(bool *on);
+
+/**
+ * @brief Persist whether LE Audio source streams run the echo canceller
+ *
+ * Takes effect at the next LE Audio microphone stream start.
+ *
+ * @param on 1 (on), 0 (off), or -1 to restore the build default
+ * @return 0 on success, -EINVAL on an out-of-range value, -ENOTSUP when the
+ *         canceller is not built
+ */
+int halo_ble_audio_source_aec_set(int on);
+
 #ifdef __cplusplus
 }
 #endif
