@@ -142,6 +142,27 @@ void halo_ble_audio_sink_levels_get(int *budget, int *gain_db);
  */
 int halo_ble_audio_sink_levels_set(int budget, int gain_db);
 
+/**
+ * @brief Get the digital pre-gain applied to LE Audio source (microphone) streams
+ *
+ * The effective value: a persisted runtime override if one is set,
+ * otherwise HALO_BLE_AUDIO_SOURCE_GAIN_DB.
+ *
+ * @param gain_db Receives the pre-gain in dB; may be NULL
+ */
+void halo_ble_audio_source_level_get(int *gain_db);
+
+/**
+ * @brief Persist the digital pre-gain applied to LE Audio source streams
+ *
+ * Takes effect at the next source stream start. -1 clears the override and
+ * restores the build default.
+ *
+ * @param gain_db 0..30 dB, or -1
+ * @return 0 on success, -EINVAL on an out-of-range value
+ */
+int halo_ble_audio_source_level_set(int gain_db);
+
 #ifdef __cplusplus
 }
 #endif

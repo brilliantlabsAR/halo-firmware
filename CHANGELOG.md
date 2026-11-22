@@ -11,6 +11,20 @@ release pages and tags are not publicly reachable.
 
 ## [Unreleased]
 
+### Fixed
+
+- On a phone call over LE Audio the far end can hear the wearer. The
+  microphone reached the phone about 20 dB quieter than a headset
+  microphone is expected to (speech at the glasses measures around
+  −40 dBFS RMS at the default gain step), and a Pixel 7 Pro's call
+  uplink treated that as silence: its audio processor flagged the stream
+  as silent and the other party heard nothing, although the speakers
+  worked and a recording app on the phone could still transcribe loud
+  sounds near the glasses. LE Audio microphone streams now get an 18 dB
+  digital pre-gain before LC3 encoding, on top of the saved
+  `frame.microphone.gain()` step. `frame.microphone.le_audio({gain=})`
+  changes it (0–30 dB) and saves it on the device.
+
 ## [0.8.32] - 2026-11-19
 
 ### Fixed

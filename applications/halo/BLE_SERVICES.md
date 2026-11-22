@@ -629,6 +629,12 @@ AICS Gain: -10..+10, the frame.microphone.gain() steps (persisted to the
            +/-20*log10(1 + |g|) dB (1: 6.0 dB, 4: 14.0, 10: 20.8; see
            frame.microphone.gain() in PROTOCOL.md)
 
+Pre-gain: on top of that step, LE Audio source streams apply a digital
+pre-gain before LC3 encoding (CONFIG_HALO_BLE_AUDIO_SOURCE_GAIN_DB, default
+18 dB; `frame.microphone.le_audio({gain=})` overrides and saves it), because
+the PDM front-end delivers speech about 20 dB below what a phone expects from
+a headset microphone and a call uplink treats that as silence.
+
 Mute semantics:
     • While muted (MICS mute or AICS input mute), the LE Audio source
       stream keeps its ISO cadence but transmits LC3-encoded silence.
